@@ -68,7 +68,12 @@ pub extern "C" fn glShaderSource(
             source.push_str(&piece);
         }
 
-        let translated = crate::shader_translator::string_pass::translate(&source, stage);
+        // Prefer the shaderc+naga SPIR-V pipeline for robust translation.
+        let translated = crate::shader_translator::spirv_pass::translate(&source, stage)
+            .unwrap_or_else(|| {
+                log::warn!("[ShaderTranslator] SPIR-V pipeline failed for shader {}, falling back to string pass", shader);
+                crate::shader_translator::string_pass::translate(&source, stage)
+            });
         log::debug!("[ShaderTranslator] translated shader {} (stage 0x{:04X})", shader, stage);
         state::with_state(|s| {
             s.shader_sources.insert(shader, translated.clone());
