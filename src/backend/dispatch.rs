@@ -45,6 +45,7 @@ pub struct GlesDispatch {
     pub copy_buffer_sub_data: unsafe extern "C" fn(u32, u32, isize, isize, isize),
     pub bind_buffer_base: unsafe extern "C" fn(u32, u32, u32),
     pub bind_buffer_range: unsafe extern "C" fn(u32, u32, u32, isize, isize),
+    pub buffer_storage: unsafe extern "C" fn(u32, isize, *const c_void, u32),
     pub get_buffer_sub_data: unsafe extern "C" fn(u32, isize, isize, *mut c_void),
     pub get_buffer_parameter_iv: unsafe extern "C" fn(u32, u32, *mut i32),
     pub get_buffer_pointer_v: unsafe extern "C" fn(u32, u32, *mut *mut c_void),
@@ -364,6 +365,19 @@ impl GlesDispatch {
             copy_buffer_sub_data: unsafe { std::mem::transmute(load!("glCopyBufferSubData")) },
             bind_buffer_base: unsafe { std::mem::transmute(load!("glBindBufferBase")) },
             bind_buffer_range: unsafe { std::mem::transmute(load!("glBindBufferRange")) },
+            buffer_storage: unsafe {
+                let ptr = loader.get_proc("glBufferStorage");
+                let ptr = if ptr.is_null() {
+                    loader.get_proc("glBufferStorageEXT")
+                } else {
+                    ptr
+                };
+                if ptr.is_null() {
+                    std::mem::transmute::<unsafe extern "C" fn(), _>(unimplemented_stub)
+                } else {
+                    std::mem::transmute(ptr)
+                }
+            },
             get_buffer_sub_data: load_opt!("glGetBufferSubData"),
             get_buffer_parameter_iv: unsafe { std::mem::transmute(load!("glGetBufferParameteriv")) },
             get_buffer_pointer_v: load_opt!("glGetBufferPointerv"),

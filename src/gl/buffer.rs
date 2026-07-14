@@ -62,6 +62,31 @@ pub extern "C" fn glBufferSubData(target: u32, offset: isize, size: isize, data:
     });
 }
 
+const GL_MAP_PERSISTENT_BIT: u32 = 0x0040;
+const GL_MAP_COHERENT_BIT: u32 = 0x0080;
+
+fn is_stub(dispatch: &backend::dispatch::GlesDispatch, f: usize) -> bool {
+    f == dispatch.stub as usize
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glBufferStorage(target: u32, size: isize, data: *const std::ffi::c_void, flags: u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        // GLES does not support persistent/coherent mapping. Strip those bits
+        // and fall back to ordinary immutable storage or buffer data.
+        let adjusted_flags = flags & !(GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
+
+        if is_stub(dispatch, dispatch.buffer_storage as usize) {
+            // No glBufferStorage support: emulate with glBufferData.
+            // GL_DYNAMIC_DRAW is a safe default for buffers that will be mapped.
+            (dispatch.buffer_data)(target, size, data, 0x88E8); // GL_DYNAMIC_DRAW
+        } else {
+            (dispatch.buffer_storage)(target, size, data, adjusted_flags);
+        }
+    });
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glMapBuffer(target: u32, access: u32) -> *mut std::ffi::c_void {
@@ -85,7 +110,10 @@ pub extern "C" fn glMapBuffer(target: u32, access: u32) -> *mut std::ffi::c_void
 #[allow(non_snake_case)]
 pub extern "C" fn glMapBufferRange(target: u32, offset: isize, length: isize, access: u32) -> *mut std::ffi::c_void {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.map_buffer_range)(target, offset, length, access)
+        // GLES does not support persistent/coherent mapping. Strip those bits
+        // so the underlying driver accepts the call.
+        let adjusted_access = access & !(GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
+        (dispatch.map_buffer_range)(target, offset, length, adjusted_access)
     })
 }
 
