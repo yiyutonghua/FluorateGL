@@ -1,0 +1,13 @@
+[package]
+name = "FluorateGL"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+name = "fluorategl"
+
+[dependencies]
+android_logger = "0.15.1"
+libc = "0.2.186"
+log = "0.4.33"

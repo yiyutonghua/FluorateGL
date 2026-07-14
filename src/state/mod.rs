@@ -1,0 +1,55 @@
+pub mod id_map;
+
+use std::cell::RefCell;
+use id_map::IdMap;
+
+pub struct State {
+    pub buffers: IdMap,
+    pub vertex_arrays: IdMap,
+    pub shaders: IdMap,
+    pub programs: IdMap,
+    pub textures: IdMap,
+    pub framebuffers: IdMap,
+    pub renderbuffers: IdMap,
+    pub queries: IdMap,
+    
+    pub bound_buffer: u32,
+    pub bound_vertex_array: u32,
+    pub bound_program: u32,
+    pub bound_texture: u32,
+    pub bound_framebuffer: u32,
+    pub bound_renderbuffer: u32,
+}
+
+impl State {
+    pub fn new() -> Self {
+        Self {
+            buffers: IdMap::new(),
+            vertex_arrays: IdMap::new(),
+            shaders: IdMap::new(),
+            programs: IdMap::new(),
+            textures: IdMap::new(),
+            framebuffers: IdMap::new(),
+            renderbuffers: IdMap::new(),
+            queries: IdMap::new(),
+            
+            bound_buffer: 0,
+            bound_vertex_array: 0,
+            bound_program: 0,
+            bound_texture: 0,
+            bound_framebuffer: 0,
+            bound_renderbuffer: 0,
+        }
+    }
+}
+
+thread_local! {
+    static STATE: RefCell<State> = RefCell::new(State::new());
+}
+
+pub fn with_state<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut State) -> R,
+{
+    STATE.with(|s| f(&mut s.borrow_mut()))
+}
