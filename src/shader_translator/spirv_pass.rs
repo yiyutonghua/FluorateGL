@@ -15,6 +15,22 @@ const GL_COMPUTE_SHADER: u32 = 0x91B9;
 /// Returns `None` when any pipeline step fails. Geometry and tessellation
 /// stages are rejected immediately because naga 30 does not model them.
 pub fn translate(source: &str, stage: u32) -> Option<String> {
+    // naga 30 has known internal panics on some SPIR-V inputs (e.g. typifier
+    // index out of bounds). Wrap the whole pipeline in catch_unwind so that a
+    // translator bug does not abort the host process.
+    match std::panic::catch_unwind(|| translate_internal(source, stage)) {
+        Ok(result) => result,
+        Err(_) => {
+            log::error!(
+                "[ShaderTranslator] SPIR-V pipeline panicked for stage 0x{:04X}; skipping",
+                stage
+            );
+            None
+        }
+    }
+}
+
+fn translate_internal(source: &str, stage: u32) -> Option<String> {
     let stage_name = stage_name(stage);
     let version_line = extract_version(source).unwrap_or("unknown");
     log::debug!(
@@ -33,13 +49,8 @@ pub fn translate(source: &str, stage: u32) -> Option<String> {
     }
 
     let spv = compile_to_spirv(source, stage)?;
-    let mut module = parse_spirv(&spv)?;
+    let module = parse_spirv(&spv)?;
     let info = validate_module(&module)?;
-
-    // Compact after validation: removes unused types/expressions/globals and
-    // reduces the amount of GLSL emitted for the driver to parse.
-    naga::compact::compact(&mut module, naga::compact::KeepUnused::No);
-
     let glsl_stage = naga_stage(stage)?;
 
     // Try GLES versions from most compatible to least compatible.
