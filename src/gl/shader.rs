@@ -22,6 +22,7 @@ pub extern "C" fn glDeleteShader(shader: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         state::with_state(|s| {
             s.shader_types.remove(&shader);
+            s.shader_sources.remove(&shader);
         });
         if let Some(gles_id) = state::with_state(|s| s.shaders.delete(shader)) {
             (dispatch.delete_shader)(gles_id);
@@ -69,6 +70,9 @@ pub extern "C" fn glShaderSource(
 
         let translated = crate::shader_translator::string_pass::translate(&source, stage);
         log::debug!("[ShaderTranslator] translated shader {} (stage 0x{:04X})", shader, stage);
+        state::with_state(|s| {
+            s.shader_sources.insert(shader, translated.clone());
+        });
 
         let c_source = match CString::new(translated) {
             Ok(c) => c,
@@ -84,6 +88,9 @@ pub extern "C" fn glShaderSource(
     });
 }
 
+const GL_COMPILE_STATUS: u32 = 0x8B81;
+const GL_INFO_LOG_LENGTH: u32 = 0x8B84;
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glCompileShader(shader: u32) {
@@ -93,6 +100,25 @@ pub extern "C" fn glCompileShader(shader: u32) {
             return;
         }
         (dispatch.compile_shader)(gles_id);
+
+        let mut status = 0i32;
+        (dispatch.get_shader_iv)(gles_id, GL_COMPILE_STATUS, &mut status);
+        if status == 0 {
+            let mut len = 0i32;
+            (dispatch.get_shader_iv)(gles_id, GL_INFO_LOG_LENGTH, &mut len);
+            if len > 0 {
+                let mut buf = vec![0u8; len as usize];
+                let mut written = 0i32;
+                (dispatch.get_shader_info_log)(gles_id, len, &mut written, buf.as_mut_ptr() as *mut c_char);
+                let info = String::from_utf8_lossy(&buf[..written.max(0) as usize]);
+                log::error!("[FluorateGL] Shader {} (GLES {}) compile failed: {}", shader, gles_id, info.trim());
+                if let Some(src) = state::with_state(|s| s.shader_sources.get(&shader).cloned()) {
+                    log::error!("[FluorateGL] Translated source for shader {}:\n{}", shader, src);
+                }
+            } else {
+                log::error!("[FluorateGL] Shader {} (GLES {}) compile failed (no info log)", shader, gles_id);
+            }
+        }
     });
 }
 
