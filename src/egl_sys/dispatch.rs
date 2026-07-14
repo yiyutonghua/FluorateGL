@@ -1,3 +1,4 @@
+use libc::c_char;
 use std::ffi::c_void;
 
 #[allow(dead_code)]
@@ -5,7 +6,7 @@ pub struct EglDispatch {
     pub get_display: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
     pub initialize: unsafe extern "C" fn(*mut c_void, *mut i32, *mut i32) -> u32,
     pub terminate: unsafe extern "C" fn(*mut c_void) -> u32,
-    pub query_string: unsafe extern "C" fn(*mut c_void, i32) -> *const i8,
+    pub query_string: unsafe extern "C" fn(*mut c_void, i32) -> *const c_char,
     pub get_configs: unsafe extern "C" fn(*mut c_void, *mut c_void, i32, *mut i32) -> u32,
     pub choose_config: unsafe extern "C" fn(*mut c_void, *const i32, *mut c_void, i32, *mut i32) -> u32,
     pub get_config_attrib: unsafe extern "C" fn(*mut c_void, *mut c_void, i32, *mut i32) -> u32,
@@ -35,7 +36,7 @@ pub struct EglDispatch {
     pub swap_interval: unsafe extern "C" fn(*mut c_void, i32) -> u32,
     pub copy_buffers: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> u32,
     pub get_error: unsafe extern "C" fn() -> u32,
-    pub get_proc_address: unsafe extern "C" fn(*const i8) -> *mut c_void,
+    pub get_proc_address: unsafe extern "C" fn(*const c_char) -> *mut c_void,
 }
 
 impl EglDispatch {

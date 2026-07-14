@@ -1,5 +1,6 @@
 use crate::backend;
 use crate::gl::getter;
+use libc::c_char;
 use std::ffi::CString;
 use std::sync::OnceLock;
 
@@ -183,7 +184,7 @@ pub extern "C" fn glGetError() -> u32 {
 
 // === 特殊处理 ===
 
-fn get_fake_extensions_string() -> *const i8 {
+fn get_fake_extensions_string() -> *const c_char {
     static EXT_STRING: OnceLock<CString> = OnceLock::new();
     let s = EXT_STRING.get_or_init(|| {
         let joined = FAKE_EXTENSIONS
@@ -193,21 +194,21 @@ fn get_fake_extensions_string() -> *const i8 {
             .join(" ");
         CString::new(joined).unwrap_or_else(|_| CString::new("").unwrap())
     });
-    s.as_ptr()
+    s.as_ptr() as *const _
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glGetString(name: u32) -> *const i8 {
+pub extern "C" fn glGetString(name: u32) -> *const c_char {
     if name == 0x1F02 {
         // GL_VERSION
         static VERSION: &[u8] = b"3.2.0 FluorateGL\0";
-        return VERSION.as_ptr() as *const i8;
+        return VERSION.as_ptr() as *const c_char;
     }
     if name == 0x8B8C {
         // GL_SHADING_LANGUAGE_VERSION
         static GLSL: &[u8] = b"3.30\0";
-        return GLSL.as_ptr() as *const i8;
+        return GLSL.as_ptr() as *const c_char;
     }
     if name == 0x1F03 {
         // GL_EXTENSIONS
@@ -282,9 +283,9 @@ pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glGetStringi(name: u32, index: u32) -> *const i8 {
+pub extern "C" fn glGetStringi(name: u32, index: u32) -> *const c_char {
     if name == 0x1F03 && (index as usize) < FAKE_EXTENSIONS.len() {
-        return FAKE_EXTENSIONS[index as usize].as_ptr() as *const i8;
+        return FAKE_EXTENSIONS[index as usize].as_ptr() as *const c_char;
     }
     
     // 超出范围的索引返回空指针

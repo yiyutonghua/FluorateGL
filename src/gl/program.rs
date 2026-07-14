@@ -1,5 +1,6 @@
 use crate::backend;
 use crate::state;
+use libc::c_char;
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -77,7 +78,7 @@ pub extern "C" fn glGetProgramInfoLog(
     program: u32,
     buf_size: i32,
     length: *mut i32,
-    info_log: *mut i8,
+    info_log: *mut c_char,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
@@ -90,7 +91,7 @@ pub extern "C" fn glGetProgramInfoLog(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glGetUniformLocation(program: u32, name: *const i8) -> i32 {
+pub extern "C" fn glGetUniformLocation(program: u32, name: *const c_char) -> i32 {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
@@ -102,7 +103,7 @@ pub extern "C" fn glGetUniformLocation(program: u32, name: *const i8) -> i32 {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glGetAttribLocation(program: u32, name: *const i8) -> i32 {
+pub extern "C" fn glGetAttribLocation(program: u32, name: *const c_char) -> i32 {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
@@ -175,7 +176,7 @@ pub extern "C" fn glGetActiveUniform(
     length: *mut i32,
     size: *mut i32,
     type_: *mut u32,
-    name: *mut i8,
+    name: *mut c_char,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
@@ -195,7 +196,7 @@ pub extern "C" fn glGetActiveAttrib(
     length: *mut i32,
     size: *mut i32,
     type_: *mut u32,
-    name: *mut i8,
+    name: *mut c_char,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
@@ -267,7 +268,7 @@ pub extern "C" fn glGetAttachedShaders(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glBindAttribLocation(program: u32, index: u32, name: *const i8) {
+pub extern "C" fn glBindAttribLocation(program: u32, index: u32, name: *const c_char) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
@@ -282,7 +283,7 @@ pub extern "C" fn glBindAttribLocation(program: u32, index: u32, name: *const i8
 pub extern "C" fn glTransformFeedbackVaryings(
     program: u32,
     count: i32,
-    varyings: *const *const i8,
+    varyings: *const *const c_char,
     buffer_mode: u32,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -303,7 +304,7 @@ pub extern "C" fn glGetTransformFeedbackVarying(
     length: *mut i32,
     size: *mut i32,
     type_: *mut u32,
-    name: *mut i8,
+    name: *mut c_char,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
@@ -332,7 +333,7 @@ pub extern "C" fn glUniformBlockBinding(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glGetUniformBlockIndex(program: u32, uniform_block_name: *const i8) -> u32 {
+pub extern "C" fn glGetUniformBlockIndex(program: u32, uniform_block_name: *const c_char) -> u32 {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
@@ -366,7 +367,7 @@ pub extern "C" fn glGetActiveUniformBlockName(
     uniform_block_index: u32,
     buf_size: i32,
     length: *mut i32,
-    uniform_block_name: *mut i8,
+    uniform_block_name: *mut c_char,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
@@ -382,7 +383,7 @@ pub extern "C" fn glGetActiveUniformBlockName(
 pub extern "C" fn glGetUniformIndices(
     program: u32,
     uniform_count: i32,
-    uniform_names: *const *const i8,
+    uniform_names: *const *const c_char,
     uniform_indices: *mut u32,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {

@@ -8,6 +8,7 @@ mod state;
 
 
 use config::Config;
+use libc::c_char;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn fluorategl_init() -> i32 {
@@ -65,7 +66,7 @@ extern "C" fn init_wrapper() {
     let _ = fluorategl_init();
 }
 */
-unsafe fn c_str_to_string(ptr: *const i8) -> String {
+unsafe fn c_str_to_string(ptr: *const c_char) -> String {
     if ptr.is_null() {
         return "(null)".to_string();
     }

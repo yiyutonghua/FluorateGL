@@ -1,4 +1,5 @@
 use crate::backend;
+use libc::c_char;
 use std::ffi::c_void;
 
 pub fn get_display(display_id: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
@@ -19,7 +20,7 @@ pub fn terminate(dpy: *mut c_void) -> u32 {
     })
 }
 
-pub fn query_string(dpy: *mut c_void, name: i32) -> *const i8 {
+pub fn query_string(dpy: *mut c_void, name: i32) -> *const c_char {
     backend::with_egl_dispatch(|dispatch| unsafe {
         (dispatch.query_string)(dpy, name)
     })
@@ -261,7 +262,7 @@ pub fn get_error() -> u32 {
     })
 }
 
-pub fn get_proc_address(proc_name: *const i8) -> *mut c_void {
+pub fn get_proc_address(proc_name: *const c_char) -> *mut c_void {
     backend::with_egl_dispatch(|dispatch| unsafe {
         (dispatch.get_proc_address)(proc_name)
     })

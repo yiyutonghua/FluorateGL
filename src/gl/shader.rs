@@ -1,5 +1,6 @@
 use crate::backend;
 use crate::state;
+use libc::c_char;
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -25,7 +26,7 @@ pub extern "C" fn glDeleteShader(shader: u32) {
 pub extern "C" fn glShaderSource(
     shader: u32,
     count: i32,
-    string: *const *const i8,
+    string: *const *const c_char,
     length: *const i32,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -70,7 +71,7 @@ pub extern "C" fn glGetShaderInfoLog(
     shader: u32,
     buf_size: i32,
     length: *mut i32,
-    info_log: *mut i8,
+    info_log: *mut c_char,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.shaders.get_gles(shader).unwrap_or(0));

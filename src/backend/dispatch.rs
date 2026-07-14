@@ -1,3 +1,4 @@
+use libc::c_char;
 use std::ffi::c_void;
 
 #[allow(dead_code)]
@@ -7,7 +8,7 @@ pub struct GlesDispatch {
 
     // A类
     pub clear: unsafe extern "C" fn(u32),
-    pub get_string: unsafe extern "C" fn(u32) -> *const i8,
+    pub get_string: unsafe extern "C" fn(u32) -> *const c_char,
     pub enable: unsafe extern "C" fn(u32),
     pub disable: unsafe extern "C" fn(u32),
     pub depth_func: unsafe extern "C" fn(u32),
@@ -92,10 +93,10 @@ pub struct GlesDispatch {
     // B类：Shader
     pub create_shader: unsafe extern "C" fn(u32) -> u32,
     pub delete_shader: unsafe extern "C" fn(u32),
-    pub shader_source: unsafe extern "C" fn(u32, i32, *const *const i8, *const i32),
+    pub shader_source: unsafe extern "C" fn(u32, i32, *const *const c_char, *const i32),
     pub compile_shader: unsafe extern "C" fn(u32),
     pub get_shader_iv: unsafe extern "C" fn(u32, u32, *mut i32),
-    pub get_shader_info_log: unsafe extern "C" fn(u32, i32, *mut i32, *mut i8),
+    pub get_shader_info_log: unsafe extern "C" fn(u32, i32, *mut i32, *mut c_char),
 
     // B类：Program
     pub create_program: unsafe extern "C" fn() -> u32,
@@ -104,9 +105,9 @@ pub struct GlesDispatch {
     pub link_program: unsafe extern "C" fn(u32),
     pub use_program: unsafe extern "C" fn(u32),
     pub get_program_iv: unsafe extern "C" fn(u32, u32, *mut i32),
-    pub get_program_info_log: unsafe extern "C" fn(u32, i32, *mut i32, *mut i8),
-    pub get_uniform_location: unsafe extern "C" fn(u32, *const i8) -> i32,
-    pub get_attrib_location: unsafe extern "C" fn(u32, *const i8) -> i32,
+    pub get_program_info_log: unsafe extern "C" fn(u32, i32, *mut i32, *mut c_char),
+    pub get_uniform_location: unsafe extern "C" fn(u32, *const c_char) -> i32,
+    pub get_attrib_location: unsafe extern "C" fn(u32, *const c_char) -> i32,
     pub uniform_1f: unsafe extern "C" fn(i32, f32),
     pub uniform_1i: unsafe extern "C" fn(i32, i32),
     pub uniform_2f: unsafe extern "C" fn(i32, f32, f32),
@@ -130,20 +131,20 @@ pub struct GlesDispatch {
     // B类：Shader/Program 高级
     pub detach_shader: unsafe extern "C" fn(u32, u32),
     pub validate_program: unsafe extern "C" fn(u32),
-    pub get_active_uniform: unsafe extern "C" fn(u32, u32, i32, *mut i32, *mut i32, *mut u32, *mut i8),
-    pub get_active_attrib: unsafe extern "C" fn(u32, u32, i32, *mut i32, *mut i32, *mut u32, *mut i8),
+    pub get_active_uniform: unsafe extern "C" fn(u32, u32, i32, *mut i32, *mut i32, *mut u32, *mut c_char),
+    pub get_active_attrib: unsafe extern "C" fn(u32, u32, i32, *mut i32, *mut i32, *mut u32, *mut c_char),
     pub get_uniform_fv: unsafe extern "C" fn(u32, i32, *mut f32),
     pub get_uniform_iv: unsafe extern "C" fn(u32, i32, *mut i32),
     pub get_attached_shaders: unsafe extern "C" fn(u32, i32, *mut i32, *mut u32),
-    pub get_shader_source: unsafe extern "C" fn(u32, i32, *mut i32, *mut i8),
-    pub bind_attrib_location: unsafe extern "C" fn(u32, u32, *const i8),
-    pub transform_feedback_varyings: unsafe extern "C" fn(u32, i32, *const *const i8, u32),
-    pub get_transform_feedback_varying: unsafe extern "C" fn(u32, u32, i32, *mut i32, *mut i32, *mut u32, *mut i8),
+    pub get_shader_source: unsafe extern "C" fn(u32, i32, *mut i32, *mut c_char),
+    pub bind_attrib_location: unsafe extern "C" fn(u32, u32, *const c_char),
+    pub transform_feedback_varyings: unsafe extern "C" fn(u32, i32, *const *const c_char, u32),
+    pub get_transform_feedback_varying: unsafe extern "C" fn(u32, u32, i32, *mut i32, *mut i32, *mut u32, *mut c_char),
     pub uniform_block_binding: unsafe extern "C" fn(u32, u32, u32),
-    pub get_uniform_block_index: unsafe extern "C" fn(u32, *const i8) -> u32,
+    pub get_uniform_block_index: unsafe extern "C" fn(u32, *const c_char) -> u32,
     pub get_active_uniform_block_iv: unsafe extern "C" fn(u32, u32, u32, *mut i32),
-    pub get_active_uniform_block_name: unsafe extern "C" fn(u32, u32, i32, *mut i32, *mut i8),
-    pub get_uniform_indices: unsafe extern "C" fn(u32, i32, *const *const i8, *mut u32),
+    pub get_active_uniform_block_name: unsafe extern "C" fn(u32, u32, i32, *mut i32, *mut c_char),
+    pub get_uniform_indices: unsafe extern "C" fn(u32, i32, *const *const c_char, *mut u32),
     pub get_active_uniforms_iv: unsafe extern "C" fn(u32, i32, *const u32, u32, *mut i32),
     pub is_shader: unsafe extern "C" fn(u32) -> u8,
     pub is_program: unsafe extern "C" fn(u32) -> u8,
@@ -270,7 +271,7 @@ pub struct GlesDispatch {
 
     // B类：其他
     pub get_integerv: unsafe extern "C" fn(u32, *mut i32),
-    pub get_string_i: unsafe extern "C" fn(u32, u32) -> *const i8,
+    pub get_string_i: unsafe extern "C" fn(u32, u32) -> *const c_char,
 
     // 其他状态查询
     pub get_boolean_v: unsafe extern "C" fn(u32, *mut u8),

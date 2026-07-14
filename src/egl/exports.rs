@@ -1,4 +1,5 @@
 use super::dispatcher;
+use libc::c_char;
 use std::ffi::c_void;
 
 // EGL enum constants
@@ -41,15 +42,15 @@ pub extern "C" fn eglTerminate(dpy: *mut c_void) -> u32 {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn eglQueryString(dpy: *mut c_void, name: i32) -> *const i8 {
+pub extern "C" fn eglQueryString(dpy: *mut c_void, name: i32) -> *const c_char {
     match name {
         EGL_VERSION => {
             static VERSION: &[u8] = b"1.4 FluorateGL\0";
-            VERSION.as_ptr() as *const i8
+            VERSION.as_ptr() as *const c_char
         }
         EGL_EXTENSIONS => {
             static EXTENSIONS: &[u8] = b"EGL_KHR_create_context EGL_KHR_surfaceless_context EGL_ANDROID_framebuffer_target EGL_ANDROID_blob_cache EGL_EXT_swap_buffers_with_damage EGL_KHR_swap_buffers_with_damage EGL_KHR_image_base EGL_KHR_gl_texture_2D_image EGL_KHR_gl_texture_cubemap_image EGL_KHR_gl_renderbuffer_image EGL_KHR_fence_sync EGL_KHR_wait_sync EGL_ANDROID_native_fence_sync EGL_KHR_reusable_sync\0";
-            EXTENSIONS.as_ptr() as *const i8
+            EXTENSIONS.as_ptr() as *const c_char
         }
         _ => dispatcher::query_string(dpy, name),
     }
@@ -340,7 +341,7 @@ pub extern "C" fn eglGetError() -> u32 {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn eglGetProcAddress(proc_name: *const i8) -> *mut c_void {
+pub extern "C" fn eglGetProcAddress(proc_name: *const c_char) -> *mut c_void {
     if proc_name.is_null() {
         return std::ptr::null_mut();
     }
@@ -348,7 +349,7 @@ pub extern "C" fn eglGetProcAddress(proc_name: *const i8) -> *mut c_void {
     // First, try to resolve the symbol from FluorateGL itself.
     // This lets applications retrieve our wrapped OpenGL / EGL entry points.
     unsafe {
-        let local = libc::dlsym(std::ptr::null_mut(), proc_name);
+        let local = libc::dlsym(std::ptr::null_mut(), proc_name as *const libc::c_char);
         if !local.is_null() {
             return local;
         }
