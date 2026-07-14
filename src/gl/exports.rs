@@ -14,9 +14,27 @@ pub extern "C" fn glClear(mask: u32) {
     });
 }
 
+// Capabilities that exist in desktop GL but are unsupported (or always on)
+// in OpenGL ES. Passing them to GLES produces `GL_INVALID_ENUM`.
+fn is_unsupported_gles_cap(cap: u32) -> bool {
+    matches!(cap,
+        0x884F | // GL_TEXTURE_CUBE_MAP_SEAMLESS
+        0x8642 | // GL_PROGRAM_POINT_SIZE
+        0x0B10 | // GL_POINT_SMOOTH
+        0x0B20 | // GL_LINE_SMOOTH
+        0x0B41 | // GL_POLYGON_SMOOTH
+        0x809D | // GL_MULTISAMPLE
+        0x0B21   // GL_LINE_STIPPLE
+    )
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glEnable(cap: u32) {
+    if is_unsupported_gles_cap(cap) {
+        log::debug!("[FluorateGL] glEnable(0x{:04X}) ignored (unsupported in GLES)", cap);
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.enable)(cap);
     });
@@ -25,6 +43,10 @@ pub extern "C" fn glEnable(cap: u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glDisable(cap: u32) {
+    if is_unsupported_gles_cap(cap) {
+        log::debug!("[FluorateGL] glDisable(0x{:04X}) ignored (unsupported in GLES)", cap);
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.disable)(cap);
     });

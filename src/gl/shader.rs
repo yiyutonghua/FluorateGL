@@ -76,6 +76,7 @@ pub extern "C" fn glShaderSource(
             });
         log::debug!("[ShaderTranslator] translated shader {} (stage 0x{:04X})", shader, stage);
         state::with_state(|s| {
+            s.shader_original_sources.insert(shader, source);
             s.shader_sources.insert(shader, translated.clone());
         });
 
@@ -104,10 +105,33 @@ pub extern "C" fn glCompileShader(shader: u32) {
         if gles_id == 0 {
             return;
         }
+
+        let stage = state::with_state(|s| s.shader_types.get(&shader).copied().unwrap_or(0));
+
         (dispatch.compile_shader)(gles_id);
 
         let mut status = 0i32;
         (dispatch.get_shader_iv)(gles_id, GL_COMPILE_STATUS, &mut status);
+
+        // If the SPIR-V pipeline produced something GLES can't compile, try the
+        // simpler string-based translator as a last resort.
+        if status == 0 {
+            if let Some(original) = state::with_state(|s| s.shader_original_sources.get(&shader).cloned()) {
+                let fallback = crate::shader_translator::string_pass::translate(&original, stage);
+                if let Ok(c_source) = CString::new(fallback.clone()) {
+                    log::warn!("[FluorateGL] Shader {} (GLES {}) SPIR-V compile failed, retrying with string pass", shader, gles_id);
+                    let ptr = c_source.as_ptr();
+                    let len = c_source.as_bytes().len() as i32;
+                    (dispatch.shader_source)(gles_id, 1, &ptr, &len);
+                    (dispatch.compile_shader)(gles_id);
+                    state::with_state(|s| {
+                        s.shader_sources.insert(shader, fallback);
+                    });
+                    (dispatch.get_shader_iv)(gles_id, GL_COMPILE_STATUS, &mut status);
+                }
+            }
+        }
+
         if status == 0 {
             let mut len = 0i32;
             (dispatch.get_shader_iv)(gles_id, GL_INFO_LOG_LENGTH, &mut len);
