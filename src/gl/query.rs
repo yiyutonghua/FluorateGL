@@ -62,12 +62,22 @@ pub extern "C" fn glGetQueryiv(target: u32, pname: u32, params: *mut i32) {
     });
 }
 
+fn is_stub(dispatch: &backend::dispatch::GlesDispatch, f: usize) -> bool {
+    f == dispatch.stub as usize
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetQueryObjectiv(id: u32, pname: u32, params: *mut i32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.queries.get_gles(id).unwrap_or(0));
-        (dispatch.get_query_object_iv)(gles_id, pname, params);
+        if is_stub(dispatch, dispatch.get_query_object_iv as usize) {
+            let mut value = 0u32;
+            (dispatch.get_query_object_uiv)(gles_id, pname, &mut value);
+            *params = value as i32;
+        } else {
+            (dispatch.get_query_object_iv)(gles_id, pname, params);
+        }
     });
 }
 

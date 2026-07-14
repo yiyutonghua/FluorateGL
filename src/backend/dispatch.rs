@@ -547,7 +547,7 @@ impl GlesDispatch {
             begin_query: unsafe { std::mem::transmute(load!("glBeginQuery")) },
             end_query: unsafe { std::mem::transmute(load!("glEndQuery")) },
             get_query_iv: unsafe { std::mem::transmute(load!("glGetQueryiv")) },
-            get_query_object_iv: unsafe { std::mem::transmute(load!("glGetQueryObjectiv")) },
+            get_query_object_iv: load_opt!("glGetQueryObjectiv"),
             get_query_object_uiv: unsafe { std::mem::transmute(load!("glGetQueryObjectuiv")) },
 
             fence_sync: unsafe { std::mem::transmute(load!("glFenceSync")) },
