@@ -80,3 +80,23 @@ pub extern "C" fn glGetShaderInfoLog(
         (dispatch.get_shader_info_log)(gles_id, buf_size, length, info_log);
     });
 }
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glIsShader(shader: u32) -> u8 {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        let gles_id = state::with_state(|s| s.shaders.get_gles(shader).unwrap_or(0));
+        if gles_id == 0 {
+            return 0;
+        }
+        (dispatch.is_shader)(gles_id)
+    })
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glReleaseShaderCompiler() {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.release_shader_compiler)();
+    });
+}

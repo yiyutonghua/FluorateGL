@@ -27,6 +27,10 @@ impl IdMap {
         self.desktop_to_gles.get(&desktop_id).copied()
     }
 
+    pub fn get_desktop(&self, gles_id: u32) -> Option<u32> {
+        self.gles_to_desktop.get(&gles_id).copied()
+    }
+
     pub fn delete(&mut self, desktop_id: u32) -> Option<u32> {
         let gles_id = self.desktop_to_gles.remove(&desktop_id)?;
         self.gles_to_desktop.remove(&gles_id);

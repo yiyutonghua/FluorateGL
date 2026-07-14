@@ -1,5 +1,6 @@
 use std::ffi::c_void;
 
+#[allow(dead_code)]
 pub struct EglDispatch {
     pub get_display: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
     pub initialize: unsafe extern "C" fn(*mut c_void, *mut i32, *mut i32) -> u32,
@@ -23,6 +24,7 @@ pub struct EglDispatch {
 }
 
 impl EglDispatch {
+    #[allow(clippy::missing_transmute_annotations)]
     pub fn load_from(loader: &super::loader::EglLoader) -> Option<Self> {
         macro_rules! load {
             ($name:expr) => {{

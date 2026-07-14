@@ -1,6 +1,10 @@
 use std::ffi::c_void;
 
+#[allow(dead_code)]
 pub struct GlesDispatch {
+    /// Address of the shared no-op stub used for missing optional functions.
+    pub stub: unsafe extern "C" fn(),
+
     // A类
     pub clear: unsafe extern "C" fn(u32),
     pub get_string: unsafe extern "C" fn(u32) -> *const i8,
@@ -33,6 +37,18 @@ pub struct GlesDispatch {
     pub buffer_data: unsafe extern "C" fn(u32, isize, *const c_void, u32),
     pub buffer_sub_data: unsafe extern "C" fn(u32, isize, isize, *const c_void),
 
+    // B类：Buffer 高级
+    pub map_buffer_range: unsafe extern "C" fn(u32, isize, isize, u32) -> *mut c_void,
+    pub unmap_buffer: unsafe extern "C" fn(u32) -> u8,
+    pub flush_mapped_buffer_range: unsafe extern "C" fn(u32, isize, isize),
+    pub copy_buffer_sub_data: unsafe extern "C" fn(u32, u32, isize, isize, isize),
+    pub bind_buffer_base: unsafe extern "C" fn(u32, u32, u32),
+    pub bind_buffer_range: unsafe extern "C" fn(u32, u32, u32, isize, isize),
+    pub get_buffer_sub_data: unsafe extern "C" fn(u32, isize, isize, *mut c_void),
+    pub get_buffer_parameter_iv: unsafe extern "C" fn(u32, u32, *mut i32),
+    pub get_buffer_pointer_v: unsafe extern "C" fn(u32, u32, *mut *mut c_void),
+    pub is_buffer: unsafe extern "C" fn(u32) -> u8,
+
     // B类：VAO
     pub gen_vertex_arrays: unsafe extern "C" fn(i32, *mut u32),
     pub delete_vertex_arrays: unsafe extern "C" fn(i32, *const u32),
@@ -41,6 +57,37 @@ pub struct GlesDispatch {
     pub disable_vertex_attrib_array: unsafe extern "C" fn(u32),
     pub vertex_attrib_pointer: unsafe extern "C" fn(u32, i32, u32, u8, i32, *const c_void),
     pub vertex_attrib_i_pointer: unsafe extern "C" fn(u32, i32, u32, i32, *const c_void),
+    pub vertex_attrib_1f: unsafe extern "C" fn(u32, f32),
+    pub vertex_attrib_2f: unsafe extern "C" fn(u32, f32, f32),
+    pub vertex_attrib_3f: unsafe extern "C" fn(u32, f32, f32, f32),
+    pub vertex_attrib_4f: unsafe extern "C" fn(u32, f32, f32, f32, f32),
+    pub vertex_attrib_1fv: unsafe extern "C" fn(u32, *const f32),
+    pub vertex_attrib_2fv: unsafe extern "C" fn(u32, *const f32),
+    pub vertex_attrib_3fv: unsafe extern "C" fn(u32, *const f32),
+    pub vertex_attrib_4fv: unsafe extern "C" fn(u32, *const f32),
+    pub vertex_attrib_i_1i: unsafe extern "C" fn(u32, i32),
+    pub vertex_attrib_i_2i: unsafe extern "C" fn(u32, i32, i32),
+    pub vertex_attrib_i_3i: unsafe extern "C" fn(u32, i32, i32, i32),
+    pub vertex_attrib_i_4i: unsafe extern "C" fn(u32, i32, i32, i32, i32),
+    pub vertex_attrib_i_1ui: unsafe extern "C" fn(u32, u32),
+    pub vertex_attrib_i_2ui: unsafe extern "C" fn(u32, u32, u32),
+    pub vertex_attrib_i_3ui: unsafe extern "C" fn(u32, u32, u32, u32),
+    pub vertex_attrib_i_4ui: unsafe extern "C" fn(u32, u32, u32, u32, u32),
+    pub vertex_attrib_i_1iv: unsafe extern "C" fn(u32, *const i32),
+    pub vertex_attrib_i_2iv: unsafe extern "C" fn(u32, *const i32),
+    pub vertex_attrib_i_3iv: unsafe extern "C" fn(u32, *const i32),
+    pub vertex_attrib_i_4iv: unsafe extern "C" fn(u32, *const i32),
+    pub vertex_attrib_i_1uiv: unsafe extern "C" fn(u32, *const u32),
+    pub vertex_attrib_i_2uiv: unsafe extern "C" fn(u32, *const u32),
+    pub vertex_attrib_i_3uiv: unsafe extern "C" fn(u32, *const u32),
+    pub vertex_attrib_i_4uiv: unsafe extern "C" fn(u32, *const u32),
+
+    // B类：VAO/Draw 高级
+    pub vertex_attrib_divisor: unsafe extern "C" fn(u32, u32),
+    pub draw_arrays_instanced: unsafe extern "C" fn(u32, i32, i32, i32),
+    pub draw_elements_instanced: unsafe extern "C" fn(u32, i32, u32, *const c_void, i32),
+    pub draw_range_elements: unsafe extern "C" fn(u32, u32, u32, i32, u32, *const c_void),
+    pub primitive_restart_index: unsafe extern "C" fn(u32),
 
     // B类：Shader
     pub create_shader: unsafe extern "C" fn(u32) -> u32,
@@ -62,7 +109,45 @@ pub struct GlesDispatch {
     pub get_attrib_location: unsafe extern "C" fn(u32, *const i8) -> i32,
     pub uniform_1f: unsafe extern "C" fn(i32, f32),
     pub uniform_1i: unsafe extern "C" fn(i32, i32),
+    pub uniform_2f: unsafe extern "C" fn(i32, f32, f32),
+    pub uniform_3f: unsafe extern "C" fn(i32, f32, f32, f32),
+    pub uniform_4f: unsafe extern "C" fn(i32, f32, f32, f32, f32),
+    pub uniform_2i: unsafe extern "C" fn(i32, i32, i32),
+    pub uniform_3i: unsafe extern "C" fn(i32, i32, i32, i32),
+    pub uniform_4i: unsafe extern "C" fn(i32, i32, i32, i32, i32),
+    pub uniform_1fv: unsafe extern "C" fn(i32, i32, *const f32),
+    pub uniform_2fv: unsafe extern "C" fn(i32, i32, *const f32),
+    pub uniform_3fv: unsafe extern "C" fn(i32, i32, *const f32),
+    pub uniform_4fv: unsafe extern "C" fn(i32, i32, *const f32),
+    pub uniform_1iv: unsafe extern "C" fn(i32, i32, *const i32),
+    pub uniform_2iv: unsafe extern "C" fn(i32, i32, *const i32),
+    pub uniform_3iv: unsafe extern "C" fn(i32, i32, *const i32),
+    pub uniform_4iv: unsafe extern "C" fn(i32, i32, *const i32),
+    pub uniform_matrix_2fv: unsafe extern "C" fn(i32, i32, u8, *const f32),
+    pub uniform_matrix_3fv: unsafe extern "C" fn(i32, i32, u8, *const f32),
     pub uniform_matrix_4fv: unsafe extern "C" fn(i32, i32, u8, *const f32),
+
+    // B类：Shader/Program 高级
+    pub detach_shader: unsafe extern "C" fn(u32, u32),
+    pub validate_program: unsafe extern "C" fn(u32),
+    pub get_active_uniform: unsafe extern "C" fn(u32, u32, i32, *mut i32, *mut i32, *mut u32, *mut i8),
+    pub get_active_attrib: unsafe extern "C" fn(u32, u32, i32, *mut i32, *mut i32, *mut u32, *mut i8),
+    pub get_uniform_fv: unsafe extern "C" fn(u32, i32, *mut f32),
+    pub get_uniform_iv: unsafe extern "C" fn(u32, i32, *mut i32),
+    pub get_attached_shaders: unsafe extern "C" fn(u32, i32, *mut i32, *mut u32),
+    pub get_shader_source: unsafe extern "C" fn(u32, i32, *mut i32, *mut i8),
+    pub bind_attrib_location: unsafe extern "C" fn(u32, u32, *const i8),
+    pub transform_feedback_varyings: unsafe extern "C" fn(u32, i32, *const *const i8, u32),
+    pub get_transform_feedback_varying: unsafe extern "C" fn(u32, u32, i32, *mut i32, *mut i32, *mut u32, *mut i8),
+    pub uniform_block_binding: unsafe extern "C" fn(u32, u32, u32),
+    pub get_uniform_block_index: unsafe extern "C" fn(u32, *const i8) -> u32,
+    pub get_active_uniform_block_iv: unsafe extern "C" fn(u32, u32, u32, *mut i32),
+    pub get_active_uniform_block_name: unsafe extern "C" fn(u32, u32, i32, *mut i32, *mut i8),
+    pub get_uniform_indices: unsafe extern "C" fn(u32, i32, *const *const i8, *mut u32),
+    pub get_active_uniforms_iv: unsafe extern "C" fn(u32, i32, *const u32, u32, *mut i32),
+    pub is_shader: unsafe extern "C" fn(u32) -> u8,
+    pub is_program: unsafe extern "C" fn(u32) -> u8,
+    pub release_shader_compiler: unsafe extern "C" fn(),
 
     // B类：Texture
     pub gen_textures: unsafe extern "C" fn(i32, *mut u32),
@@ -72,25 +157,162 @@ pub struct GlesDispatch {
     pub tex_sub_image_2d: unsafe extern "C" fn(u32, i32, i32, i32, i32, i32, u32, u32, *const c_void),
     pub tex_parameter_i: unsafe extern "C" fn(u32, u32, i32),
 
+    // B类：Texture 高级
+    pub tex_image_3d: unsafe extern "C" fn(u32, i32, i32, i32, i32, i32, i32, u32, u32, *const c_void),
+    pub tex_sub_image_3d: unsafe extern "C" fn(u32, i32, i32, i32, i32, i32, i32, i32, u32, u32, *const c_void),
+    pub tex_storage_2d: unsafe extern "C" fn(u32, i32, u32, i32, i32),
+    pub tex_storage_3d: unsafe extern "C" fn(u32, i32, u32, i32, i32, i32),
+    pub tex_parameter_f: unsafe extern "C" fn(u32, u32, f32),
+    pub tex_parameter_fv: unsafe extern "C" fn(u32, u32, *const f32),
+    pub tex_parameter_iv: unsafe extern "C" fn(u32, u32, *const i32),
+    pub compressed_tex_image_2d: unsafe extern "C" fn(u32, i32, u32, i32, i32, i32, i32, *const c_void),
+    pub compressed_tex_sub_image_2d: unsafe extern "C" fn(u32, i32, i32, i32, i32, i32, u32, i32, *const c_void),
+    pub compressed_tex_image_3d: unsafe extern "C" fn(u32, i32, u32, i32, i32, i32, i32, i32, *const c_void),
+    pub compressed_tex_sub_image_3d: unsafe extern "C" fn(u32, i32, i32, i32, i32, i32, i32, i32, u32, i32, *const c_void),
+    pub get_tex_image: unsafe extern "C" fn(u32, i32, u32, u32, *mut c_void),
+    pub get_tex_level_parameter_iv: unsafe extern "C" fn(u32, i32, u32, *mut i32),
+    pub get_tex_parameter_iv: unsafe extern "C" fn(u32, u32, *mut i32),
+    pub is_texture: unsafe extern "C" fn(u32) -> u8,
+
+    // Framebuffer / Renderbuffer
+    pub gen_framebuffers: unsafe extern "C" fn(i32, *mut u32),
+    pub delete_framebuffers: unsafe extern "C" fn(i32, *const u32),
+    pub bind_framebuffer: unsafe extern "C" fn(u32, u32),
+    pub framebuffer_texture_2d: unsafe extern "C" fn(u32, u32, u32, u32, i32),
+    pub framebuffer_texture_layer: unsafe extern "C" fn(u32, u32, u32, i32, i32),
+    pub framebuffer_renderbuffer: unsafe extern "C" fn(u32, u32, u32, u32),
+    pub check_framebuffer_status: unsafe extern "C" fn(u32) -> u32,
+    pub gen_renderbuffers: unsafe extern "C" fn(i32, *mut u32),
+    pub delete_renderbuffers: unsafe extern "C" fn(i32, *const u32),
+    pub bind_renderbuffer: unsafe extern "C" fn(u32, u32),
+    pub renderbuffer_storage: unsafe extern "C" fn(u32, u32, i32, i32),
+    pub renderbuffer_storage_multisample: unsafe extern "C" fn(u32, i32, u32, i32, i32),
+    pub blit_framebuffer: unsafe extern "C" fn(i32, i32, i32, i32, i32, i32, i32, i32, u32, u32),
+    pub draw_buffers: unsafe extern "C" fn(i32, *const u32),
+    pub read_buffer: unsafe extern "C" fn(u32),
+    pub read_pixels: unsafe extern "C" fn(i32, i32, i32, i32, u32, u32, *mut c_void),
+    pub clear_buffer_fv: unsafe extern "C" fn(u32, i32, *const f32),
+    pub clear_buffer_iv: unsafe extern "C" fn(u32, i32, *const i32),
+    pub clear_buffer_uiv: unsafe extern "C" fn(u32, i32, *const u32),
+    pub clear_buffer_fi: unsafe extern "C" fn(u32, i32, f32, i32),
+    pub get_framebuffer_attachment_parameter_iv: unsafe extern "C" fn(u32, u32, u32, *mut i32),
+    pub is_framebuffer: unsafe extern "C" fn(u32) -> u8,
+    pub is_renderbuffer: unsafe extern "C" fn(u32) -> u8,
+
+    // State
+    pub enable_i: unsafe extern "C" fn(u32, u32),
+    pub disable_i: unsafe extern "C" fn(u32, u32),
+    pub blend_func_separate: unsafe extern "C" fn(u32, u32, u32, u32),
+    pub blend_equation: unsafe extern "C" fn(u32),
+    pub blend_equation_separate: unsafe extern "C" fn(u32, u32),
+    pub blend_func_i: unsafe extern "C" fn(u32, u32, u32),
+    pub blend_func_separate_i: unsafe extern "C" fn(u32, u32, u32, u32, u32),
+    pub blend_equation_i: unsafe extern "C" fn(u32, u32),
+    pub blend_equation_separate_i: unsafe extern "C" fn(u32, u32, u32),
+    pub color_mask: unsafe extern "C" fn(u8, u8, u8, u8),
+    pub color_mask_i: unsafe extern "C" fn(u32, u8, u8, u8, u8),
+    pub depth_range: unsafe extern "C" fn(f64, f64),
+    pub depth_range_f: unsafe extern "C" fn(f32, f32),
+    pub stencil_func: unsafe extern "C" fn(u32, i32, u32),
+    pub stencil_func_separate: unsafe extern "C" fn(u32, u32, i32, u32),
+    pub stencil_op: unsafe extern "C" fn(u32, u32, u32),
+    pub stencil_op_separate: unsafe extern "C" fn(u32, u32, u32, u32),
+    pub stencil_mask: unsafe extern "C" fn(u32),
+    pub stencil_mask_separate: unsafe extern "C" fn(u32, u32),
+    pub polygon_offset: unsafe extern "C" fn(f32, f32),
+    pub polygon_mode: unsafe extern "C" fn(u32, u32),
+    pub pixel_store_f: unsafe extern "C" fn(u32, f32),
+    pub scissor_indexed: unsafe extern "C" fn(u32, i32, i32, i32, i32),
+    pub viewport_indexed: unsafe extern "C" fn(u32, f32, f32, f32, f32),
+    pub is_enabled: unsafe extern "C" fn(u32) -> u8,
+    pub is_enabled_i: unsafe extern "C" fn(u32, u32) -> u8,
+
+    // Drawing
+    pub multi_draw_arrays: unsafe extern "C" fn(u32, *const i32, *const i32, i32),
+    pub multi_draw_elements: unsafe extern "C" fn(u32, *const i32, u32, *const *const c_void, i32),
+
+    // Query
+    pub gen_queries: unsafe extern "C" fn(i32, *mut u32),
+    pub delete_queries: unsafe extern "C" fn(i32, *const u32),
+    pub is_query: unsafe extern "C" fn(u32) -> u8,
+    pub begin_query: unsafe extern "C" fn(u32, u32),
+    pub end_query: unsafe extern "C" fn(u32),
+    pub get_query_iv: unsafe extern "C" fn(u32, u32, *mut i32),
+    pub get_query_object_iv: unsafe extern "C" fn(u32, u32, *mut i32),
+    pub get_query_object_uiv: unsafe extern "C" fn(u32, u32, *mut u32),
+
+    // Sync
+    pub fence_sync: unsafe extern "C" fn(u32, u32) -> *mut c_void,
+    pub delete_sync: unsafe extern "C" fn(*mut c_void),
+    pub client_wait_sync: unsafe extern "C" fn(*mut c_void, u32, u64) -> u32,
+    pub wait_sync: unsafe extern "C" fn(*mut c_void, u32, u64),
+    pub is_sync: unsafe extern "C" fn(*mut c_void) -> u8,
+
+    // Transform Feedback
+    pub gen_transform_feedbacks: unsafe extern "C" fn(i32, *mut u32),
+    pub delete_transform_feedbacks: unsafe extern "C" fn(i32, *const u32),
+    pub bind_transform_feedback: unsafe extern "C" fn(u32, u32),
+    pub begin_transform_feedback: unsafe extern "C" fn(u32),
+    pub end_transform_feedback: unsafe extern "C" fn(),
+    pub pause_transform_feedback: unsafe extern "C" fn(),
+    pub resume_transform_feedback: unsafe extern "C" fn(),
+    pub is_transform_feedback: unsafe extern "C" fn(u32) -> u8,
+
+    // Sampler
+    pub gen_samplers: unsafe extern "C" fn(i32, *mut u32),
+    pub delete_samplers: unsafe extern "C" fn(i32, *const u32),
+    pub bind_sampler: unsafe extern "C" fn(u32, u32),
+    pub sampler_parameter_i: unsafe extern "C" fn(u32, u32, i32),
+    pub sampler_parameter_f: unsafe extern "C" fn(u32, u32, f32),
+    pub sampler_parameter_iv: unsafe extern "C" fn(u32, u32, *const i32),
+    pub sampler_parameter_fv: unsafe extern "C" fn(u32, u32, *const f32),
+    pub is_sampler: unsafe extern "C" fn(u32) -> u8,
+
     // B类：其他
     pub get_integerv: unsafe extern "C" fn(u32, *mut i32),
     pub get_string_i: unsafe extern "C" fn(u32, u32) -> *const i8,
 
+    // 其他状态查询
+    pub get_boolean_v: unsafe extern "C" fn(u32, *mut u8),
+    pub get_float_v: unsafe extern "C" fn(u32, *mut f32),
+    pub get_double_v: unsafe extern "C" fn(u32, *mut f64),
+    pub get_integer_64v: unsafe extern "C" fn(u32, *mut i64),
+    pub get_booleani_v: unsafe extern "C" fn(u32, u32, *mut u8),
+    pub get_integeri_v: unsafe extern "C" fn(u32, u32, *mut i32),
+    pub get_floati_v: unsafe extern "C" fn(u32, u32, *mut f32),
+    pub get_doublei_v: unsafe extern "C" fn(u32, u32, *mut f64),
 }
 
 impl GlesDispatch {
+    #[allow(clippy::missing_transmute_annotations)]
     pub fn load_from(loader: &super::loader::GlesLoader) -> Option<Self> {
+        unsafe extern "C" fn unimplemented_stub() {}
+
         macro_rules! load {
             ($name:expr) => {{
                 let ptr = loader.get_proc($name);
                 if ptr.is_null() {
+                    eprintln!("[GlesDispatch] failed to load required function: {}", $name);
                     return None;
                 }
                 ptr
             }};
         }
 
+        macro_rules! load_opt {
+            ($name:expr) => {{
+                let ptr = loader.get_proc($name);
+                if ptr.is_null() {
+                    eprintln!("[GlesDispatch] warning: optional function not available: {}", $name);
+                    unsafe { std::mem::transmute::<unsafe extern "C" fn(), _>(unimplemented_stub) }
+                } else {
+                    unsafe { std::mem::transmute(ptr) }
+                }
+            }};
+        }
+
         Some(Self {
+            stub: unimplemented_stub,
             clear: unsafe { std::mem::transmute(load!("glClear")) },
             get_string: unsafe { std::mem::transmute(load!("glGetString")) },
             enable: unsafe { std::mem::transmute(load!("glEnable")) },
@@ -121,6 +343,17 @@ impl GlesDispatch {
             buffer_data: unsafe { std::mem::transmute(load!("glBufferData")) },
             buffer_sub_data: unsafe { std::mem::transmute(load!("glBufferSubData")) },
 
+            map_buffer_range: unsafe { std::mem::transmute(load!("glMapBufferRange")) },
+            unmap_buffer: unsafe { std::mem::transmute(load!("glUnmapBuffer")) },
+            flush_mapped_buffer_range: unsafe { std::mem::transmute(load!("glFlushMappedBufferRange")) },
+            copy_buffer_sub_data: unsafe { std::mem::transmute(load!("glCopyBufferSubData")) },
+            bind_buffer_base: unsafe { std::mem::transmute(load!("glBindBufferBase")) },
+            bind_buffer_range: unsafe { std::mem::transmute(load!("glBindBufferRange")) },
+            get_buffer_sub_data: load_opt!("glGetBufferSubData"),
+            get_buffer_parameter_iv: unsafe { std::mem::transmute(load!("glGetBufferParameteriv")) },
+            get_buffer_pointer_v: load_opt!("glGetBufferPointerv"),
+            is_buffer: unsafe { std::mem::transmute(load!("glIsBuffer")) },
+
             gen_vertex_arrays: unsafe { std::mem::transmute(load!("glGenVertexArrays")) },
             delete_vertex_arrays: unsafe { std::mem::transmute(load!("glDeleteVertexArrays")) },
             bind_vertex_array: unsafe { std::mem::transmute(load!("glBindVertexArray")) },
@@ -128,6 +361,36 @@ impl GlesDispatch {
             disable_vertex_attrib_array: unsafe { std::mem::transmute(load!("glDisableVertexAttribArray")) },
             vertex_attrib_pointer: unsafe { std::mem::transmute(load!("glVertexAttribPointer")) },
             vertex_attrib_i_pointer: unsafe { std::mem::transmute(load!("glVertexAttribIPointer")) },
+            vertex_attrib_1f: unsafe { std::mem::transmute(load!("glVertexAttrib1f")) },
+            vertex_attrib_2f: unsafe { std::mem::transmute(load!("glVertexAttrib2f")) },
+            vertex_attrib_3f: unsafe { std::mem::transmute(load!("glVertexAttrib3f")) },
+            vertex_attrib_4f: unsafe { std::mem::transmute(load!("glVertexAttrib4f")) },
+            vertex_attrib_1fv: unsafe { std::mem::transmute(load!("glVertexAttrib1fv")) },
+            vertex_attrib_2fv: unsafe { std::mem::transmute(load!("glVertexAttrib2fv")) },
+            vertex_attrib_3fv: unsafe { std::mem::transmute(load!("glVertexAttrib3fv")) },
+            vertex_attrib_4fv: unsafe { std::mem::transmute(load!("glVertexAttrib4fv")) },
+            vertex_attrib_i_1i: unsafe { std::mem::transmute(load!("glVertexAttribI1i")) },
+            vertex_attrib_i_2i: unsafe { std::mem::transmute(load!("glVertexAttribI2i")) },
+            vertex_attrib_i_3i: unsafe { std::mem::transmute(load!("glVertexAttribI3i")) },
+            vertex_attrib_i_4i: unsafe { std::mem::transmute(load!("glVertexAttribI4i")) },
+            vertex_attrib_i_1ui: unsafe { std::mem::transmute(load!("glVertexAttribI1ui")) },
+            vertex_attrib_i_2ui: unsafe { std::mem::transmute(load!("glVertexAttribI2ui")) },
+            vertex_attrib_i_3ui: unsafe { std::mem::transmute(load!("glVertexAttribI3ui")) },
+            vertex_attrib_i_4ui: unsafe { std::mem::transmute(load!("glVertexAttribI4ui")) },
+            vertex_attrib_i_1iv: unsafe { std::mem::transmute(load!("glVertexAttribI1iv")) },
+            vertex_attrib_i_2iv: unsafe { std::mem::transmute(load!("glVertexAttribI2iv")) },
+            vertex_attrib_i_3iv: unsafe { std::mem::transmute(load!("glVertexAttribI3iv")) },
+            vertex_attrib_i_4iv: unsafe { std::mem::transmute(load!("glVertexAttribI4iv")) },
+            vertex_attrib_i_1uiv: unsafe { std::mem::transmute(load!("glVertexAttribI1uiv")) },
+            vertex_attrib_i_2uiv: unsafe { std::mem::transmute(load!("glVertexAttribI2uiv")) },
+            vertex_attrib_i_3uiv: unsafe { std::mem::transmute(load!("glVertexAttribI3uiv")) },
+            vertex_attrib_i_4uiv: unsafe { std::mem::transmute(load!("glVertexAttribI4uiv")) },
+
+            vertex_attrib_divisor: unsafe { std::mem::transmute(load!("glVertexAttribDivisor")) },
+            draw_arrays_instanced: unsafe { std::mem::transmute(load!("glDrawArraysInstanced")) },
+            draw_elements_instanced: unsafe { std::mem::transmute(load!("glDrawElementsInstanced")) },
+            draw_range_elements: load_opt!("glDrawRangeElements"),
+            primitive_restart_index: load_opt!("glPrimitiveRestartIndex"),
 
             create_shader: unsafe { std::mem::transmute(load!("glCreateShader")) },
             delete_shader: unsafe { std::mem::transmute(load!("glDeleteShader")) },
@@ -147,7 +410,44 @@ impl GlesDispatch {
             get_attrib_location: unsafe { std::mem::transmute(load!("glGetAttribLocation")) },
             uniform_1f: unsafe { std::mem::transmute(load!("glUniform1f")) },
             uniform_1i: unsafe { std::mem::transmute(load!("glUniform1i")) },
+            uniform_2f: unsafe { std::mem::transmute(load!("glUniform2f")) },
+            uniform_3f: unsafe { std::mem::transmute(load!("glUniform3f")) },
+            uniform_4f: unsafe { std::mem::transmute(load!("glUniform4f")) },
+            uniform_2i: unsafe { std::mem::transmute(load!("glUniform2i")) },
+            uniform_3i: unsafe { std::mem::transmute(load!("glUniform3i")) },
+            uniform_4i: unsafe { std::mem::transmute(load!("glUniform4i")) },
+            uniform_1fv: unsafe { std::mem::transmute(load!("glUniform1fv")) },
+            uniform_2fv: unsafe { std::mem::transmute(load!("glUniform2fv")) },
+            uniform_3fv: unsafe { std::mem::transmute(load!("glUniform3fv")) },
+            uniform_4fv: unsafe { std::mem::transmute(load!("glUniform4fv")) },
+            uniform_1iv: unsafe { std::mem::transmute(load!("glUniform1iv")) },
+            uniform_2iv: unsafe { std::mem::transmute(load!("glUniform2iv")) },
+            uniform_3iv: unsafe { std::mem::transmute(load!("glUniform3iv")) },
+            uniform_4iv: unsafe { std::mem::transmute(load!("glUniform4iv")) },
+            uniform_matrix_2fv: unsafe { std::mem::transmute(load!("glUniformMatrix2fv")) },
+            uniform_matrix_3fv: unsafe { std::mem::transmute(load!("glUniformMatrix3fv")) },
             uniform_matrix_4fv: unsafe { std::mem::transmute(load!("glUniformMatrix4fv")) },
+
+            detach_shader: unsafe { std::mem::transmute(load!("glDetachShader")) },
+            validate_program: unsafe { std::mem::transmute(load!("glValidateProgram")) },
+            get_active_uniform: unsafe { std::mem::transmute(load!("glGetActiveUniform")) },
+            get_active_attrib: unsafe { std::mem::transmute(load!("glGetActiveAttrib")) },
+            get_uniform_fv: unsafe { std::mem::transmute(load!("glGetUniformfv")) },
+            get_uniform_iv: unsafe { std::mem::transmute(load!("glGetUniformiv")) },
+            get_attached_shaders: unsafe { std::mem::transmute(load!("glGetAttachedShaders")) },
+            get_shader_source: unsafe { std::mem::transmute(load!("glGetShaderSource")) },
+            bind_attrib_location: unsafe { std::mem::transmute(load!("glBindAttribLocation")) },
+            transform_feedback_varyings: unsafe { std::mem::transmute(load!("glTransformFeedbackVaryings")) },
+            get_transform_feedback_varying: unsafe { std::mem::transmute(load!("glGetTransformFeedbackVarying")) },
+            uniform_block_binding: unsafe { std::mem::transmute(load!("glUniformBlockBinding")) },
+            get_uniform_block_index: unsafe { std::mem::transmute(load!("glGetUniformBlockIndex")) },
+            get_active_uniform_block_iv: unsafe { std::mem::transmute(load!("glGetActiveUniformBlockiv")) },
+            get_active_uniform_block_name: unsafe { std::mem::transmute(load!("glGetActiveUniformBlockName")) },
+            get_uniform_indices: unsafe { std::mem::transmute(load!("glGetUniformIndices")) },
+            get_active_uniforms_iv: unsafe { std::mem::transmute(load!("glGetActiveUniformsiv")) },
+            is_shader: unsafe { std::mem::transmute(load!("glIsShader")) },
+            is_program: unsafe { std::mem::transmute(load!("glIsProgram")) },
+            release_shader_compiler: unsafe { std::mem::transmute(load!("glReleaseShaderCompiler")) },
 
             gen_textures: unsafe { std::mem::transmute(load!("glGenTextures")) },
             delete_textures: unsafe { std::mem::transmute(load!("glDeleteTextures")) },
@@ -156,10 +456,120 @@ impl GlesDispatch {
             tex_sub_image_2d: unsafe { std::mem::transmute(load!("glTexSubImage2D")) },
             tex_parameter_i: unsafe { std::mem::transmute(load!("glTexParameteri")) },
 
+            tex_image_3d: unsafe { std::mem::transmute(load!("glTexImage3D")) },
+            tex_sub_image_3d: unsafe { std::mem::transmute(load!("glTexSubImage3D")) },
+            tex_storage_2d: unsafe { std::mem::transmute(load!("glTexStorage2D")) },
+            tex_storage_3d: unsafe { std::mem::transmute(load!("glTexStorage3D")) },
+            tex_parameter_f: unsafe { std::mem::transmute(load!("glTexParameterf")) },
+            tex_parameter_fv: unsafe { std::mem::transmute(load!("glTexParameterfv")) },
+            tex_parameter_iv: unsafe { std::mem::transmute(load!("glTexParameteriv")) },
+            compressed_tex_image_2d: unsafe { std::mem::transmute(load!("glCompressedTexImage2D")) },
+            compressed_tex_sub_image_2d: unsafe { std::mem::transmute(load!("glCompressedTexSubImage2D")) },
+            compressed_tex_image_3d: unsafe { std::mem::transmute(load!("glCompressedTexImage3D")) },
+            compressed_tex_sub_image_3d: unsafe { std::mem::transmute(load!("glCompressedTexSubImage3D")) },
+            get_tex_image: load_opt!("glGetTexImage"),
+            get_tex_level_parameter_iv: unsafe { std::mem::transmute(load!("glGetTexLevelParameteriv")) },
+            get_tex_parameter_iv: unsafe { std::mem::transmute(load!("glGetTexParameteriv")) },
+            is_texture: unsafe { std::mem::transmute(load!("glIsTexture")) },
+
+            gen_framebuffers: unsafe { std::mem::transmute(load!("glGenFramebuffers")) },
+            delete_framebuffers: unsafe { std::mem::transmute(load!("glDeleteFramebuffers")) },
+            bind_framebuffer: unsafe { std::mem::transmute(load!("glBindFramebuffer")) },
+            framebuffer_texture_2d: unsafe { std::mem::transmute(load!("glFramebufferTexture2D")) },
+            framebuffer_texture_layer: unsafe { std::mem::transmute(load!("glFramebufferTextureLayer")) },
+            framebuffer_renderbuffer: unsafe { std::mem::transmute(load!("glFramebufferRenderbuffer")) },
+            check_framebuffer_status: unsafe { std::mem::transmute(load!("glCheckFramebufferStatus")) },
+            gen_renderbuffers: unsafe { std::mem::transmute(load!("glGenRenderbuffers")) },
+            delete_renderbuffers: unsafe { std::mem::transmute(load!("glDeleteRenderbuffers")) },
+            bind_renderbuffer: unsafe { std::mem::transmute(load!("glBindRenderbuffer")) },
+            renderbuffer_storage: unsafe { std::mem::transmute(load!("glRenderbufferStorage")) },
+            renderbuffer_storage_multisample: unsafe { std::mem::transmute(load!("glRenderbufferStorageMultisample")) },
+            blit_framebuffer: unsafe { std::mem::transmute(load!("glBlitFramebuffer")) },
+            draw_buffers: unsafe { std::mem::transmute(load!("glDrawBuffers")) },
+            read_buffer: unsafe { std::mem::transmute(load!("glReadBuffer")) },
+            read_pixels: unsafe { std::mem::transmute(load!("glReadPixels")) },
+            clear_buffer_fv: unsafe { std::mem::transmute(load!("glClearBufferfv")) },
+            clear_buffer_iv: unsafe { std::mem::transmute(load!("glClearBufferiv")) },
+            clear_buffer_uiv: unsafe { std::mem::transmute(load!("glClearBufferuiv")) },
+            clear_buffer_fi: unsafe { std::mem::transmute(load!("glClearBufferfi")) },
+            get_framebuffer_attachment_parameter_iv: unsafe { std::mem::transmute(load!("glGetFramebufferAttachmentParameteriv")) },
+            is_framebuffer: unsafe { std::mem::transmute(load!("glIsFramebuffer")) },
+            is_renderbuffer: unsafe { std::mem::transmute(load!("glIsRenderbuffer")) },
+
+            enable_i: unsafe { std::mem::transmute(load!("glEnablei")) },
+            disable_i: unsafe { std::mem::transmute(load!("glDisablei")) },
+            blend_func_separate: unsafe { std::mem::transmute(load!("glBlendFuncSeparate")) },
+            blend_equation: unsafe { std::mem::transmute(load!("glBlendEquation")) },
+            blend_equation_separate: unsafe { std::mem::transmute(load!("glBlendEquationSeparate")) },
+            blend_func_i: unsafe { std::mem::transmute(load!("glBlendFunci")) },
+            blend_func_separate_i: unsafe { std::mem::transmute(load!("glBlendFuncSeparatei")) },
+            blend_equation_i: unsafe { std::mem::transmute(load!("glBlendEquationi")) },
+            blend_equation_separate_i: unsafe { std::mem::transmute(load!("glBlendEquationSeparatei")) },
+            color_mask: unsafe { std::mem::transmute(load!("glColorMask")) },
+            color_mask_i: unsafe { std::mem::transmute(load!("glColorMaski")) },
+            depth_range: load_opt!("glDepthRange"),
+            depth_range_f: unsafe { std::mem::transmute(load!("glDepthRangef")) },
+            stencil_func: unsafe { std::mem::transmute(load!("glStencilFunc")) },
+            stencil_func_separate: unsafe { std::mem::transmute(load!("glStencilFuncSeparate")) },
+            stencil_op: unsafe { std::mem::transmute(load!("glStencilOp")) },
+            stencil_op_separate: unsafe { std::mem::transmute(load!("glStencilOpSeparate")) },
+            stencil_mask: unsafe { std::mem::transmute(load!("glStencilMask")) },
+            stencil_mask_separate: unsafe { std::mem::transmute(load!("glStencilMaskSeparate")) },
+            polygon_offset: unsafe { std::mem::transmute(load!("glPolygonOffset")) },
+            polygon_mode: load_opt!("glPolygonMode"),
+            pixel_store_f: load_opt!("glPixelStoref"),
+            scissor_indexed: load_opt!("glScissorIndexed"),
+            viewport_indexed: load_opt!("glViewportIndexedf"),
+            is_enabled: unsafe { std::mem::transmute(load!("glIsEnabled")) },
+            is_enabled_i: unsafe { std::mem::transmute(load!("glIsEnabledi")) },
+
+            multi_draw_arrays: load_opt!("glMultiDrawArrays"),
+            multi_draw_elements: load_opt!("glMultiDrawElements"),
+
+            gen_queries: unsafe { std::mem::transmute(load!("glGenQueries")) },
+            delete_queries: unsafe { std::mem::transmute(load!("glDeleteQueries")) },
+            is_query: unsafe { std::mem::transmute(load!("glIsQuery")) },
+            begin_query: unsafe { std::mem::transmute(load!("glBeginQuery")) },
+            end_query: unsafe { std::mem::transmute(load!("glEndQuery")) },
+            get_query_iv: unsafe { std::mem::transmute(load!("glGetQueryiv")) },
+            get_query_object_iv: unsafe { std::mem::transmute(load!("glGetQueryObjectiv")) },
+            get_query_object_uiv: unsafe { std::mem::transmute(load!("glGetQueryObjectuiv")) },
+
+            fence_sync: unsafe { std::mem::transmute(load!("glFenceSync")) },
+            delete_sync: unsafe { std::mem::transmute(load!("glDeleteSync")) },
+            client_wait_sync: unsafe { std::mem::transmute(load!("glClientWaitSync")) },
+            wait_sync: unsafe { std::mem::transmute(load!("glWaitSync")) },
+            is_sync: unsafe { std::mem::transmute(load!("glIsSync")) },
+
+            gen_transform_feedbacks: unsafe { std::mem::transmute(load!("glGenTransformFeedbacks")) },
+            delete_transform_feedbacks: unsafe { std::mem::transmute(load!("glDeleteTransformFeedbacks")) },
+            bind_transform_feedback: unsafe { std::mem::transmute(load!("glBindTransformFeedback")) },
+            begin_transform_feedback: unsafe { std::mem::transmute(load!("glBeginTransformFeedback")) },
+            end_transform_feedback: unsafe { std::mem::transmute(load!("glEndTransformFeedback")) },
+            pause_transform_feedback: unsafe { std::mem::transmute(load!("glPauseTransformFeedback")) },
+            resume_transform_feedback: unsafe { std::mem::transmute(load!("glResumeTransformFeedback")) },
+            is_transform_feedback: unsafe { std::mem::transmute(load!("glIsTransformFeedback")) },
+
+            gen_samplers: unsafe { std::mem::transmute(load!("glGenSamplers")) },
+            delete_samplers: unsafe { std::mem::transmute(load!("glDeleteSamplers")) },
+            bind_sampler: unsafe { std::mem::transmute(load!("glBindSampler")) },
+            sampler_parameter_i: unsafe { std::mem::transmute(load!("glSamplerParameteri")) },
+            sampler_parameter_f: unsafe { std::mem::transmute(load!("glSamplerParameterf")) },
+            sampler_parameter_iv: unsafe { std::mem::transmute(load!("glSamplerParameteriv")) },
+            sampler_parameter_fv: unsafe { std::mem::transmute(load!("glSamplerParameterfv")) },
+            is_sampler: unsafe { std::mem::transmute(load!("glIsSampler")) },
+
             get_integerv: unsafe { std::mem::transmute(load!("glGetIntegerv")) },
             get_string_i: unsafe { std::mem::transmute(load!("glGetStringi")) },
 
+            get_boolean_v: unsafe { std::mem::transmute(load!("glGetBooleanv")) },
+            get_float_v: unsafe { std::mem::transmute(load!("glGetFloatv")) },
+            get_double_v: load_opt!("glGetDoublev"),
+            get_integer_64v: load_opt!("glGetInteger64v"),
+            get_booleani_v: load_opt!("glGetBooleani_v"),
+            get_integeri_v: load_opt!("glGetIntegeri_v"),
+            get_floati_v: load_opt!("glGetFloati_v"),
+            get_doublei_v: load_opt!("glGetDoublei_v"),
         })
     }
 }
-

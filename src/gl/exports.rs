@@ -1,4 +1,5 @@
 use crate::backend;
+use crate::gl::getter;
 
 // === A类：直接透传 ===
 
@@ -211,10 +212,8 @@ pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
         unsafe { *data = FAKE_EXTENSIONS.len() as i32 };
         return;
     }
-    
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.get_integerv)(pname, data);
-    });
+
+    getter::get_integerv(pname, data);
 }
 
 #[unsafe(no_mangle)]

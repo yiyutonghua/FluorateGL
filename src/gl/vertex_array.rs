@@ -87,3 +87,203 @@ pub extern "C" fn glVertexAttribIPointer(
         (dispatch.vertex_attrib_i_pointer)(index, size, type_, stride, pointer);
     });
 }
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribDivisor(index: u32, divisor: u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_divisor)(index, divisor);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib1f(index: u32, x: f32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_1f)(index, x);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib2f(index: u32, x: f32, y: f32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_2f)(index, x, y);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib3f(index: u32, x: f32, y: f32, z: f32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_3f)(index, x, y, z);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4f(index: u32, x: f32, y: f32, z: f32, w: f32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(index, x, y, z, w);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib1fv(index: u32, v: *const f32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_1fv)(index, v);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib2fv(index: u32, v: *const f32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_2fv)(index, v);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib3fv(index: u32, v: *const f32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_3fv)(index, v);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4fv(index: u32, v: *const f32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4fv)(index, v);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI1i(index: u32, x: i32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_1i)(index, x);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI2i(index: u32, x: i32, y: i32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_2i)(index, x, y);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI3i(index: u32, x: i32, y: i32, z: i32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_3i)(index, x, y, z);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI4i(index: u32, x: i32, y: i32, z: i32, w: i32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_4i)(index, x, y, z, w);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI1ui(index: u32, x: u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_1ui)(index, x);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI2ui(index: u32, x: u32, y: u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_2ui)(index, x, y);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI3ui(index: u32, x: u32, y: u32, z: u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_3ui)(index, x, y, z);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI4ui(index: u32, x: u32, y: u32, z: u32, w: u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_4ui)(index, x, y, z, w);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI1iv(index: u32, v: *const i32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_1iv)(index, v);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI2iv(index: u32, v: *const i32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_2iv)(index, v);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI3iv(index: u32, v: *const i32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_3iv)(index, v);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI4iv(index: u32, v: *const i32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_4iv)(index, v);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI1uiv(index: u32, v: *const u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_1uiv)(index, v);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI2uiv(index: u32, v: *const u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_2uiv)(index, v);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI3uiv(index: u32, v: *const u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_3uiv)(index, v);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI4uiv(index: u32, v: *const u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_4uiv)(index, v);
+    });
+}

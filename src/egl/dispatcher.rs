@@ -1,6 +1,7 @@
 use crate::backend;
 use std::ffi::c_void;
 
+#[allow(dead_code)]
 pub fn get_display(display_id: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
     backend::with_egl_dispatch(|dispatch| unsafe {
         (dispatch.get_display)(display_id)
