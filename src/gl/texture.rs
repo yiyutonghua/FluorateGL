@@ -1,6 +1,47 @@
 use crate::backend;
 use crate::state;
 
+// Texture internal format mappings: desktop OpenGL -> GLES 3.x
+// GLES 3.x supports sized internal formats, but some legacy desktop-only
+// formats (e.g. GL_RGB16, GL_DEPTH_COMPONENT32) need to be emulated.
+const GL_R3_G3_B2: u32 = 0x2A10;
+const GL_RGB4: u32 = 0x804F;
+const GL_RGB5: u32 = 0x8050;
+const GL_RGB8: u32 = 0x8051;
+const GL_RGB10: u32 = 0x8052;
+const GL_RGB12: u32 = 0x8053;
+const GL_RGB16: u32 = 0x8054;
+const GL_RGBA2: u32 = 0x8055;
+const GL_RGBA4: u32 = 0x8056;
+const GL_RGBA8: u32 = 0x8058;
+const GL_RGB10_A2: u32 = 0x8059;
+const GL_RGBA12: u32 = 0x805A;
+const GL_RGBA16: u32 = 0x805B;
+const GL_BGR: u32 = 0x80E0;
+const GL_BGRA: u32 = 0x80E1;
+const GL_R8: u32 = 0x8229;
+const GL_DEPTH_COMPONENT32: u32 = 0x81A7;
+const GL_DEPTH_COMPONENT32F: u32 = 0x8CAC;
+const GL_STENCIL_INDEX8: u32 = 0x8D48;
+const GL_STENCIL_INDEX16: u32 = 0x8D49;
+
+/// Convert a desktop OpenGL internal format to the closest GLES-compatible
+/// internal format. The caller's device (Adreno 810 / GLES 3.2) supports
+/// GL_EXT_texture_norm16, so 16-bit normalized formats are kept when possible.
+fn normalize_internal_format(internalformat: u32) -> u32 {
+    match internalformat {
+        GL_R3_G3_B2 | GL_RGB4 | GL_RGB5 | GL_RGB12 => GL_RGB8,
+        GL_RGB10 => GL_RGB10_A2,
+        GL_RGB16 => GL_RGBA16,
+        GL_RGBA2 | GL_RGBA4 | GL_RGBA12 => GL_RGBA8,
+        GL_BGR => GL_RGB8,
+        GL_BGRA => GL_RGBA8,
+        GL_DEPTH_COMPONENT32 => GL_DEPTH_COMPONENT32F,
+        GL_STENCIL_INDEX8 | GL_STENCIL_INDEX16 => GL_R8,
+        _ => internalformat,
+    }
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGenTextures(n: i32, textures: *mut u32) {
@@ -56,8 +97,16 @@ pub extern "C" fn glTexImage2D(
     type_: u32,
     pixels: *const std::ffi::c_void,
 ) {
+    let normalized = normalize_internal_format(internalformat as u32) as i32;
+    if normalized != internalformat {
+        log::debug!(
+            "glTexImage2D: normalized internalformat 0x{:04X} -> 0x{:04X}",
+            internalformat,
+            normalized
+        );
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.tex_image_2d)(target, level, internalformat, width, height, border, format, type_, pixels);
+        (dispatch.tex_image_2d)(target, level, normalized, width, height, border, format, type_, pixels);
     });
 }
 
@@ -101,8 +150,16 @@ pub extern "C" fn glTexImage3D(
     type_: u32,
     pixels: *const std::ffi::c_void,
 ) {
+    let normalized = normalize_internal_format(internalformat as u32) as i32;
+    if normalized != internalformat {
+        log::debug!(
+            "glTexImage3D: normalized internalformat 0x{:04X} -> 0x{:04X}",
+            internalformat,
+            normalized
+        );
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.tex_image_3d)(target, level, internalformat, width, height, depth, border, format, type_, pixels);
+        (dispatch.tex_image_3d)(target, level, normalized, width, height, depth, border, format, type_, pixels);
     });
 }
 
@@ -129,8 +186,16 @@ pub extern "C" fn glTexSubImage3D(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glTexStorage2D(target: u32, levels: i32, internalformat: u32, width: i32, height: i32) {
+    let normalized = normalize_internal_format(internalformat);
+    if normalized != internalformat {
+        log::debug!(
+            "glTexStorage2D: normalized internalformat 0x{:04X} -> 0x{:04X}",
+            internalformat,
+            normalized
+        );
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.tex_storage_2d)(target, levels, internalformat, width, height);
+        (dispatch.tex_storage_2d)(target, levels, normalized, width, height);
     });
 }
 
@@ -144,8 +209,16 @@ pub extern "C" fn glTexStorage3D(
     height: i32,
     depth: i32,
 ) {
+    let normalized = normalize_internal_format(internalformat);
+    if normalized != internalformat {
+        log::debug!(
+            "glTexStorage3D: normalized internalformat 0x{:04X} -> 0x{:04X}",
+            internalformat,
+            normalized
+        );
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.tex_storage_3d)(target, levels, internalformat, width, height, depth);
+        (dispatch.tex_storage_3d)(target, levels, normalized, width, height, depth);
     });
 }
 
