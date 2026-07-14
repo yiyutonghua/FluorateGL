@@ -160,11 +160,19 @@ pub extern "C" fn glVertexAttrib4fv(index: u32, v: *const f32) {
     });
 }
 
+fn is_stub(dispatch: &backend::dispatch::GlesDispatch, f: usize) -> bool {
+    f == dispatch.stub as usize
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glVertexAttribI1i(index: u32, x: i32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.vertex_attrib_i_1i)(index, x);
+        if is_stub(dispatch, dispatch.vertex_attrib_i_1i as usize) {
+            (dispatch.vertex_attrib_i_4i)(index, x, 0, 0, 0);
+        } else {
+            (dispatch.vertex_attrib_i_1i)(index, x);
+        }
     });
 }
 
@@ -172,7 +180,11 @@ pub extern "C" fn glVertexAttribI1i(index: u32, x: i32) {
 #[allow(non_snake_case)]
 pub extern "C" fn glVertexAttribI2i(index: u32, x: i32, y: i32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.vertex_attrib_i_2i)(index, x, y);
+        if is_stub(dispatch, dispatch.vertex_attrib_i_2i as usize) {
+            (dispatch.vertex_attrib_i_4i)(index, x, y, 0, 0);
+        } else {
+            (dispatch.vertex_attrib_i_2i)(index, x, y);
+        }
     });
 }
 
@@ -180,7 +192,11 @@ pub extern "C" fn glVertexAttribI2i(index: u32, x: i32, y: i32) {
 #[allow(non_snake_case)]
 pub extern "C" fn glVertexAttribI3i(index: u32, x: i32, y: i32, z: i32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.vertex_attrib_i_3i)(index, x, y, z);
+        if is_stub(dispatch, dispatch.vertex_attrib_i_3i as usize) {
+            (dispatch.vertex_attrib_i_4i)(index, x, y, z, 0);
+        } else {
+            (dispatch.vertex_attrib_i_3i)(index, x, y, z);
+        }
     });
 }
 
@@ -196,7 +212,11 @@ pub extern "C" fn glVertexAttribI4i(index: u32, x: i32, y: i32, z: i32, w: i32) 
 #[allow(non_snake_case)]
 pub extern "C" fn glVertexAttribI1ui(index: u32, x: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.vertex_attrib_i_1ui)(index, x);
+        if is_stub(dispatch, dispatch.vertex_attrib_i_1ui as usize) {
+            (dispatch.vertex_attrib_i_4ui)(index, x, 0, 0, 0);
+        } else {
+            (dispatch.vertex_attrib_i_1ui)(index, x);
+        }
     });
 }
 
@@ -204,7 +224,11 @@ pub extern "C" fn glVertexAttribI1ui(index: u32, x: u32) {
 #[allow(non_snake_case)]
 pub extern "C" fn glVertexAttribI2ui(index: u32, x: u32, y: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.vertex_attrib_i_2ui)(index, x, y);
+        if is_stub(dispatch, dispatch.vertex_attrib_i_2ui as usize) {
+            (dispatch.vertex_attrib_i_4ui)(index, x, y, 0, 0);
+        } else {
+            (dispatch.vertex_attrib_i_2ui)(index, x, y);
+        }
     });
 }
 
@@ -212,7 +236,11 @@ pub extern "C" fn glVertexAttribI2ui(index: u32, x: u32, y: u32) {
 #[allow(non_snake_case)]
 pub extern "C" fn glVertexAttribI3ui(index: u32, x: u32, y: u32, z: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.vertex_attrib_i_3ui)(index, x, y, z);
+        if is_stub(dispatch, dispatch.vertex_attrib_i_3ui as usize) {
+            (dispatch.vertex_attrib_i_4ui)(index, x, y, z, 0);
+        } else {
+            (dispatch.vertex_attrib_i_3ui)(index, x, y, z);
+        }
     });
 }
 
@@ -228,7 +256,11 @@ pub extern "C" fn glVertexAttribI4ui(index: u32, x: u32, y: u32, z: u32, w: u32)
 #[allow(non_snake_case)]
 pub extern "C" fn glVertexAttribI1iv(index: u32, v: *const i32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.vertex_attrib_i_1iv)(index, v);
+        if is_stub(dispatch, dispatch.vertex_attrib_i_1iv as usize) {
+            (dispatch.vertex_attrib_i_4i)(index, *v, 0, 0, 0);
+        } else {
+            (dispatch.vertex_attrib_i_1iv)(index, v);
+        }
     });
 }
 
@@ -236,7 +268,11 @@ pub extern "C" fn glVertexAttribI1iv(index: u32, v: *const i32) {
 #[allow(non_snake_case)]
 pub extern "C" fn glVertexAttribI2iv(index: u32, v: *const i32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.vertex_attrib_i_2iv)(index, v);
+        if is_stub(dispatch, dispatch.vertex_attrib_i_2iv as usize) {
+            (dispatch.vertex_attrib_i_4i)(index, *v, *v.offset(1), 0, 0);
+        } else {
+            (dispatch.vertex_attrib_i_2iv)(index, v);
+        }
     });
 }
 
@@ -244,7 +280,11 @@ pub extern "C" fn glVertexAttribI2iv(index: u32, v: *const i32) {
 #[allow(non_snake_case)]
 pub extern "C" fn glVertexAttribI3iv(index: u32, v: *const i32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.vertex_attrib_i_3iv)(index, v);
+        if is_stub(dispatch, dispatch.vertex_attrib_i_3iv as usize) {
+            (dispatch.vertex_attrib_i_4i)(index, *v, *v.offset(1), *v.offset(2), 0);
+        } else {
+            (dispatch.vertex_attrib_i_3iv)(index, v);
+        }
     });
 }
 
@@ -260,7 +300,11 @@ pub extern "C" fn glVertexAttribI4iv(index: u32, v: *const i32) {
 #[allow(non_snake_case)]
 pub extern "C" fn glVertexAttribI1uiv(index: u32, v: *const u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.vertex_attrib_i_1uiv)(index, v);
+        if is_stub(dispatch, dispatch.vertex_attrib_i_1uiv as usize) {
+            (dispatch.vertex_attrib_i_4ui)(index, *v, 0, 0, 0);
+        } else {
+            (dispatch.vertex_attrib_i_1uiv)(index, v);
+        }
     });
 }
 
@@ -268,7 +312,11 @@ pub extern "C" fn glVertexAttribI1uiv(index: u32, v: *const u32) {
 #[allow(non_snake_case)]
 pub extern "C" fn glVertexAttribI2uiv(index: u32, v: *const u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.vertex_attrib_i_2uiv)(index, v);
+        if is_stub(dispatch, dispatch.vertex_attrib_i_2uiv as usize) {
+            (dispatch.vertex_attrib_i_4ui)(index, *v, *v.offset(1), 0, 0);
+        } else {
+            (dispatch.vertex_attrib_i_2uiv)(index, v);
+        }
     });
 }
 
@@ -276,7 +324,11 @@ pub extern "C" fn glVertexAttribI2uiv(index: u32, v: *const u32) {
 #[allow(non_snake_case)]
 pub extern "C" fn glVertexAttribI3uiv(index: u32, v: *const u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.vertex_attrib_i_3uiv)(index, v);
+        if is_stub(dispatch, dispatch.vertex_attrib_i_3uiv as usize) {
+            (dispatch.vertex_attrib_i_4ui)(index, *v, *v.offset(1), *v.offset(2), 0);
+        } else {
+            (dispatch.vertex_attrib_i_3uiv)(index, v);
+        }
     });
 }
 

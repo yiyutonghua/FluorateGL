@@ -51,7 +51,10 @@ where
     F: FnOnce(&dispatch::GlesDispatch) -> R,
 {
     ensure_initialized();
-    let dispatch = GLES_DISPATCH.get().expect("GLES not initialized");
+    let dispatch = GLES_DISPATCH.get().unwrap_or_else(|| {
+        static STUB: OnceLock<dispatch::GlesDispatch> = OnceLock::new();
+        STUB.get_or_init(dispatch::GlesDispatch::all_stub)
+    });
     f(dispatch)
 }
 
@@ -60,6 +63,9 @@ where
     F: FnOnce(&crate::egl_sys::dispatch::EglDispatch) -> R,
 {
     ensure_initialized();
-    let dispatch = EGL_DISPATCH.get().expect("EGL not initialized");
+    let dispatch = EGL_DISPATCH.get().unwrap_or_else(|| {
+        static STUB: OnceLock<crate::egl_sys::dispatch::EglDispatch> = OnceLock::new();
+        STUB.get_or_init(crate::egl_sys::dispatch::EglDispatch::all_stub)
+    });
     f(dispatch)
 }

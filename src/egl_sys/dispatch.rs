@@ -40,6 +40,18 @@ pub struct EglDispatch {
 }
 
 impl EglDispatch {
+    /// Create a dispatch table where every function pointer is a no-op stub.
+    pub fn all_stub() -> Self {
+        unsafe extern "C" fn stub_fn() {}
+        let mut stub = std::mem::MaybeUninit::<Self>::uninit();
+        let ptr = stub.as_mut_ptr() as *mut unsafe extern "C" fn();
+        let count = std::mem::size_of::<Self>() / std::mem::size_of::<unsafe extern "C" fn()>();
+        for i in 0..count {
+            unsafe { ptr.add(i).write(stub_fn) };
+        }
+        unsafe { stub.assume_init() }
+    }
+
     #[allow(clippy::missing_transmute_annotations)]
     pub fn load_from(loader: &super::loader::EglLoader) -> Option<Self> {
         macro_rules! load {

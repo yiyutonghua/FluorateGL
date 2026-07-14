@@ -285,6 +285,20 @@ pub struct GlesDispatch {
 }
 
 impl GlesDispatch {
+    /// Create a dispatch table where every function pointer is a no-op stub.
+    /// Used as a fallback when the real GLES library fails to load, so that
+    /// exported C functions don't panic/abort the host process.
+    pub fn all_stub() -> Self {
+        unsafe extern "C" fn stub_fn() {}
+        let mut stub = std::mem::MaybeUninit::<Self>::uninit();
+        let ptr = stub.as_mut_ptr() as *mut unsafe extern "C" fn();
+        let count = std::mem::size_of::<Self>() / std::mem::size_of::<unsafe extern "C" fn()>();
+        for i in 0..count {
+            unsafe { ptr.add(i).write(stub_fn) };
+        }
+        unsafe { stub.assume_init() }
+    }
+
     #[allow(clippy::missing_transmute_annotations)]
     pub fn load_from(loader: &super::loader::GlesLoader) -> Option<Self> {
         unsafe extern "C" fn unimplemented_stub() {}
@@ -370,21 +384,21 @@ impl GlesDispatch {
             vertex_attrib_2fv: unsafe { std::mem::transmute(load!("glVertexAttrib2fv")) },
             vertex_attrib_3fv: unsafe { std::mem::transmute(load!("glVertexAttrib3fv")) },
             vertex_attrib_4fv: unsafe { std::mem::transmute(load!("glVertexAttrib4fv")) },
-            vertex_attrib_i_1i: unsafe { std::mem::transmute(load!("glVertexAttribI1i")) },
-            vertex_attrib_i_2i: unsafe { std::mem::transmute(load!("glVertexAttribI2i")) },
-            vertex_attrib_i_3i: unsafe { std::mem::transmute(load!("glVertexAttribI3i")) },
+            vertex_attrib_i_1i: load_opt!("glVertexAttribI1i"),
+            vertex_attrib_i_2i: load_opt!("glVertexAttribI2i"),
+            vertex_attrib_i_3i: load_opt!("glVertexAttribI3i"),
             vertex_attrib_i_4i: unsafe { std::mem::transmute(load!("glVertexAttribI4i")) },
-            vertex_attrib_i_1ui: unsafe { std::mem::transmute(load!("glVertexAttribI1ui")) },
-            vertex_attrib_i_2ui: unsafe { std::mem::transmute(load!("glVertexAttribI2ui")) },
-            vertex_attrib_i_3ui: unsafe { std::mem::transmute(load!("glVertexAttribI3ui")) },
+            vertex_attrib_i_1ui: load_opt!("glVertexAttribI1ui"),
+            vertex_attrib_i_2ui: load_opt!("glVertexAttribI2ui"),
+            vertex_attrib_i_3ui: load_opt!("glVertexAttribI3ui"),
             vertex_attrib_i_4ui: unsafe { std::mem::transmute(load!("glVertexAttribI4ui")) },
-            vertex_attrib_i_1iv: unsafe { std::mem::transmute(load!("glVertexAttribI1iv")) },
-            vertex_attrib_i_2iv: unsafe { std::mem::transmute(load!("glVertexAttribI2iv")) },
-            vertex_attrib_i_3iv: unsafe { std::mem::transmute(load!("glVertexAttribI3iv")) },
+            vertex_attrib_i_1iv: load_opt!("glVertexAttribI1iv"),
+            vertex_attrib_i_2iv: load_opt!("glVertexAttribI2iv"),
+            vertex_attrib_i_3iv: load_opt!("glVertexAttribI3iv"),
             vertex_attrib_i_4iv: unsafe { std::mem::transmute(load!("glVertexAttribI4iv")) },
-            vertex_attrib_i_1uiv: unsafe { std::mem::transmute(load!("glVertexAttribI1uiv")) },
-            vertex_attrib_i_2uiv: unsafe { std::mem::transmute(load!("glVertexAttribI2uiv")) },
-            vertex_attrib_i_3uiv: unsafe { std::mem::transmute(load!("glVertexAttribI3uiv")) },
+            vertex_attrib_i_1uiv: load_opt!("glVertexAttribI1uiv"),
+            vertex_attrib_i_2uiv: load_opt!("glVertexAttribI2uiv"),
+            vertex_attrib_i_3uiv: load_opt!("glVertexAttribI3uiv"),
             vertex_attrib_i_4uiv: unsafe { std::mem::transmute(load!("glVertexAttribI4uiv")) },
 
             vertex_attrib_divisor: unsafe { std::mem::transmute(load!("glVertexAttribDivisor")) },
