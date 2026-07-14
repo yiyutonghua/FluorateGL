@@ -3,6 +3,7 @@ mod config;
 mod egl;
 mod egl_sys;
 mod gl;
+mod shader_translator;
 mod state;
 
 

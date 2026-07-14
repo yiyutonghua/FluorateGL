@@ -1,18 +1,20 @@
 pub mod id_map;
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use id_map::IdMap;
 
 pub struct State {
     pub buffers: IdMap,
     pub vertex_arrays: IdMap,
     pub shaders: IdMap,
+    pub shader_types: HashMap<u32, u32>,
     pub programs: IdMap,
     pub textures: IdMap,
     pub framebuffers: IdMap,
     pub renderbuffers: IdMap,
     pub queries: IdMap,
-    
+
     pub bound_buffer: u32,
     pub bound_vertex_array: u32,
     pub bound_program: u32,
@@ -27,12 +29,13 @@ impl State {
             buffers: IdMap::new(),
             vertex_arrays: IdMap::new(),
             shaders: IdMap::new(),
+            shader_types: HashMap::new(),
             programs: IdMap::new(),
             textures: IdMap::new(),
             framebuffers: IdMap::new(),
             renderbuffers: IdMap::new(),
             queries: IdMap::new(),
-            
+
             bound_buffer: 0,
             bound_vertex_array: 0,
             bound_program: 0,

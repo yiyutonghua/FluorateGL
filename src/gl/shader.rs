@@ -1,13 +1,18 @@
 use crate::backend;
 use crate::state;
 use libc::c_char;
+use std::ffi::{CStr, CString};
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glCreateShader(shader_type: u32) -> u32 {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = (dispatch.create_shader)(shader_type);
-        state::with_state(|s| s.shaders.alloc(gles_id))
+        let desktop_id = state::with_state(|s| s.shaders.alloc(gles_id));
+        state::with_state(|s| {
+            s.shader_types.insert(desktop_id, shader_type);
+        });
+        desktop_id
     })
 }
 
@@ -15,6 +20,9 @@ pub extern "C" fn glCreateShader(shader_type: u32) -> u32 {
 #[allow(non_snake_case)]
 pub extern "C" fn glDeleteShader(shader: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
+        state::with_state(|s| {
+            s.shader_types.remove(&shader);
+        });
         if let Some(gles_id) = state::with_state(|s| s.shaders.delete(shader)) {
             (dispatch.delete_shader)(gles_id);
         }
@@ -34,10 +42,45 @@ pub extern "C" fn glShaderSource(
         if gles_id == 0 {
             return;
         }
-        
-        // TODO: GLSL 转译（Phase 2）
-        // 现在直接透传
-        (dispatch.shader_source)(gles_id, count, string, length);
+
+        let stage = state::with_state(|s| s.shader_types.get(&shader).copied().unwrap_or(0));
+
+        // Concatenate all source strings.
+        let mut source = String::new();
+        for i in 0..count as isize {
+            let ptr = *string.offset(i);
+            if ptr.is_null() {
+                continue;
+            }
+            let len = if length.is_null() {
+                0
+            } else {
+                *length.offset(i) as usize
+            };
+
+            let piece = if len == 0 {
+                CStr::from_ptr(ptr).to_string_lossy().into_owned()
+            } else {
+                let bytes = std::slice::from_raw_parts(ptr as *const u8, len);
+                String::from_utf8_lossy(bytes).into_owned()
+            };
+            source.push_str(&piece);
+        }
+
+        let translated = crate::shader_translator::string_pass::translate(&source, stage);
+        log::debug!("[ShaderTranslator] translated shader {} (stage 0x{:04X})", shader, stage);
+
+        let c_source = match CString::new(translated) {
+            Ok(c) => c,
+            Err(_) => {
+                log::error!("[FluorateGL] shader source contains null byte, passing through");
+                (dispatch.shader_source)(gles_id, count, string, length);
+                return;
+            }
+        };
+        let ptr = c_source.as_ptr();
+        let len = c_source.as_bytes().len() as i32;
+        (dispatch.shader_source)(gles_id, 1, &ptr, &len);
     });
 }
 
