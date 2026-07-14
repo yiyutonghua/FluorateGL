@@ -9,9 +9,10 @@ name = "fluorategl"
 
 [dependencies]
 android_logger = "0.15.1"
-bytemuck = "1"
+bytemuck = { version = "1", default-features = false }
 libc = "0.2.186"
 log = "0.4.33"
 naga = { version = "30.0.0", features = ["spv-in", "glsl-out"] }
+regex = "1"
 shaderc = "0.10.1"
 

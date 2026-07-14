@@ -23,6 +23,7 @@ pub extern "C" fn glDeleteShader(shader: u32) {
         state::with_state(|s| {
             s.shader_types.remove(&shader);
             s.shader_sources.remove(&shader);
+            s.shader_original_sources.remove(&shader);
         });
         if let Some(gles_id) = state::with_state(|s| s.shaders.delete(shader)) {
             (dispatch.delete_shader)(gles_id);
@@ -71,10 +72,16 @@ pub extern "C" fn glShaderSource(
         // Prefer the shaderc+naga SPIR-V pipeline for robust translation.
         let translated = crate::shader_translator::spirv_pass::translate(&source, stage)
             .unwrap_or_else(|| {
-                log::warn!("[ShaderTranslator] SPIR-V pipeline failed for shader {}, falling back to string pass", shader);
+                log::warn!(
+                    "[ShaderTranslator] SPIR-V pipeline failed for shader {}, falling back to string pass",
+                    shader
+                );
                 crate::shader_translator::string_pass::translate(&source, stage)
             });
-        log::debug!("[ShaderTranslator] translated shader {} (stage 0x{:04X})", shader, stage);
+        log::debug!(
+            "[ShaderTranslator] translated shader {} (stage 0x{:04X})",
+            shader, stage
+        );
         state::with_state(|s| {
             s.shader_original_sources.insert(shader, source);
             s.shader_sources.insert(shader, translated.clone());
@@ -96,6 +103,7 @@ pub extern "C" fn glShaderSource(
 
 const GL_COMPILE_STATUS: u32 = 0x8B81;
 const GL_INFO_LOG_LENGTH: u32 = 0x8B84;
+const GL_SHADER_SOURCE_LENGTH: u32 = 0x8B88;
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -119,7 +127,10 @@ pub extern "C" fn glCompileShader(shader: u32) {
             if let Some(original) = state::with_state(|s| s.shader_original_sources.get(&shader).cloned()) {
                 let fallback = crate::shader_translator::string_pass::translate(&original, stage);
                 if let Ok(c_source) = CString::new(fallback.clone()) {
-                    log::warn!("[FluorateGL] Shader {} (GLES {}) SPIR-V compile failed, retrying with string pass", shader, gles_id);
+                    log::warn!(
+                        "[FluorateGL] Shader {} (GLES {}) SPIR-V compile failed, retrying with string pass",
+                        shader, gles_id
+                    );
                     let ptr = c_source.as_ptr();
                     let len = c_source.as_bytes().len() as i32;
                     (dispatch.shader_source)(gles_id, 1, &ptr, &len);
@@ -159,6 +170,19 @@ pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
         if gles_id == 0 {
             return;
         }
+        // Return the length of the original source for GL_SHADER_SOURCE_LENGTH.
+        if pname == GL_SHADER_SOURCE_LENGTH {
+            let len = state::with_state(|s| {
+                s.shader_original_sources
+                    .get(&shader)
+                    .map(|src| src.len() as i32 + 1)
+                    .unwrap_or(0)
+            });
+            if !params.is_null() {
+                *params = len;
+            }
+            return;
+        }
         (dispatch.get_shader_iv)(gles_id, pname, params);
     });
 }
@@ -178,6 +202,47 @@ pub extern "C" fn glGetShaderInfoLog(
         }
         (dispatch.get_shader_info_log)(gles_id, buf_size, length, info_log);
     });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetShaderSource(
+    shader: u32,
+    buf_size: i32,
+    length: *mut i32,
+    source: *mut c_char,
+) {
+    if source.is_null() || buf_size <= 0 {
+        return;
+    }
+
+    let original = state::with_state(|s| s.shader_original_sources.get(&shader).cloned());
+    let Some(src) = original else {
+        unsafe {
+            *source = 0;
+        }
+        if !length.is_null() {
+            unsafe {
+                *length = 0;
+            }
+        }
+        return;
+    };
+
+    let bytes = src.as_bytes();
+    let max_write = (buf_size - 1).max(0) as usize;
+    let write_len = bytes.len().min(max_write);
+
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), source as *mut u8, write_len);
+        *source.add(write_len) = 0;
+    }
+
+    if !length.is_null() {
+        unsafe {
+            *length = write_len as i32;
+        }
+    }
 }
 
 #[unsafe(no_mangle)]

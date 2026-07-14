@@ -1,5 +1,6 @@
 pub mod loader;
 pub mod dispatch;
+pub mod gles_caps;
 
 use std::sync::OnceLock;
 use crate::config::Config;
@@ -22,13 +23,16 @@ pub fn set_config(config: Config) {
 
 pub fn init_gles() -> Result<(), &'static str> {
     let config = CONFIG.get().expect("config not set");
-    
+
     let loader = loader::GlesLoader::new(config)?;
     let dispatch = dispatch::GlesDispatch::load_from(&loader)
         .ok_or("failed to load required GLES function")?;
-    
+
+    // Probe GLES caps before storing the dispatch table so we can pass a reference.
+    gles_caps::probe_and_set(&dispatch);
+
     let _ = GLES_DISPATCH.set(dispatch);
-    
+
     Box::leak(Box::new(loader));
     Ok(())
 }
