@@ -1,4 +1,4 @@
-use naga::back::glsl::{Options as GlslOptions, PipelineOptions, WriterFlags};
+use naga::back::glsl::{Options as GlslOptions, PipelineOptions, Version, WriterFlags};
 use naga::front::spv::Options as SpvOptions;
 use naga::valid::{Capabilities, ValidationFlags};
 
@@ -12,8 +12,8 @@ const GL_COMPUTE_SHADER: u32 = 0x91B9;
 /// Translate desktop GLSL to GLSL ES via shaderc (GLSL -> SPIR-V) and
 /// naga (SPIR-V -> GLSL ES).
 ///
-/// Returns `None` when any pipeline step fails. Callers should fall back to a
-/// simpler string-based translator.
+/// Returns `None` when any pipeline step fails. Geometry and tessellation
+/// stages are rejected immediately because naga 30 does not model them.
 pub fn translate(source: &str, stage: u32) -> Option<String> {
     let stage_name = stage_name(stage);
     let version_line = extract_version(source).unwrap_or("unknown");
@@ -21,6 +21,16 @@ pub fn translate(source: &str, stage: u32) -> Option<String> {
         "[ShaderTranslator] SPIR-V translate start: stage={} (0x{:04X}), version={}",
         stage_name, stage, version_line
     );
+
+    // naga 30 only supports vertex/fragment/compute stages, so avoid wasting
+    // time invoking shaderc for stages that can never succeed.
+    if is_unsupported_stage(stage) {
+        log::debug!(
+            "[ShaderTranslator] stage 0x{:04X} is not supported by naga 30, skipping SPIR-V path",
+            stage
+        );
+        return None;
+    }
 
     let spv = compile_to_spirv(source, stage)?;
     let gles = spirv_to_gles(&spv, stage, source)?;
@@ -35,23 +45,14 @@ pub fn translate(source: &str, stage: u32) -> Option<String> {
 fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
     let kind = shader_kind(stage);
 
-    // First try OpenGL semantics (closest to the original desktop GLSL).
-    if let Some(spv) = try_compile(source, kind, shaderc::TargetEnv::OpenGL, shaderc::EnvVersion::OpenGL4_5 as u32) {
-        return Some(spv);
-    }
-
-    // Fallback to Vulkan semantics, which naga's spirv-in understands better.
-    if let Some(spv) = try_compile(
+    // Always use Vulkan semantics: naga's spirv-in is designed and tested for
+    // SPIR-V produced under Vulkan rules.
+    try_compile(
         source,
         kind,
         shaderc::TargetEnv::Vulkan,
         shaderc::EnvVersion::Vulkan1_0 as u32,
-    ) {
-        log::info!("[ShaderTranslator] shaderc compiled with Vulkan target fallback");
-        return Some(spv);
-    }
-
-    None
+    )
 }
 
 fn try_compile(
@@ -72,7 +73,7 @@ fn try_compile(
     compiler
         .compile_into_spirv(source, kind, &file_name, "main", Some(&options))
         .map_err(|e| {
-            log::debug!("[ShaderTranslator] shaderc compile failed for {:?}: {}", env, e);
+            log::warn!("[ShaderTranslator] shaderc compile failed: {}", e);
         })
         .ok()
         .map(|a| a.as_binary().to_vec())
@@ -82,12 +83,16 @@ fn shader_kind(stage: u32) -> shaderc::ShaderKind {
     match stage {
         GL_VERTEX_SHADER => shaderc::ShaderKind::Vertex,
         GL_FRAGMENT_SHADER => shaderc::ShaderKind::Fragment,
-        GL_GEOMETRY_SHADER => shaderc::ShaderKind::Geometry,
-        GL_TESS_CONTROL_SHADER => shaderc::ShaderKind::TessControl,
-        GL_TESS_EVALUATION_SHADER => shaderc::ShaderKind::TessEvaluation,
         GL_COMPUTE_SHADER => shaderc::ShaderKind::Compute,
         _ => shaderc::ShaderKind::InferFromSource,
     }
+}
+
+fn is_unsupported_stage(stage: u32) -> bool {
+    matches!(
+        stage,
+        GL_GEOMETRY_SHADER | GL_TESS_CONTROL_SHADER | GL_TESS_EVALUATION_SHADER
+    )
 }
 
 fn spirv_to_gles(spv: &[u32], stage: u32, source: &str) -> Option<String> {
@@ -118,10 +123,7 @@ fn spirv_to_gles(spv: &[u32], stage: u32, source: &str) -> Option<String> {
     let glsl_stage = naga_stage(stage)?;
     let version = gles_target_version(source);
     let options = GlslOptions {
-        version: naga::back::glsl::Version::Embedded {
-            version,
-            is_webgl: false,
-        },
+        version: Version::new_gles(version),
         writer_flags: WriterFlags::empty(),
         binding_map: Default::default(),
         zero_initialize_workgroup_memory: true,
@@ -220,15 +222,6 @@ fn naga_stage(stage: u32) -> Option<naga::ShaderStage> {
         GL_VERTEX_SHADER => Some(naga::ShaderStage::Vertex),
         GL_FRAGMENT_SHADER => Some(naga::ShaderStage::Fragment),
         GL_COMPUTE_SHADER => Some(naga::ShaderStage::Compute),
-        // naga 30 does not model geometry/tessellation stages in its IR, so
-        // SPIR-V containing them will fail here and fall back to the string pass.
-        GL_GEOMETRY_SHADER | GL_TESS_CONTROL_SHADER | GL_TESS_EVALUATION_SHADER => {
-            log::debug!(
-                "[ShaderTranslator] stage 0x{:04X} is not modelled by naga 30, falling back",
-                stage
-            );
-            None
-        }
         _ => {
             log::warn!("[ShaderTranslator] unknown shader stage 0x{:04X}", stage);
             None

@@ -69,25 +69,38 @@ pub extern "C" fn glShaderSource(
             source.push_str(&piece);
         }
 
-        // Prefer the shaderc+naga SPIR-V pipeline for robust translation.
-        let translated = crate::shader_translator::spirv_pass::translate(&source, stage)
-            .unwrap_or_else(|| {
-                log::warn!(
-                    "[ShaderTranslator] SPIR-V pipeline failed for shader {}, falling back to string pass",
-                    shader
-                );
-                crate::shader_translator::string_pass::translate(&source, stage)
-            });
-        log::debug!(
-            "[ShaderTranslator] translated shader {} (stage 0x{:04X})",
-            shader, stage
-        );
+        // Use the shaderc+naga SPIR-V pipeline. If it cannot handle the shader
+        // (e.g. geometry/tessellation or unsupported constructs), pass the
+        // original desktop GLSL through unchanged and let the GLES compiler report
+        // the error.
+        let (upload_source, translated) =
+            match crate::shader_translator::spirv_pass::translate(&source, stage) {
+                Some(translated) => {
+                    log::debug!(
+                        "[ShaderTranslator] translated shader {} (stage 0x{:04X})",
+                        shader, stage
+                    );
+                    (translated, true)
+                }
+                None => {
+                    log::warn!(
+                        "[ShaderTranslator] SPIR-V pipeline failed for shader {}; passing original source",
+                        shader
+                    );
+                    (source, false)
+                }
+            };
+
         state::with_state(|s| {
-            s.shader_original_sources.insert(shader, source);
-            s.shader_sources.insert(shader, translated.clone());
+            if translated {
+                s.shader_sources.insert(shader, upload_source.clone());
+            } else {
+                s.shader_sources.remove(&shader);
+            }
+            s.shader_original_sources.insert(shader, upload_source.clone());
         });
 
-        let c_source = match CString::new(translated) {
+        let c_source = match CString::new(upload_source) {
             Ok(c) => c,
             Err(_) => {
                 log::error!("[FluorateGL] shader source contains null byte, passing through");
@@ -114,34 +127,10 @@ pub extern "C" fn glCompileShader(shader: u32) {
             return;
         }
 
-        let stage = state::with_state(|s| s.shader_types.get(&shader).copied().unwrap_or(0));
-
         (dispatch.compile_shader)(gles_id);
 
         let mut status = 0i32;
         (dispatch.get_shader_iv)(gles_id, GL_COMPILE_STATUS, &mut status);
-
-        // If the SPIR-V pipeline produced something GLES can't compile, try the
-        // simpler string-based translator as a last resort.
-        if status == 0 {
-            if let Some(original) = state::with_state(|s| s.shader_original_sources.get(&shader).cloned()) {
-                let fallback = crate::shader_translator::string_pass::translate(&original, stage);
-                if let Ok(c_source) = CString::new(fallback.clone()) {
-                    log::warn!(
-                        "[FluorateGL] Shader {} (GLES {}) SPIR-V compile failed, retrying with string pass",
-                        shader, gles_id
-                    );
-                    let ptr = c_source.as_ptr();
-                    let len = c_source.as_bytes().len() as i32;
-                    (dispatch.shader_source)(gles_id, 1, &ptr, &len);
-                    (dispatch.compile_shader)(gles_id);
-                    state::with_state(|s| {
-                        s.shader_sources.insert(shader, fallback);
-                    });
-                    (dispatch.get_shader_iv)(gles_id, GL_COMPILE_STATUS, &mut status);
-                }
-            }
-        }
 
         if status == 0 {
             let mut len = 0i32;
