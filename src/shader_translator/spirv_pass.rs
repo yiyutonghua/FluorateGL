@@ -1,4 +1,4 @@
-use naga::back::glsl::{Options as GlslOptions, PipelineOptions, Version, WriterFlags};
+use naga::back::glsl::{Error as GlslError, Options as GlslOptions, PipelineOptions, Version, WriterFlags};
 use naga::front::spv::Options as SpvOptions;
 use naga::valid::{Capabilities, ValidationFlags};
 
@@ -33,41 +33,59 @@ pub fn translate(source: &str, stage: u32) -> Option<String> {
     }
 
     let spv = compile_to_spirv(source, stage)?;
-    let gles = spirv_to_gles(&spv, stage, source)?;
+    let mut module = parse_spirv(&spv)?;
+    let info = validate_module(&module)?;
 
-    log::debug!(
-        "[ShaderTranslator] SPIR-V translate success: stage={}, output_len={}",
-        stage_name, gles.len()
+    // Compact after validation: removes unused types/expressions/globals and
+    // reduces the amount of GLSL emitted for the driver to parse.
+    naga::compact::compact(&mut module, naga::compact::KeepUnused::No);
+
+    let glsl_stage = naga_stage(stage)?;
+
+    // Try GLES versions from most compatible to least compatible.
+    for gles_version in gles_version_candidates(source) {
+        match write_gles(&module, &info, glsl_stage, gles_version) {
+            Ok(src) => {
+                log::debug!(
+                    "[ShaderTranslator] SPIR-V translate success: stage={}, version={}",
+                    stage_name, gles_version
+                );
+                return Some(src);
+            }
+            Err(e) => {
+                log::debug!(
+                    "[ShaderTranslator] GLES {} write failed for stage {}: {:?}",
+                    gles_version, stage_name, e
+                );
+            }
+        }
+    }
+
+    log::warn!(
+        "[ShaderTranslator] all GLES versions failed for shader stage {}",
+        stage_name
     );
-    Some(gles)
+    None
 }
 
 fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
-    let kind = shader_kind(stage);
-
-    // Always use Vulkan semantics: naga's spirv-in is designed and tested for
-    // SPIR-V produced under Vulkan rules.
-    try_compile(
-        source,
-        kind,
-        shaderc::TargetEnv::Vulkan,
-        shaderc::EnvVersion::Vulkan1_0 as u32,
-    )
-}
-
-fn try_compile(
-    source: &str,
-    kind: shaderc::ShaderKind,
-    env: shaderc::TargetEnv,
-    version: u32,
-) -> Option<Vec<u32>> {
     let compiler = shaderc::Compiler::new().ok()?;
     let mut options = shaderc::CompileOptions::new().ok()?;
 
-    options.set_target_env(env, version);
+    // Always use Vulkan semantics: naga's spirv-in is designed and tested for
+    // SPIR-V produced under Vulkan rules.
+    options.set_target_env(shaderc::TargetEnv::Vulkan, shaderc::EnvVersion::Vulkan1_0 as u32);
     options.set_optimization_level(shaderc::OptimizationLevel::Zero);
-    options.set_generate_debug_info();
 
+    // Desktop GLSL (e.g. #version 150 core) rarely declares explicit locations
+    // on stage inputs/outputs or bindings on uniforms. Vulkan SPIR-V requires
+    // them, so let shaderc auto-generate them.
+    options.set_auto_map_locations(true);
+    options.set_auto_bind_uniforms(true);
+    options.set_suppress_warnings();
+    // Do not generate debug info: it bloats the SPIR-V and can trip up naga.
+
+    let kind = shader_kind(stage);
     let file_name = format!("shader_{:04X}.glsl", kind as u32);
 
     compiler
@@ -95,67 +113,61 @@ fn is_unsupported_stage(stage: u32) -> bool {
     )
 }
 
-fn spirv_to_gles(spv: &[u32], stage: u32, source: &str) -> Option<String> {
-    let module = naga::front::spv::parse_u8_slice(
-        bytemuck::cast_slice(spv),
-        &SpvOptions {
-            adjust_coordinate_space: false,
-            strict_capabilities: false,
-            block_ctx_dump_prefix: None,
-        },
-    )
-    .map_err(|e| {
-        log::warn!("[ShaderTranslator] naga spirv-in failed: {:?}", e);
-    })
-    .ok()?;
+fn parse_spirv(spv: &[u32]) -> Option<naga::Module> {
+    // Use default spirv-in options so that adjust_coordinate_space is enabled.
+    // This converts Vulkan SPIR-V coordinates into naga IR / OpenGL coordinates.
+    naga::front::spv::parse_u8_slice(bytemuck::cast_slice(spv), &SpvOptions::default())
+        .map_err(|e| {
+            log::warn!("[ShaderTranslator] naga spirv-in failed: {:?}", e);
+        })
+        .ok()
+}
 
+fn validate_module(module: &naga::Module) -> Option<naga::valid::ModuleInfo> {
     let capabilities = build_capabilities();
-    let info = naga::valid::Validator::new(ValidationFlags::all(), capabilities)
-        .validate(&module)
+    naga::valid::Validator::new(ValidationFlags::all(), capabilities)
+        .validate(module)
         .map_err(|e| {
             log::warn!(
                 "[ShaderTranslator] naga validation failed (capabilities={:?}): {:?}",
                 capabilities, e
             );
         })
-        .ok()?;
+        .ok()
+}
 
-    let glsl_stage = naga_stage(stage)?;
-    let version = gles_target_version(source);
+fn write_gles(
+    module: &naga::Module,
+    info: &naga::valid::ModuleInfo,
+    stage: naga::ShaderStage,
+    version: u16,
+) -> Result<String, GlslError> {
+    let mut output = String::new();
     let options = GlslOptions {
         version: Version::new_gles(version),
+        // WriterFlags::empty() keeps the output in OpenGL/GLES coordinate space.
+        // Do not combine with spirv-in's default adjust_coordinate_space, as that
+        // would cause a double flip.
         writer_flags: WriterFlags::empty(),
         binding_map: Default::default(),
         zero_initialize_workgroup_memory: true,
     };
     let pipeline_options = PipelineOptions {
-        shader_stage: glsl_stage,
+        shader_stage: stage,
         entry_point: "main".to_string(),
         multiview: None,
     };
 
-    let mut output = String::new();
     let mut writer = naga::back::glsl::Writer::new(
         &mut output,
-        &module,
-        &info,
+        module,
+        info,
         &options,
         &pipeline_options,
         naga::proc::BoundsCheckPolicies::default(),
-    )
-    .map_err(|e| {
-        log::warn!("[ShaderTranslator] naga glsl writer creation failed: {:?}", e);
-    })
-    .ok()?;
-
-    writer
-        .write()
-        .map_err(|e| {
-            log::warn!("[ShaderTranslator] naga glsl write failed: {:?}", e);
-        })
-        .ok()?;
-
-    Some(output)
+    )?;
+    writer.write()?;
+    Ok(output)
 }
 
 /// Build a capability set matching the actual GLES implementation.
@@ -203,17 +215,19 @@ fn build_capabilities() -> Capabilities {
     caps
 }
 
-fn gles_target_version(source: &str) -> u16 {
-    // Prefer GLES 3.0 for the broadest compatibility. Only use 3.2 when the
-    // source explicitly requested a high desktop version or uses 3.2-only
-    // features (e.g. textureGather).
-    if source.contains("#version 460")
-        || source.contains("#version 450")
-        || source.contains("textureGather")
-    {
-        320
-    } else {
-        300
+fn gles_version_candidates(source: &str) -> Vec<u16> {
+    let desktop_version = extract_version(source)
+        .and_then(|line| {
+            line.split_whitespace()
+                .nth(1)
+                .and_then(|v| v.parse::<u32>().ok())
+        })
+        .unwrap_or(150);
+
+    match desktop_version {
+        460 | 450 | 440 => vec![300, 310, 320],
+        430 | 420 | 410 | 400 | 330 => vec![300, 310],
+        _ => vec![300],
     }
 }
 
