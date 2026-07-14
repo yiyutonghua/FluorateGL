@@ -76,16 +76,16 @@ pub extern "C" fn glShaderSource(
         let (upload_source, translated) =
             match crate::shader_translator::spirv_pass::translate(&source, stage) {
                 Some(translated) => {
-                    log::debug!(
-                        "[ShaderTranslator] translated shader {} (stage 0x{:04X})",
-                        shader, stage
+                    log::info!(
+                        "[ShaderTranslator] shader {} stage 0x{:04X} translated via SPIR-V ({} chars)",
+                        shader, stage, translated.len()
                     );
                     (translated, true)
                 }
                 None => {
                     log::warn!(
-                        "[ShaderTranslator] SPIR-V pipeline failed for shader {}; passing original source",
-                        shader
+                        "[ShaderTranslator] SPIR-V pipeline failed for shader {}; passing original source ({} chars)",
+                        shader, source.len()
                     );
                     (source, false)
                 }
@@ -141,11 +141,14 @@ pub extern "C" fn glCompileShader(shader: u32) {
                 (dispatch.get_shader_info_log)(gles_id, len, &mut written, buf.as_mut_ptr() as *mut c_char);
                 let info = String::from_utf8_lossy(&buf[..written.max(0) as usize]);
                 log::error!("[FluorateGL] Shader {} (GLES {}) compile failed: {}", shader, gles_id, info.trim());
-                if let Some(src) = state::with_state(|s| s.shader_sources.get(&shader).cloned()) {
-                    log::error!("[FluorateGL] Translated source for shader {}:\n{}", shader, src);
-                }
             } else {
                 log::error!("[FluorateGL] Shader {} (GLES {}) compile failed (no info log)", shader, gles_id);
+            }
+            if let Some(src) = state::with_state(|s| s.shader_sources.get(&shader).cloned()) {
+                log::error!("[FluorateGL] Translated source for shader {} ({} chars):\n{}", shader, src.len(), src);
+            }
+            if let Some(src) = state::with_state(|s| s.shader_original_sources.get(&shader).cloned()) {
+                log::error!("[FluorateGL] Original source for shader {} ({} chars):\n{}", shader, src.len(), src);
             }
         }
     });

@@ -33,7 +33,7 @@ pub fn translate(source: &str, stage: u32) -> Option<String> {
 fn translate_internal(source: &str, stage: u32) -> Option<String> {
     let stage_name = stage_name(stage);
     let version_line = extract_version(source).unwrap_or("unknown");
-    log::debug!(
+    log::info!(
         "[ShaderTranslator] SPIR-V translate start: stage={} (0x{:04X}), version={}",
         stage_name, stage, version_line
     );
@@ -41,7 +41,7 @@ fn translate_internal(source: &str, stage: u32) -> Option<String> {
     // naga 30 only supports vertex/fragment/compute stages, so avoid wasting
     // time invoking shaderc for stages that can never succeed.
     if is_unsupported_stage(stage) {
-        log::debug!(
+        log::warn!(
             "[ShaderTranslator] stage 0x{:04X} is not supported by naga 30, skipping SPIR-V path",
             stage
         );
@@ -57,14 +57,14 @@ fn translate_internal(source: &str, stage: u32) -> Option<String> {
     for gles_version in gles_version_candidates(source) {
         match write_gles(&module, &info, glsl_stage, gles_version) {
             Ok(src) => {
-                log::debug!(
+                log::info!(
                     "[ShaderTranslator] SPIR-V translate success: stage={}, version={}",
                     stage_name, gles_version
                 );
                 return Some(src);
             }
             Err(e) => {
-                log::debug!(
+                log::warn!(
                     "[ShaderTranslator] GLES {} write failed for stage {}: {:?}",
                     gles_version, stage_name, e
                 );
