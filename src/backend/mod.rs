@@ -6,7 +6,7 @@ use crate::config::Config;
 
 // 全局状态
 static CONFIG: OnceLock<Config> = OnceLock::new();
-static GLES_DISPATCH: OnceLock<dispatch::GlesDispatch> = OnceLock::new();
+pub static GLES_DISPATCH: OnceLock<dispatch::GlesDispatch> = OnceLock::new();
 static EGL_DISPATCH: OnceLock<crate::egl_sys::dispatch::EglDispatch> = OnceLock::new();
 static INIT_ONCE: OnceLock<()> = OnceLock::new();
 

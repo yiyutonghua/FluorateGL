@@ -222,8 +222,9 @@ pub extern "C" fn eglCreateContext(
 
     new_attribs.push(EGL_NONE);
 
+    // The underlying EGL implementation reads attrib_list synchronously and does
+    // not retain the pointer, so it is safe to keep the Vec scoped to this call.
     let ptr = new_attribs.as_ptr();
-    std::mem::forget(new_attribs); // C side will not free this.
 
     dispatcher::create_context(dpy, config, share_context, ptr)
 }
