@@ -7,6 +7,7 @@ pub enum Backend {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[allow(dead_code)]
 pub enum LogLevel {
     Error,
     Warn,
@@ -33,7 +34,7 @@ impl Config {
             Ok("warn") => LogLevel::Warn,
             Ok("debug") => LogLevel::Debug,
             Ok("trace") => LogLevel::Trace,
-            _ => LogLevel::Info,
+            _ => LogLevel::Debug,
         };
 
         Self {
