@@ -1,1 +1,3 @@
 /target
+/tests/test_shader_translation
+/libGLESv3.so

@@ -1,10 +1,11 @@
 /* Manual test for FluorateGL shader translation on Linux with Mesa llvmpipe.
  *
- * Build:
- *   gcc -o test_egl_shader test_egl_shader.c -ldl -lEGL
- * Run (surfaceless platform, libGLESv3.so symlink to libGLESv2.so.2):
+ * Build (from project root):
+ *   gcc -o tests/test_shader_translation tests/test_shader_translation.c -ldl -lEGL
+ *
+ * Run (from project root):
  *   ln -sf /lib/x86_64-linux-gnu/libGLESv2.so.2 libGLESv3.so
- *   EGL_PLATFORM=surfaceless LD_LIBRARY_PATH=. MESA_LOADER_DRIVER_OVERRIDE=llvmpipe ./test_egl_shader
+ *   EGL_PLATFORM=surfaceless LD_LIBRARY_PATH=. MESA_LOADER_DRIVER_OVERRIDE=llvmpipe ./tests/test_shader_translation
  */
 
 #include <stdio.h>
@@ -28,6 +29,32 @@ static void* get_sym(void* handle, const char* name) {
         fprintf(stderr, "dlsym(%s) failed: %s\n", name, dlerror());
     }
     return p;
+}
+
+static char* read_file(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "fopen(%s) failed\n", path);
+        return NULL;
+    }
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    if (len < 0) {
+        fclose(f);
+        fprintf(stderr, "ftell(%s) failed\n", path);
+        return NULL;
+    }
+    rewind(f);
+    char* buf = malloc(len + 1);
+    if (!buf) {
+        fclose(f);
+        fprintf(stderr, "malloc failed for %s\n", path);
+        return NULL;
+    }
+    size_t n = fread(buf, 1, len, f);
+    fclose(f);
+    buf[n] = '\0';
+    return buf;
 }
 
 static int setup_egl(void) {
@@ -162,25 +189,13 @@ int main(void) {
         return 1;
     }
 
-    const char* vertex_source =
-        "#version 150 core\n"
-        "in vec3 Position;\n"
-        "in vec2 UV;\n"
-        "out vec2 vUV;\n"
-        "uniform mat4 ModelViewProjection;\n"
-        "void main() {\n"
-        "    vUV = UV;\n"
-        "    gl_Position = ModelViewProjection * vec4(Position, 1.0);\n"
-        "}\n";
-
-    const char* fragment_source =
-        "#version 150 core\n"
-        "in vec2 vUV;\n"
-        "out vec4 fragColor;\n"
-        "uniform sampler2D Tex;\n"
-        "void main() {\n"
-        "    fragColor = texture(Tex, vUV);\n"
-        "}\n";
+    char* vertex_source = read_file("tests/simple.vert");
+    char* fragment_source = read_file("tests/simple.frag");
+    if (!vertex_source || !fragment_source) {
+        free(vertex_source);
+        free(fragment_source);
+        return 1;
+    }
 
     int ok = 0;
     ok |= compile_test_shader(
@@ -194,6 +209,8 @@ int main(void) {
         GL_FRAGMENT_SHADER, "fragment", fragment_source
     );
 
+    free(vertex_source);
+    free(fragment_source);
     dlclose(handle);
     return ok;
 }
