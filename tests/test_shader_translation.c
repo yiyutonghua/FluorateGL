@@ -1,9 +1,12 @@
 /* Manual test for FluorateGL shader translation on Linux with Mesa llvmpipe.
  *
- * Build (from project root):
+ * One-shot automated run (from project root):
+ *   bash tests/run.sh
+ *
+ * Manual build (from project root):
  *   gcc -o tests/test_shader_translation tests/test_shader_translation.c -ldl -lEGL
  *
- * Run (from project root):
+ * Manual run (from project root):
  *   ln -sf /lib/x86_64-linux-gnu/libGLESv2.so.2 libGLESv3.so
  *   EGL_PLATFORM=surfaceless LD_LIBRARY_PATH=. MESA_LOADER_DRIVER_OVERRIDE=llvmpipe ./tests/test_shader_translation
  */
