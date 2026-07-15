@@ -6,6 +6,7 @@ use std::ffi::{CStr, CString};
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glCreateShader(shader_type: u32) -> u32 {
+    log::info!("[FluorateGL] glCreateShader(0x{:04X})", shader_type);
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = (dispatch.create_shader)(shader_type);
         let desktop_id = state::with_state(|s| s.shaders.alloc(gles_id));

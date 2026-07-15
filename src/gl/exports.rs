@@ -295,12 +295,28 @@ static FAKE_EXTENSIONS: &[&[u8]] = &[
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
-    if pname == 0x821D { // GL_NUM_EXTENSIONS
-        unsafe { *data = FAKE_EXTENSIONS.len() as i32 };
+    if data.is_null() {
         return;
     }
-
-    getter::get_integerv(pname, data);
+    match pname {
+        0x821D => {
+            // GL_NUM_EXTENSIONS
+            unsafe { *data = FAKE_EXTENSIONS.len() as i32 };
+        }
+        0x821B => {
+            // GL_MAJOR_VERSION
+            unsafe { *data = 3 };
+        }
+        0x821C => {
+            // GL_MINOR_VERSION
+            unsafe { *data = 2 };
+        }
+        0x9126 => {
+            // GL_CONTEXT_PROFILE_MASK
+            unsafe { *data = 0x00000001 }; // GL_CONTEXT_CORE_PROFILE_BIT
+        }
+        _ => getter::get_integerv(pname, data),
+    }
 }
 
 #[unsafe(no_mangle)]
