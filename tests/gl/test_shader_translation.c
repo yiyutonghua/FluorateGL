@@ -1,14 +1,14 @@
-/* Manual test for FluorateGL shader translation on Linux with Mesa llvmpipe.
+/* Manual GL API test for FluorateGL shader translation on Linux with Mesa llvmpipe.
  *
  * One-shot automated run (from project root):
  *   bash tests/run.sh
  *
  * Manual build (from project root):
- *   gcc -o tests/test_shader_translation tests/test_shader_translation.c -ldl -lEGL
+ *   gcc -o tests/gl/test_shader_translation tests/gl/test_shader_translation.c -ldl -lEGL
  *
  * Manual run (from project root):
  *   ln -sf /lib/x86_64-linux-gnu/libGLESv2.so.2 libGLESv3.so
- *   EGL_PLATFORM=surfaceless LD_LIBRARY_PATH=. MESA_LOADER_DRIVER_OVERRIDE=llvmpipe ./tests/test_shader_translation
+ *   EGL_PLATFORM=surfaceless LD_LIBRARY_PATH=. MESA_LOADER_DRIVER_OVERRIDE=llvmpipe ./tests/gl/test_shader_translation
  */
 
 #include <stdio.h>
@@ -192,8 +192,8 @@ int main(void) {
         return 1;
     }
 
-    char* vertex_source = read_file("tests/simple.vert");
-    char* fragment_source = read_file("tests/simple.frag");
+    char* vertex_source = read_file("tests/glsl/simple.vert");
+    char* fragment_source = read_file("tests/glsl/simple.frag");
     if (!vertex_source || !fragment_source) {
         free(vertex_source);
         free(fragment_source);

@@ -15,11 +15,18 @@ if [ -z "$GLES2_PATH" ]; then
 fi
 ln -sf "$GLES2_PATH" libGLESv3.so
 
-# Build the native test harness.
-gcc -o tests/test_shader_translation tests/test_shader_translation.c -ldl -lEGL
+export LD_LIBRARY_PATH=.
+export EGL_PLATFORM=surfaceless
+export MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
 
-# Run with Mesa/llvmpipe surfaceless GLES.
-EGL_PLATFORM=surfaceless \
-LD_LIBRARY_PATH=. \
-MESA_LOADER_DRIVER_OVERRIDE=llvmpipe \
-./tests/test_shader_translation
+# --- GL tests: exercise the GL API through the cdylib ---
+echo "=== GL tests ==="
+gcc -o tests/gl/test_shader_translation tests/gl/test_shader_translation.c -ldl -lEGL
+./tests/gl/test_shader_translation
+
+# --- GLSL tests: translate the glslang test suite ---
+echo "=== GLSL tests ==="
+SHADERC_LIB_DIR="" cargo run --quiet \
+    --example glslang_suite \
+    --features shaderc/build-from-source \
+    --target x86_64-unknown-linux-gnu
