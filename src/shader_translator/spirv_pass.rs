@@ -89,6 +89,7 @@ fn translate_internal(source: &str, stage: u32) -> TranslationResult {
                                     "[ShaderTranslator] SPIR-V translate success: stage={}, version={}",
                                     stage_name, gles_version
                                 );
+                                log::debug!("[ShaderTranslator] translated GLSL ES:\n{}", src);
                                 return TranslationResult::Translated(src);
                             }
                             Err(e) => {
@@ -121,6 +122,9 @@ fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
     // Always use Vulkan semantics: naga's spirv-in is designed and tested for
     // SPIR-V produced under Vulkan rules.
     options.set_target_env(shaderc::TargetEnv::Vulkan, shaderc::EnvVersion::Vulkan1_0 as u32);
+    // shaderc's Performance optimization runs spirv-opt which can introduce
+    // patterns that naga 30's spirv-in does not handle (e.g. folded
+    // OpSampledImage). Keep optimizations off for now.
     options.set_optimization_level(shaderc::OptimizationLevel::Zero);
 
     // Desktop GLSL (e.g. #version 150 core) rarely declares explicit locations
@@ -129,18 +133,277 @@ fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
     options.set_auto_map_locations(true);
     options.set_auto_bind_uniforms(true);
     options.set_suppress_warnings();
-    // Do not generate debug info: it bloats the SPIR-V and can trip up naga.
+    // shaderc generates line/debug instructions by default when targetting
+    // Vulkan; naga 30's spirv-in does not support OpLine, so leave debug info
+    // disabled (this is the default).
 
     let kind = shader_kind(stage);
     let file_name = format!("shader_{:04X}.glsl", kind as u32);
 
+    // naga 30's spirv-in cannot parse SPIR-V for combined GLSL samplers
+    // (sampler2D etc.). Split them into Vulkan-style separate image/sampler
+    // pairs first.
+    let split = split_combined_samplers(source);
+
+    // Vulkan GLSL requires non-opaque uniforms to live inside a uniform block.
+    // Wrap standalone uniforms (e.g. `uniform mat4 MVP;`) in an anonymous block
+    // so the API name (`glGetUniformLocation("MVP")`) remains valid.
+    let prepared = prepare_vulkan_glsl(&split);
+
+    log::debug!(
+        "[ShaderTranslator] prepared Vulkan GLSL for shaderc:\n{}",
+        prepared
+    );
+
     compiler
-        .compile_into_spirv(source, kind, &file_name, "main", Some(&options))
+        .compile_into_spirv(&prepared, kind, &file_name, "main", Some(&options))
         .map_err(|e| {
             log::warn!("[ShaderTranslator] shaderc compile failed: {}", e);
         })
         .ok()
         .map(|a| a.as_binary().to_vec())
+}
+
+/// Mapping from combined GLSL sampler types to the corresponding Vulkan
+/// separate image type. The sampler helper always uses the `sampler` type.
+const COMBINED_SAMPLER_TYPES: &[(&str, &str)] = &[
+    ("sampler1D", "texture1D"),
+    ("sampler2D", "texture2D"),
+    ("sampler3D", "texture3D"),
+    ("samplerCube", "textureCube"),
+    ("sampler1DArray", "texture1DArray"),
+    ("sampler2DArray", "texture2DArray"),
+    ("samplerCubeArray", "textureCubeArray"),
+    ("sampler2DRect", "texture2DRect"),
+    ("samplerBuffer", "textureBuffer"),
+    ("sampler2DMS", "texture2DMS"),
+    ("sampler2DMSArray", "texture2DMSArray"),
+    ("isampler1D", "itexture1D"),
+    ("isampler2D", "itexture2D"),
+    ("isampler3D", "itexture3D"),
+    ("isamplerCube", "itextureCube"),
+    ("isampler1DArray", "itexture1DArray"),
+    ("isampler2DArray", "itexture2DArray"),
+    ("isamplerCubeArray", "itextureCubeArray"),
+    ("usampler1D", "utexture1D"),
+    ("usampler2D", "utexture2D"),
+    ("usampler3D", "utexture3D"),
+    ("usamplerCube", "utextureCube"),
+    ("usampler1DArray", "utexture1DArray"),
+    ("usampler2DArray", "utexture2DArray"),
+    ("usamplerCubeArray", "utextureCubeArray"),
+    ("sampler2DShadow", "texture2D"),
+    ("samplerCubeShadow", "textureCube"),
+    ("sampler2DArrayShadow", "texture2DArray"),
+];
+
+/// Returns the SPIR-V constructor name for a combined sampler type (e.g.
+/// `sampler2D` for a 2D colour sampler, `sampler2DShadow` for a shadow
+/// sampler).
+fn sampler_constructor(combined_type: &str) -> &str {
+    combined_type
+}
+
+/// naga 30's spirv-in cannot parse SPIR-V produced from GLSL `sampler2D`
+/// combined samplers (it fails with InvalidId on the OpLoad of the sampled
+/// image). Convert combined samplers into Vulkan-style separate image/sampler
+/// pairs. The original sampler name is kept for the image; a helper sampler is
+/// introduced. Texture calls are rewritten to use the helper. naga's GLSL
+/// backend will recombine them into a single `sampler2D` for GLES output.
+fn split_combined_samplers(source: &str) -> String {
+    use regex::Regex;
+    use std::sync::LazyLock;
+
+    static UNIFORM_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?m)^\s*(?P<layout>layout\s*\([^)]*\)\s+)?uniform\s+(?P<type>[A-Za-z_][A-Za-z0-9_]*)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<array>\[[^\]]*\])?\s*;\s*$"
+        ).unwrap()
+    });
+
+    let mut result = source.to_string();
+    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+    // (name, constructor_name, helper_sampler_name)
+    let mut samplers: Vec<(String, String, String)> = Vec::new();
+
+    for cap in UNIFORM_RE.captures_iter(source) {
+        let type_name = &cap["type"];
+        log::debug!(
+            "[ShaderTranslator] split_combined_samplers saw uniform: type={} name={}",
+            type_name, &cap["name"]
+        );
+        let Some(&(_, image_type)) = COMBINED_SAMPLER_TYPES.iter().find(|&&(t, _)| t == type_name) else {
+            continue;
+        };
+
+        let name = cap["name"].to_string();
+        let ctor = sampler_constructor(type_name).to_string();
+        let sampler_helper = format!("_fluorategl_{}_smp", name);
+        let layout = cap.name("layout").map(|m| m.as_str()).unwrap_or("");
+        let array = cap.name("array").map(|m| m.as_str()).unwrap_or("");
+
+        let new_decl = format!(
+            "{layout}uniform {image_type} {name}{array};\nuniform sampler {sampler_helper};\n",
+            layout = layout,
+            image_type = image_type,
+            name = name,
+            array = array,
+            sampler_helper = sampler_helper
+        );
+
+        let range = cap.get(0).unwrap().range();
+        log::debug!(
+            "[ShaderTranslator] split_combined_samplers replacing range {:?} with:\n{}",
+            range, new_decl
+        );
+        replacements.push((range.start, range.end, new_decl));
+        samplers.push((name, ctor, sampler_helper));
+    }
+
+    // Apply declaration replacements from the end so offsets remain valid.
+    for (start, end, text) in replacements.into_iter().rev() {
+        result.replace_range(start..end, &text);
+    }
+
+    // Rewrite texture function calls for each split sampler.
+    for (name, ctor, helper) in samplers {
+        result = rewrite_sampler_uses(&result, &name, &ctor, &helper);
+    }
+
+    result
+}
+
+/// Texture-like functions whose first argument is a combined sampler. We keep
+/// this list conservative; additional functions can be added as needed.
+const SAMPLER_FUNCTIONS: &[&str] = &[
+    "texture",
+    "textureLod",
+    "textureProj",
+    "textureProjLod",
+    "textureOffset",
+    "textureLodOffset",
+    "textureProjOffset",
+    "textureProjLodOffset",
+    "textureSize",
+    "texelFetch",
+    "texelFetchOffset",
+];
+
+/// Rewrite calls like `texture(Tex, uv)` into
+/// `texture(sampler2D(Tex, _fluorategl_Tex_smp), uv)`.
+fn rewrite_sampler_uses(source: &str, name: &str, ctor: &str, helper: &str) -> String {
+    use regex::Regex;
+
+    // Build a regex that matches any of the sampler functions, followed by a
+    // parenthesised argument list whose first argument is exactly `name`.
+    // The argument list is matched conservatively to handle nested parens up
+    // to one level deep (e.g. vec2 constructors).
+    let funcs = SAMPLER_FUNCTIONS.join("|");
+    let pattern = format!(
+        r"(?P<func>\b(?:{})\s*\()\s*(?P<name>\b{}\b)\s*(?P<rest>(?:[^()]|\([^)]*\))*)\)",
+        funcs,
+        regex::escape(name)
+    );
+    let re = Regex::new(&pattern).unwrap();
+
+    re.replace_all(source, |caps: &regex::Captures| {
+        let func = &caps["func"];
+        let rest = &caps["rest"];
+        format!("{}{}({}, {}){})", func, ctor, name, helper, rest)
+    })
+    .into_owned()
+}
+
+/// Wrap non-opaque standalone uniform declarations in an anonymous std140 block.
+/// Opaque uniforms (samplers, images, atomic counters) and existing uniform
+/// blocks are left untouched.
+fn prepare_vulkan_glsl(source: &str) -> String {
+    use regex::Regex;
+    use std::sync::LazyLock;
+
+    static UNIFORM_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?m)^\s*uniform\s+(?P<type>[A-Za-z_][A-Za-z0-9_]*)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<array>\[[^\]]*\])?\s*;\s*$"
+        ).unwrap()
+    });
+
+    // Types that are opaque in GLSL and cannot be placed inside a uniform block.
+    // This now includes the separate Vulkan image/sampler types introduced by
+    // split_combined_samplers.
+    const OPAQUE_TYPES: &[&str] = &[
+        "sampler1D", "sampler2D", "sampler3D", "samplerCube",
+        "sampler1DArray", "sampler2DArray", "samplerCubeArray",
+        "sampler2DRect", "samplerBuffer", "sampler2DMS", "sampler2DMSArray",
+        "isampler1D", "isampler2D", "isampler3D", "isamplerCube",
+        "usampler1D", "usampler2D", "usampler3D", "usamplerCube",
+        "image1D", "image2D", "image3D", "imageCube", "imageBuffer",
+        "image1DArray", "image2DArray", "imageCubeArray", "image2DMS", "image2DMSArray",
+        "iimage1D", "iimage2D", "iimage3D", "uimage1D", "uimage2D", "uimage3D",
+        "atomic_uint", "samplerExternalOES",
+        // Vulkan separate image/sampler types.
+        "texture1D", "texture2D", "texture3D", "textureCube",
+        "texture1DArray", "texture2DArray", "textureCubeArray",
+        "texture2DRect", "textureBuffer", "texture2DMS", "texture2DMSArray",
+        "itexture1D", "itexture2D", "itexture3D", "itextureCube",
+        "itexture1DArray", "itexture2DArray", "itextureCubeArray",
+        "utexture1D", "utexture2D", "utexture3D", "utextureCube",
+        "utexture1DArray", "utexture2DArray", "utextureCubeArray",
+        "sampler",
+    ];
+
+    let mut standalone = Vec::new();
+    for cap in UNIFORM_RE.captures_iter(source) {
+        let type_name = &cap["type"];
+        if OPAQUE_TYPES.contains(&type_name) {
+            continue;
+        }
+        // Skip declarations that already live inside a uniform block. A uniform
+        // block starts with a line ending in '{'.
+        let start = cap.get(0).unwrap().start();
+        let prefix = &source[..start];
+        if let Some(prev_line) = prefix.lines().filter(|l| !l.trim().is_empty()).last() {
+            if prev_line.trim().ends_with('{') {
+                continue;
+            }
+        }
+
+        let decl = format!(
+            "    {} {}{};",
+            type_name,
+            &cap["name"],
+            cap.name("array").map(|m| m.as_str()).unwrap_or("")
+        );
+        standalone.push((cap.get(0).unwrap().range(), decl));
+    }
+
+    if standalone.is_empty() {
+        return source.to_string();
+    }
+
+    // Replace each standalone uniform with a placeholder comment, and collect
+    // the field declarations into a single anonymous uniform block inserted
+    // immediately after the #version directive.
+    let mut result = source.to_string();
+    for (range, _) in standalone.iter().rev() {
+        result.replace_range(range.clone(), "// (moved to _fluorategl_uniforms block)\n");
+    }
+
+    let block_body: String = standalone.into_iter().map(|(_, decl)| decl + "\n").collect();
+    let block = format!(
+        "layout(std140) uniform _fluorategl_uniforms {{\n{}}};\n",
+        block_body
+    );
+
+    if let Some(pos) = result.find('\n') {
+        let insert_at = result[pos..]
+            .find('\n')
+            .map(|p| pos + p + 1)
+            .unwrap_or(pos + 1);
+        result.insert_str(insert_at, &block);
+    } else {
+        result.insert_str(0, &block);
+    }
+
+    result
 }
 
 fn shader_kind(stage: u32) -> shaderc::ShaderKind {
@@ -189,6 +452,10 @@ fn parse_spirv(spv: &[u32]) -> Option<naga::Module> {
     naga::front::spv::parse_u8_slice(bytemuck::cast_slice(spv), &SpvOptions::default())
         .map_err(|e| {
             log::warn!("[ShaderTranslator] naga spirv-in failed: {:?}", e);
+            if log::log_enabled!(log::Level::Debug) {
+                let words: Vec<String> = spv.iter().map(|w| format!("{:08X}", w)).collect();
+                log::debug!("[ShaderTranslator] failing SPIR-V ({} words): {}", spv.len(), words.join(" "));
+            }
         })
         .ok()
 }

@@ -17,6 +17,10 @@ pub fn ensure_initialized() {
     });
 }
 
+pub fn mark_initialized() {
+    let _ = INIT_ONCE.set(());
+}
+
 pub fn set_config(config: Config) {
     let _ = CONFIG.set(config);
 }
@@ -27,9 +31,6 @@ pub fn init_gles() -> Result<(), &'static str> {
     let loader = loader::GlesLoader::new(config)?;
     let dispatch = dispatch::GlesDispatch::load_from(&loader)
         .ok_or("failed to load required GLES function")?;
-
-    // Probe GLES caps before storing the dispatch table so we can pass a reference.
-    gles_caps::probe_and_set(&dispatch);
 
     let _ = GLES_DISPATCH.set(dispatch);
 

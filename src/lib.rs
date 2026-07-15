@@ -11,13 +11,36 @@ mod state;
 use config::Config;
 use libc::c_char;
 
-#[unsafe(no_mangle)]
-pub extern "C" fn fluorategl_init() -> i32 {
-   
+#[cfg(target_os = "android")]
+fn init_logger() {
     android_logger::init_once(
         android_logger::Config::default()
             .with_max_level(log::LevelFilter::Debug),
     );
+}
+
+#[cfg(not(target_os = "android"))]
+fn init_logger() {
+    struct SimpleLogger;
+    impl log::Log for SimpleLogger {
+        fn enabled(&self, metadata: &log::Metadata) -> bool {
+            metadata.level() <= log::Level::Debug
+        }
+        fn log(&self, record: &log::Record) {
+            if self.enabled(record.metadata()) {
+                eprintln!("[{}] {}", record.level(), record.args());
+            }
+        }
+        fn flush(&self) {}
+    }
+    static LOGGER: SimpleLogger = SimpleLogger;
+    let _ = log::set_logger(&LOGGER)
+        .map(|()| log::set_max_level(log::LevelFilter::Debug));
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fluorategl_init() -> i32 {
+    init_logger();
 
     let cfg = Config::from_env();
 
@@ -56,6 +79,7 @@ pub extern "C" fn fluorategl_init() -> i32 {
     }
     
     log::info!("[FluorateGL] Initialized successfully");
+    crate::backend::mark_initialized();
     0
 }
 /*
