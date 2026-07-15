@@ -9,12 +9,27 @@ const GL_TESS_CONTROL_SHADER: u32 = 0x8E88;
 const GL_TESS_EVALUATION_SHADER: u32 = 0x8E87;
 const GL_COMPUTE_SHADER: u32 = 0x91B9;
 
+/// Result of attempting to translate a desktop GLSL shader for GLES.
+#[derive(Debug, Clone)]
+pub enum TranslationResult {
+    /// A translated GLSL ES source string ready to upload.
+    Translated(String),
+    /// The original source should be passed through unchanged.
+    /// Used for geometry/tessellation when the GLES driver supports the
+    /// corresponding extension.
+    PassThrough,
+    /// Translation failed and there is no usable output.
+    Failed,
+}
+
 /// Translate desktop GLSL to GLSL ES via shaderc (GLSL -> SPIR-V) and
 /// naga (SPIR-V -> GLSL ES).
 ///
-/// Returns `None` when any pipeline step fails. Geometry and tessellation
-/// stages are rejected immediately because naga 30 does not model them.
-pub fn translate(source: &str, stage: u32) -> Option<String> {
+/// Geometry and tessellation shaders cannot be represented in naga 30's IR.
+/// When the GLES driver advertises the matching extension, the original source
+/// is returned as [`TranslationResult::PassThrough`] so the driver can compile
+/// it directly. Otherwise the shader is reported as unsupported.
+pub fn translate(source: &str, stage: u32) -> TranslationResult {
     // naga 30 has known internal panics on some SPIR-V inputs (e.g. typifier
     // index out of bounds). Wrap the whole pipeline in catch_unwind so that a
     // translator bug does not abort the host process.
@@ -25,12 +40,12 @@ pub fn translate(source: &str, stage: u32) -> Option<String> {
                 "[ShaderTranslator] SPIR-V pipeline panicked for stage 0x{:04X}; skipping",
                 stage
             );
-            None
+            TranslationResult::Failed
         }
     }
 }
 
-fn translate_internal(source: &str, stage: u32) -> Option<String> {
+fn translate_internal(source: &str, stage: u32) -> TranslationResult {
     let stage_name = stage_name(stage);
     let version_line = extract_version(source).unwrap_or("unknown");
     log::info!(
@@ -38,45 +53,65 @@ fn translate_internal(source: &str, stage: u32) -> Option<String> {
         stage_name, stage, version_line
     );
 
-    // naga 30 only supports vertex/fragment/compute stages, so avoid wasting
-    // time invoking shaderc for stages that can never succeed.
+    // naga 30 only supports vertex/fragment/compute stages. Geometry and
+    // tessellation can only work if the GLES driver supports the matching
+    // desktop extension and we pass the original GLSL through.
     if is_unsupported_stage(stage) {
-        log::warn!(
-            "[ShaderTranslator] stage 0x{:04X} is not supported by naga 30, skipping SPIR-V path",
-            stage
-        );
-        return None;
+        return if should_pass_through_stage(stage) {
+            log::info!(
+                "[ShaderTranslator] stage 0x{:04X} supported by driver extension; passing original source through",
+                stage
+            );
+            TranslationResult::PassThrough
+        } else {
+            log::warn!(
+                "[ShaderTranslator] stage 0x{:04X} not supported by driver and cannot be translated; failing",
+                stage
+            );
+            TranslationResult::Failed
+        };
     }
 
-    let spv = compile_to_spirv(source, stage)?;
-    let module = parse_spirv(&spv)?;
-    let info = validate_module(&module)?;
-    let glsl_stage = naga_stage(stage)?;
+    match compile_to_spirv(source, stage) {
+        Some(spv) => match parse_spirv(&spv) {
+            Some(module) => match validate_module(&module) {
+                Some(info) => {
+                    let glsl_stage = match naga_stage(stage) {
+                        Some(s) => s,
+                        None => return TranslationResult::Failed,
+                    };
 
-    // Try GLES versions from most compatible to least compatible.
-    for gles_version in gles_version_candidates(source) {
-        match write_gles(&module, &info, glsl_stage, gles_version) {
-            Ok(src) => {
-                log::info!(
-                    "[ShaderTranslator] SPIR-V translate success: stage={}, version={}",
-                    stage_name, gles_version
-                );
-                return Some(src);
-            }
-            Err(e) => {
-                log::warn!(
-                    "[ShaderTranslator] GLES {} write failed for stage {}: {:?}",
-                    gles_version, stage_name, e
-                );
-            }
-        }
+                    // Try GLES versions from most compatible to least compatible.
+                    for gles_version in gles_version_candidates(source) {
+                        match write_gles(&module, &info, glsl_stage, gles_version) {
+                            Ok(src) => {
+                                log::info!(
+                                    "[ShaderTranslator] SPIR-V translate success: stage={}, version={}",
+                                    stage_name, gles_version
+                                );
+                                return TranslationResult::Translated(src);
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "[ShaderTranslator] GLES {} write failed for stage {}: {:?}",
+                                    gles_version, stage_name, e
+                                );
+                            }
+                        }
+                    }
+
+                    log::warn!(
+                        "[ShaderTranslator] all GLES versions failed for shader stage {}",
+                        stage_name
+                    );
+                    TranslationResult::Failed
+                }
+                None => TranslationResult::Failed,
+            },
+            None => TranslationResult::Failed,
+        },
+        None => TranslationResult::Failed,
     }
-
-    log::warn!(
-        "[ShaderTranslator] all GLES versions failed for shader stage {}",
-        stage_name
-    );
-    None
 }
 
 fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
@@ -113,15 +148,39 @@ fn shader_kind(stage: u32) -> shaderc::ShaderKind {
         GL_VERTEX_SHADER => shaderc::ShaderKind::Vertex,
         GL_FRAGMENT_SHADER => shaderc::ShaderKind::Fragment,
         GL_COMPUTE_SHADER => shaderc::ShaderKind::Compute,
+        GL_GEOMETRY_SHADER => shaderc::ShaderKind::Geometry,
+        GL_TESS_CONTROL_SHADER => shaderc::ShaderKind::TessControl,
+        GL_TESS_EVALUATION_SHADER => shaderc::ShaderKind::TessEvaluation,
         _ => shaderc::ShaderKind::InferFromSource,
     }
 }
 
+/// Stages that naga 30 cannot model at all.
 fn is_unsupported_stage(stage: u32) -> bool {
     matches!(
         stage,
         GL_GEOMETRY_SHADER | GL_TESS_CONTROL_SHADER | GL_TESS_EVALUATION_SHADER
     )
+}
+
+/// Whether to pass the original source through for a stage that naga cannot
+/// model. This depends on the GLES driver exposing the matching extension.
+fn should_pass_through_stage(stage: u32) -> bool {
+    let Some(caps) = crate::backend::gles_caps::get() else {
+        return false;
+    };
+
+    match stage {
+        GL_GEOMETRY_SHADER => {
+            caps.has_extension("GL_EXT_geometry_shader")
+                || caps.has_extension("GL_OES_geometry_shader")
+        }
+        GL_TESS_CONTROL_SHADER | GL_TESS_EVALUATION_SHADER => {
+            caps.has_extension("GL_EXT_tessellation_shader")
+                || caps.has_extension("GL_OES_tessellation_shader")
+        }
+        _ => false,
+    }
 }
 
 fn parse_spirv(spv: &[u32]) -> Option<naga::Module> {

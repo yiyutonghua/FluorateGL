@@ -69,20 +69,30 @@ pub extern "C" fn glShaderSource(
             source.push_str(&piece);
         }
 
-        // Use the shaderc+naga SPIR-V pipeline. If it cannot handle the shader
-        // (e.g. geometry/tessellation or unsupported constructs), pass the
-        // original desktop GLSL through unchanged and let the GLES compiler report
-        // the error.
+        // Use the shaderc+naga SPIR-V pipeline. Geometry/tessellation stages
+        // cannot be represented by naga 30; if the GLES driver supports the
+        // matching extension, pass the original desktop GLSL through unchanged.
+        // For all other failures, fall back to the original source as a last
+        // resort so the GLES compiler can give us its native error message.
+        use crate::shader_translator::spirv_pass::TranslationResult;
+
         let (upload_source, translated) =
             match crate::shader_translator::spirv_pass::translate(&source, stage) {
-                Some(translated) => {
+                TranslationResult::Translated(translated) => {
                     log::info!(
                         "[ShaderTranslator] shader {} stage 0x{:04X} translated via SPIR-V ({} chars)",
                         shader, stage, translated.len()
                     );
                     (translated, true)
                 }
-                None => {
+                TranslationResult::PassThrough => {
+                    log::info!(
+                        "[ShaderTranslator] shader {} stage 0x{:04X} passed through unchanged (driver extension supported)",
+                        shader, stage
+                    );
+                    (source, false)
+                }
+                TranslationResult::Failed => {
                     log::warn!(
                         "[ShaderTranslator] SPIR-V pipeline failed for shader {}; passing original source ({} chars)",
                         shader, source.len()
