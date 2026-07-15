@@ -199,9 +199,11 @@ pub extern "C" fn glGenerateMipmap(target: u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetError() -> u32 {
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.get_error)()
-    })
+    let err = backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.get_error)() });
+    if err != 0 {
+        log::debug!("[FluorateGL] glGetError() -> 0x{:04X}", err);
+    }
+    err
 }
 
 // === 特殊处理 ===
@@ -222,22 +224,22 @@ fn get_fake_extensions_string() -> *const c_char {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetString(name: u32) -> *const c_char {
-    if name == 0x1F02 {
+    let result = if name == 0x1F02 {
         // GL_VERSION
         static VERSION: &[u8] = b"3.2.0 FluorateGL\0";
-        return VERSION.as_ptr() as *const c_char;
-    }
-    if name == 0x8B8C {
+        VERSION.as_ptr() as *const c_char
+    } else if name == 0x8B8C {
         // GL_SHADING_LANGUAGE_VERSION
         static GLSL: &[u8] = b"3.30\0";
-        return GLSL.as_ptr() as *const c_char;
-    }
-    if name == 0x1F03 {
+        GLSL.as_ptr() as *const c_char
+    } else if name == 0x1F03 {
         // GL_EXTENSIONS
-        return get_fake_extensions_string();
-    }
-
-    backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.get_string)(name) })
+        get_fake_extensions_string()
+    } else {
+        backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.get_string)(name) })
+    };
+    log::debug!("[FluorateGL] glGetString(0x{:04X}) -> {:?}", name, result);
+    result
 }
 
 static FAKE_EXTENSIONS: &[&[u8]] = &[
@@ -317,15 +319,17 @@ pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
         }
         _ => getter::get_integerv(pname, data),
     }
+    log::debug!("[FluorateGL] glGetIntegerv(0x{:04X}) -> {}", pname, unsafe { *data });
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetStringi(name: u32, index: u32) -> *const c_char {
-    if name == 0x1F03 && (index as usize) < FAKE_EXTENSIONS.len() {
-        return FAKE_EXTENSIONS[index as usize].as_ptr() as *const c_char;
-    }
-    
-    // 超出范围的索引返回空指针
-    std::ptr::null()
+    let result = if name == 0x1F03 && (index as usize) < FAKE_EXTENSIONS.len() {
+        FAKE_EXTENSIONS[index as usize].as_ptr() as *const c_char
+    } else {
+        std::ptr::null()
+    };
+    log::debug!("[FluorateGL] glGetStringi(0x{:04X}, {}) -> {:?}", name, index, result);
+    result
 }
