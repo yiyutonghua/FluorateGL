@@ -10,5 +10,4 @@ export SHADERC_LIB_DIR=""
 
 cargo build \
     --target x86_64-unknown-linux-gnu \
-    --features shaderc/build-from-source \
     "$@"

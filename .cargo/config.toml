@@ -1,3 +1,0 @@
-[env]
-SHADERC_STATIC = "1"
-SHADERC_LIB_DIR = { value = "src/shaderc/", relative = true }

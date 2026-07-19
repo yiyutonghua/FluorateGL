@@ -9,6 +9,15 @@ mod util;
 
 use config::Config;
 use libc::c_char;
+use ctor::ctor;
+
+#[ctor(unsafe)]
+fn auto_init() {
+    let ret = fluorategl_init();
+    if ret != 0 {
+        eprintln!("FluorateGL auto-init failed: {}", ret);
+    }
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn fluorategl_init() -> i32 {

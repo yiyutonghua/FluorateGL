@@ -1,6 +1,5 @@
 pub mod loader;
 pub mod dispatch;
-pub mod gles_caps;
 
 use std::sync::OnceLock;
 use crate::config::Config;
@@ -11,11 +10,11 @@ pub static GLES_DISPATCH: OnceLock<dispatch::GlesDispatch> = OnceLock::new();
 static EGL_DISPATCH: OnceLock<crate::egl_sys::dispatch::EglDispatch> = OnceLock::new();
 static INIT_ONCE: OnceLock<()> = OnceLock::new();
 
-pub fn ensure_initialized() {
+/*pub fn ensure_initialized() {
     INIT_ONCE.get_or_init(|| {
         let _ = crate::fluorategl_init();
     });
-}
+}*/
 
 pub fn mark_initialized() {
     let _ = INIT_ONCE.set(());
@@ -55,7 +54,7 @@ pub fn with_gles_dispatch<F, R>(f: F) -> R
 where
     F: FnOnce(&dispatch::GlesDispatch) -> R,
 {
-    ensure_initialized();
+    //ensure_initialized();
     let dispatch = GLES_DISPATCH.get().unwrap_or_else(|| {
         static STUB: OnceLock<dispatch::GlesDispatch> = OnceLock::new();
         STUB.get_or_init(dispatch::GlesDispatch::all_stub)
@@ -67,7 +66,7 @@ pub fn with_egl_dispatch<F, R>(f: F) -> R
 where
     F: FnOnce(&crate::egl_sys::dispatch::EglDispatch) -> R,
 {
-    ensure_initialized();
+    //ensure_initialized();
     let dispatch = EGL_DISPATCH.get().unwrap_or_else(|| {
         static STUB: OnceLock<crate::egl_sys::dispatch::EglDispatch> = OnceLock::new();
         STUB.get_or_init(crate::egl_sys::dispatch::EglDispatch::all_stub)
