@@ -131,12 +131,7 @@ pub extern "C" fn glUniform1i(location: i32, v0: i32) {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glUniformMatrix4fv(
-    location: i32,
-    count: i32,
-    transpose: u8,
-    value: *const f32,
-) {
+pub extern "C" fn glUniformMatrix4fv(location: i32, count: i32, transpose: u8, value: *const f32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.uniform_matrix_4fv)(location, count, transpose, value);
     });
@@ -257,7 +252,9 @@ pub extern "C" fn glGetAttachedShaders(
 
             for i in 0..returned_count as isize {
                 let gles_shader = *gles_shaders.as_ptr().offset(i);
-                let desktop_shader = state::with_state(|s| s.shaders.get_desktop(gles_shader).unwrap_or(gles_shader));
+                let desktop_shader = state::with_state(|s| {
+                    s.shaders.get_desktop(gles_shader).unwrap_or(gles_shader)
+                });
                 *shaders.offset(i) = desktop_shader;
             }
         } else {
@@ -311,7 +308,9 @@ pub extern "C" fn glGetTransformFeedbackVarying(
         if gles_id == 0 {
             return;
         }
-        (dispatch.get_transform_feedback_varying)(gles_id, index, buf_size, length, size, type_, name);
+        (dispatch.get_transform_feedback_varying)(
+            gles_id, index, buf_size, length, size, type_, name,
+        );
     });
 }
 
@@ -374,7 +373,13 @@ pub extern "C" fn glGetActiveUniformBlockName(
         if gles_id == 0 {
             return;
         }
-        (dispatch.get_active_uniform_block_name)(gles_id, uniform_block_index, buf_size, length, uniform_block_name);
+        (dispatch.get_active_uniform_block_name)(
+            gles_id,
+            uniform_block_index,
+            buf_size,
+            length,
+            uniform_block_name,
+        );
     });
 }
 
@@ -539,12 +544,7 @@ pub extern "C" fn glUniform4iv(location: i32, count: i32, value: *const i32) {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glUniformMatrix2fv(
-    location: i32,
-    count: i32,
-    transpose: u8,
-    value: *const f32,
-) {
+pub extern "C" fn glUniformMatrix2fv(location: i32, count: i32, transpose: u8, value: *const f32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.uniform_matrix_2fv)(location, count, transpose, value);
     });
@@ -552,12 +552,7 @@ pub extern "C" fn glUniformMatrix2fv(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glUniformMatrix3fv(
-    location: i32,
-    count: i32,
-    transpose: u8,
-    value: *const f32,
-) {
+pub extern "C" fn glUniformMatrix3fv(location: i32, count: i32, transpose: u8, value: *const f32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.uniform_matrix_3fv)(location, count, transpose, value);
     });

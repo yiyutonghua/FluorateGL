@@ -8,19 +8,26 @@ pub struct EglDispatch {
     pub terminate: unsafe extern "C" fn(*mut c_void) -> u32,
     pub query_string: unsafe extern "C" fn(*mut c_void, i32) -> *const c_char,
     pub get_configs: unsafe extern "C" fn(*mut c_void, *mut c_void, i32, *mut i32) -> u32,
-    pub choose_config: unsafe extern "C" fn(*mut c_void, *const i32, *mut c_void, i32, *mut i32) -> u32,
+    pub choose_config:
+        unsafe extern "C" fn(*mut c_void, *const i32, *mut c_void, i32, *mut i32) -> u32,
     pub get_config_attrib: unsafe extern "C" fn(*mut c_void, *mut c_void, i32, *mut i32) -> u32,
-    pub create_window_surface: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *const i32) -> *mut c_void,
-    pub create_pbuffer_surface: unsafe extern "C" fn(*mut c_void, *mut c_void, *const i32) -> *mut c_void,
-    pub create_pbuffer_from_client_buffer: unsafe extern "C" fn(*mut c_void, u32, *mut c_void, *mut c_void, *const i32) -> *mut c_void,
-    pub create_pixmap_surface: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *const i32) -> *mut c_void,
+    pub create_window_surface:
+        unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *const i32) -> *mut c_void,
+    pub create_pbuffer_surface:
+        unsafe extern "C" fn(*mut c_void, *mut c_void, *const i32) -> *mut c_void,
+    pub create_pbuffer_from_client_buffer:
+        unsafe extern "C" fn(*mut c_void, u32, *mut c_void, *mut c_void, *const i32) -> *mut c_void,
+    pub create_pixmap_surface:
+        unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *const i32) -> *mut c_void,
     pub destroy_surface: unsafe extern "C" fn(*mut c_void, *mut c_void) -> u32,
     pub surface_attrib: unsafe extern "C" fn(*mut c_void, *mut c_void, i32, i32) -> u32,
     pub bind_tex_image: unsafe extern "C" fn(*mut c_void, *mut c_void, i32) -> u32,
     pub release_tex_image: unsafe extern "C" fn(*mut c_void, *mut c_void, i32) -> u32,
-    pub create_context: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *const i32) -> *mut c_void,
+    pub create_context:
+        unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *const i32) -> *mut c_void,
     pub destroy_context: unsafe extern "C" fn(*mut c_void, *mut c_void) -> u32,
-    pub make_current: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> u32,
+    pub make_current:
+        unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> u32,
     pub query_context: unsafe extern "C" fn(*mut c_void, *mut c_void, i32, *mut i32) -> u32,
     pub query_surface: unsafe extern "C" fn(*mut c_void, *mut c_void, i32, *mut i32) -> u32,
     pub get_current_context: unsafe extern "C" fn() -> *mut c_void,
@@ -85,9 +92,15 @@ impl EglDispatch {
             choose_config: unsafe { std::mem::transmute(load!("eglChooseConfig")) },
             get_config_attrib: unsafe { std::mem::transmute(load!("eglGetConfigAttrib")) },
             create_window_surface: unsafe { std::mem::transmute(load!("eglCreateWindowSurface")) },
-            create_pbuffer_surface: unsafe { std::mem::transmute(load_opt!("eglCreatePbufferSurface")) },
-            create_pbuffer_from_client_buffer: unsafe { std::mem::transmute(load_opt!("eglCreatePbufferFromClientBuffer")) },
-            create_pixmap_surface: unsafe { std::mem::transmute(load_opt!("eglCreatePixmapSurface")) },
+            create_pbuffer_surface: unsafe {
+                std::mem::transmute(load_opt!("eglCreatePbufferSurface"))
+            },
+            create_pbuffer_from_client_buffer: unsafe {
+                std::mem::transmute(load_opt!("eglCreatePbufferFromClientBuffer"))
+            },
+            create_pixmap_surface: unsafe {
+                std::mem::transmute(load_opt!("eglCreatePixmapSurface"))
+            },
             destroy_surface: unsafe { std::mem::transmute(load!("eglDestroySurface")) },
             surface_attrib: unsafe { std::mem::transmute(load_opt!("eglSurfaceAttrib")) },
             bind_tex_image: unsafe { std::mem::transmute(load_opt!("eglBindTexImage")) },

@@ -49,7 +49,7 @@ pub extern "C" fn glGenTextures(n: i32, textures: *mut u32) {
         for i in 0..n as isize {
             let mut gles_id = 0u32;
             (dispatch.gen_textures)(1, &mut gles_id);
-            
+
             let desktop_id = state::with_state(|s| s.textures.alloc(gles_id));
             *textures.offset(i) = desktop_id;
         }
@@ -78,7 +78,7 @@ pub extern "C" fn glBindTexture(target: u32, texture: u32) {
         } else {
             state::with_state(|s| s.textures.get_gles(texture).unwrap_or(0))
         };
-        
+
         (dispatch.bind_texture)(target, gles_id);
         state::with_state(|s| s.bound_texture = texture);
     });
@@ -106,7 +106,9 @@ pub extern "C" fn glTexImage2D(
         );
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.tex_image_2d)(target, level, normalized, width, height, border, format, type_, pixels);
+        (dispatch.tex_image_2d)(
+            target, level, normalized, width, height, border, format, type_, pixels,
+        );
     });
 }
 
@@ -124,7 +126,9 @@ pub extern "C" fn glTexSubImage2D(
     pixels: *const std::ffi::c_void,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.tex_sub_image_2d)(target, level, xoffset, yoffset, width, height, format, type_, pixels);
+        (dispatch.tex_sub_image_2d)(
+            target, level, xoffset, yoffset, width, height, format, type_, pixels,
+        );
     });
 }
 
@@ -159,7 +163,9 @@ pub extern "C" fn glTexImage3D(
         );
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.tex_image_3d)(target, level, normalized, width, height, depth, border, format, type_, pixels);
+        (dispatch.tex_image_3d)(
+            target, level, normalized, width, height, depth, border, format, type_, pixels,
+        );
     });
 }
 
@@ -179,13 +185,21 @@ pub extern "C" fn glTexSubImage3D(
     pixels: *const std::ffi::c_void,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.tex_sub_image_3d)(target, level, xoffset, yoffset, zoffset, width, height, depth, format, type_, pixels);
+        (dispatch.tex_sub_image_3d)(
+            target, level, xoffset, yoffset, zoffset, width, height, depth, format, type_, pixels,
+        );
     });
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glTexStorage2D(target: u32, levels: i32, internalformat: u32, width: i32, height: i32) {
+pub extern "C" fn glTexStorage2D(
+    target: u32,
+    levels: i32,
+    internalformat: u32,
+    width: i32,
+    height: i32,
+) {
     let normalized = normalize_internal_format(internalformat);
     if normalized != internalformat {
         log::debug!(
@@ -259,7 +273,16 @@ pub extern "C" fn glCompressedTexImage2D(
     data: *const std::ffi::c_void,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.compressed_tex_image_2d)(target, level, internalformat, width, height, border, imageSize, data);
+        (dispatch.compressed_tex_image_2d)(
+            target,
+            level,
+            internalformat,
+            width,
+            height,
+            border,
+            imageSize,
+            data,
+        );
     });
 }
 
@@ -277,7 +300,9 @@ pub extern "C" fn glCompressedTexSubImage2D(
     data: *const std::ffi::c_void,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.compressed_tex_sub_image_2d)(target, level, xoffset, yoffset, width, height, format, imageSize, data);
+        (dispatch.compressed_tex_sub_image_2d)(
+            target, level, xoffset, yoffset, width, height, format, imageSize, data,
+        );
     });
 }
 
@@ -295,7 +320,17 @@ pub extern "C" fn glCompressedTexImage3D(
     data: *const std::ffi::c_void,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.compressed_tex_image_3d)(target, level, internalformat, width, height, depth, border, imageSize, data);
+        (dispatch.compressed_tex_image_3d)(
+            target,
+            level,
+            internalformat,
+            width,
+            height,
+            depth,
+            border,
+            imageSize,
+            data,
+        );
     });
 }
 
@@ -315,7 +350,9 @@ pub extern "C" fn glCompressedTexSubImage3D(
     data: *const std::ffi::c_void,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.compressed_tex_sub_image_3d)(target, level, xoffset, yoffset, zoffset, width, height, depth, format, imageSize, data);
+        (dispatch.compressed_tex_sub_image_3d)(
+            target, level, xoffset, yoffset, zoffset, width, height, depth, format, imageSize, data,
+        );
     });
 }
 

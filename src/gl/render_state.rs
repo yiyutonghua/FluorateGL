@@ -34,7 +34,13 @@ pub extern "C" fn glBlendFuncSeparate(srcRGB: u32, dstRGB: u32, srcAlpha: u32, d
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glBlendFuncSeparatei(buf: u32, srcRGB: u32, dstRGB: u32, srcAlpha: u32, dstAlpha: u32) {
+pub extern "C" fn glBlendFuncSeparatei(
+    buf: u32,
+    srcRGB: u32,
+    dstRGB: u32,
+    srcAlpha: u32,
+    dstAlpha: u32,
+) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.blend_func_separate_i)(buf, srcRGB, dstRGB, srcAlpha, dstAlpha);
     });

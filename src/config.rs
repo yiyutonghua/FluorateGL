@@ -37,10 +37,7 @@ impl Config {
             _ => LogLevel::Debug,
         };
 
-        Self {
-            backend,
-            log_level,
-        }
+        Self { backend, log_level }
     }
 
     pub fn egl_lib_name(&self) -> &'static str {

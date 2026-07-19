@@ -16,12 +16,10 @@ pub extern "C" fn glDeleteSync(sync: *mut std::ffi::c_void) {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glClientWaitSync(
-    sync: *mut std::ffi::c_void,
-    flags: u32,
-    timeout: u64,
-) -> u32 {
-    backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.client_wait_sync)(sync, flags, timeout) })
+pub extern "C" fn glClientWaitSync(sync: *mut std::ffi::c_void, flags: u32, timeout: u64) -> u32 {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.client_wait_sync)(sync, flags, timeout)
+    })
 }
 
 #[unsafe(no_mangle)]

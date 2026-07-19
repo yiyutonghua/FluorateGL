@@ -54,8 +54,7 @@ pub fn translate(source: &str, stage: u32) -> String {
 fn replace_version(source: &str) -> String {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
-        Regex::new(r"(?m)^\s*#\s*version\s+(\d+)(?:\s+(core|compatibility|es))?\s*$")
-            .unwrap()
+        Regex::new(r"(?m)^\s*#\s*version\s+(\d+)(?:\s+(core|compatibility|es))?\s*$").unwrap()
     });
 
     re.replace_all(source, |caps: &regex::Captures| {
@@ -123,8 +122,14 @@ fn inject_precision(source: &str, stage: u32) -> String {
 
     if stage == GL_FRAGMENT_SHADER {
         let samplers: &[&str] = &[
-            "sampler2D", "sampler3D", "samplerCube", "isampler2D", "usampler2D",
-            "sampler2DArray", "sampler2DShadow", "samplerCubeShadow",
+            "sampler2D",
+            "sampler3D",
+            "samplerCube",
+            "isampler2D",
+            "usampler2D",
+            "sampler2DArray",
+            "sampler2DShadow",
+            "samplerCubeShadow",
         ];
         for s in samplers {
             if source.contains(s) && !has_precision_for(source, s) {
@@ -148,7 +153,8 @@ fn has_precision_for(source: &str, ty: &str) -> bool {
     let re = RE.get_or_init(|| {
         Regex::new(r"(?m)^\s*precision\s+(lowp|mediump|highp)\s+(\w+)\s*;").unwrap()
     });
-    re.captures_iter(source).any(|caps| caps.get(2).map(|m| m.as_str() == ty).unwrap_or(false))
+    re.captures_iter(source)
+        .any(|caps| caps.get(2).map(|m| m.as_str() == ty).unwrap_or(false))
 }
 
 fn replace_frag_color(source: &str) -> String {
@@ -196,7 +202,9 @@ fn replace_builtin_names(source: &str) -> String {
 
     // ftransform() cannot be accurately translated without a full parser.
     if result.contains("ftransform()") {
-        log::warn!("[StringPass] ftransform() is not supported; replacing with identity placeholder");
+        log::warn!(
+            "[StringPass] ftransform() is not supported; replacing with identity placeholder"
+        );
         result = result.replace(
             "ftransform()",
             "gl_Position = vec4(0.0, 0.0, 0.0, 1.0) /* ftransform not supported */",

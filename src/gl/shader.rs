@@ -60,7 +60,6 @@ pub extern "C" fn glShaderSource(
             } else {
                 *length.offset(i) as usize
             };
-
             let piece = if len == 0 {
                 CStr::from_ptr(ptr).to_string_lossy().into_owned()
             } else {
@@ -69,32 +68,44 @@ pub extern "C" fn glShaderSource(
             };
             source.push_str(&piece);
         }
-        use crate::shader_translator::spirv_pass::TranslationResult;
 
-        let (upload_source, translated) =
-            match crate::shader_translator::spirv_pass::translate(&source, stage) {
-                TranslationResult::Translated(translated) => {
-                    log::info!(
-                        "[ShaderTranslator] shader {} stage 0x{:04X} translated via SPIR-V ({} chars)",
-                        shader, stage, translated.len()
-                    );
-                    (translated, true)
-                }
-                TranslationResult::PassThrough => {
-                    log::info!(
-                        "[ShaderTranslator] shader {} stage 0x{:04X} passed through unchanged (driver extension supported)",
-                        shader, stage
-                    );
-                    (source.clone(), false)
-                }
-                TranslationResult::Failed => {
-                    log::warn!(
-                        "[ShaderTranslator] SPIR-V pipeline failed for shader {}; passing original source ({} chars)",
-                        shader, source.len()
-                    );
-                    (source.clone(), false)
-                }
-            };
+        // Use the shaderc+naga SPIR-V pipeline. Geometry/tessellation stages
+        // cannot be represented by naga 30; if the GLES driver supports the
+        // matching extension, pass the original desktop GLSL through unchanged.
+        // For all other failures, fall back to the original source as a last
+        // resort so the GLES compiler can give us its native error message.
+        use crate::shader_translator::spirv_pass::TranslationResult;
+        let (upload_source, translated) = match crate::shader_translator::spirv_pass::translate(
+            &source, stage,
+        ) {
+            TranslationResult::Translated(translated) => {
+                log::info!(
+                    "[ShaderTranslator] shader {} stage 0x{:04X} translated via SPIR-V ({} chars)",
+                    shader,
+                    stage,
+                    translated.len()
+                );
+                (translated, true)
+            }
+            TranslationResult::PassThrough => {
+                log::info!(
+                    "[ShaderTranslator] shader {} stage 0x{:04X} passed through unchanged (driver extension supported)",
+                    shader,
+                    stage
+                );
+                // ✅ 修复：使用 clone，避免 source 被 move
+                (source.clone(), false)
+            }
+            TranslationResult::Failed => {
+                log::warn!(
+                    "[ShaderTranslator] SPIR-V pipeline failed for shader {}; passing original source ({} chars)",
+                    shader,
+                    source.len()
+                );
+                // ✅ 修复：使用 clone，避免 source 被 move
+                (source.clone(), false)
+            }
+        };
 
         state::with_state(|s| {
             if translated {
@@ -102,7 +113,8 @@ pub extern "C" fn glShaderSource(
             } else {
                 s.shader_sources.remove(&shader);
             }
-            s.shader_original_sources.insert(shader, source.clone());
+            // ✅ 修复：将真正的原始源码 source 移入 original_sources
+            s.shader_original_sources.insert(shader, source);
         });
 
         let c_source = match CString::new(upload_source) {
@@ -113,6 +125,7 @@ pub extern "C" fn glShaderSource(
                 return;
             }
         };
+
         let ptr = c_source.as_ptr();
         let len = c_source.as_bytes().len() as i32;
         (dispatch.shader_source)(gles_id, 1, &ptr, &len);
@@ -136,24 +149,50 @@ pub extern "C" fn glCompileShader(shader: u32) {
 
         let mut status = 0i32;
         (dispatch.get_shader_iv)(gles_id, GL_COMPILE_STATUS, &mut status);
-
         if status == 0 {
             let mut len = 0i32;
             (dispatch.get_shader_iv)(gles_id, GL_INFO_LOG_LENGTH, &mut len);
             if len > 0 {
                 let mut buf = vec![0u8; len as usize];
                 let mut written = 0i32;
-                (dispatch.get_shader_info_log)(gles_id, len, &mut written, buf.as_mut_ptr() as *mut c_char);
+                (dispatch.get_shader_info_log)(
+                    gles_id,
+                    len,
+                    &mut written,
+                    buf.as_mut_ptr() as *mut c_char,
+                );
                 let info = String::from_utf8_lossy(&buf[..written.max(0) as usize]);
-                log::error!("[FluorateGL] Shader {} (GLES {}) compile failed: {}", shader, gles_id, info.trim());
+                log::error!(
+                    "[FluorateGL] Shader {} (GLES {}) compile failed: {}",
+                    shader,
+                    gles_id,
+                    info.trim()
+                );
             } else {
-                log::error!("[FluorateGL] Shader {} (GLES {}) compile failed (no info log)", shader, gles_id);
+                log::error!(
+                    "[FluorateGL] Shader {} (GLES {}) compile failed (no info log)",
+                    shader,
+                    gles_id
+                );
             }
+
             if let Some(src) = state::with_state(|s| s.shader_sources.get(&shader).cloned()) {
-                log::error!("[FluorateGL] Translated source for shader {} ({} chars):\n{}", shader, src.len(), src);
+                log::error!(
+                    "[FluorateGL] Translated source for shader {} ({} chars):\n{}",
+                    shader,
+                    src.len(),
+                    src
+                );
             }
-            if let Some(src) = state::with_state(|s| s.shader_original_sources.get(&shader).cloned()) {
-                log::error!("[FluorateGL] Original source for shader {} ({} chars):\n{}", shader, src.len(), src);
+            if let Some(src) =
+                state::with_state(|s| s.shader_original_sources.get(&shader).cloned())
+            {
+                log::error!(
+                    "[FluorateGL] Original source for shader {} ({} chars):\n{}",
+                    shader,
+                    src.len(),
+                    src
+                );
             }
         }
     });
@@ -167,6 +206,7 @@ pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
         if gles_id == 0 {
             return;
         }
+
         // Return the length of the original source for GL_SHADER_SOURCE_LENGTH.
         if pname == GL_SHADER_SOURCE_LENGTH {
             let len = state::with_state(|s| {

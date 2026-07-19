@@ -1,8 +1,8 @@
 pub mod id_map;
 
+use id_map::IdMap;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use id_map::IdMap;
 
 pub struct State {
     pub buffers: IdMap,

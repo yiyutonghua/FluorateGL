@@ -158,7 +158,8 @@ pub extern "C" fn glBindRenderbuffer(target: u32, renderbuffer: u32) {
         if renderbuffer == 0 {
             (dispatch.bind_renderbuffer)(target, 0);
             state::with_state(|s| s.bound_renderbuffer = 0);
-        } else if let Some(gles_id) = state::with_state(|s| s.renderbuffers.get_gles(renderbuffer)) {
+        } else if let Some(gles_id) = state::with_state(|s| s.renderbuffers.get_gles(renderbuffer))
+        {
             (dispatch.bind_renderbuffer)(target, gles_id);
             state::with_state(|s| s.bound_renderbuffer = renderbuffer);
         }
@@ -167,12 +168,7 @@ pub extern "C" fn glBindRenderbuffer(target: u32, renderbuffer: u32) {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glRenderbufferStorage(
-    target: u32,
-    internalformat: u32,
-    width: i32,
-    height: i32,
-) {
+pub extern "C" fn glRenderbufferStorage(target: u32, internalformat: u32, width: i32, height: i32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.renderbuffer_storage)(target, internalformat, width, height);
     });
@@ -188,13 +184,7 @@ pub extern "C" fn glRenderbufferStorageMultisample(
     height: i32,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.renderbuffer_storage_multisample)(
-            target,
-            samples,
-            internalformat,
-            width,
-            height,
-        );
+        (dispatch.renderbuffer_storage_multisample)(target, samples, internalformat, width, height);
     });
 }
 

@@ -64,7 +64,11 @@ fn run_worker(exe: &Path, path: &Path, stage: u32) -> Option<i32> {
     match status {
         Ok(s) => s.code(),
         Err(e) => {
-            eprintln!("[glslang] failed to spawn worker for {}: {}", path.display(), e);
+            eprintln!(
+                "[glslang] failed to spawn worker for {}: {}",
+                path.display(),
+                e
+            );
             Some(-1)
         }
     }
@@ -126,7 +130,9 @@ fn main() {
                 failed += 1;
                 eprintln!(
                     "[glslang] worker exited with code {}: {} (stage {})",
-                    c, path.display(), stage_name
+                    c,
+                    path.display(),
+                    stage_name
                 );
             }
             None => {

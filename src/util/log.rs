@@ -10,9 +10,7 @@ pub fn init(cfg: &Config) {
 
     #[cfg(target_os = "android")]
     {
-        android_logger::init_once(
-            android_logger::Config::default().with_max_level(max_level),
-        );
+        android_logger::init_once(android_logger::Config::default().with_max_level(max_level));
     }
 
     #[cfg(not(target_os = "android"))]

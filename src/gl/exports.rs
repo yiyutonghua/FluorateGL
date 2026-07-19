@@ -17,14 +17,15 @@ pub extern "C" fn glClear(mask: u32) {
 // Capabilities that exist in desktop GL but are unsupported (or always on)
 // in OpenGL ES. Passing them to GLES produces `GL_INVALID_ENUM`.
 fn is_unsupported_gles_cap(cap: u32) -> bool {
-    matches!(cap,
+    matches!(
+        cap,
         0x884F | // GL_TEXTURE_CUBE_MAP_SEAMLESS
         0x8642 | // GL_PROGRAM_POINT_SIZE
         0x0B10 | // GL_POINT_SMOOTH
         0x0B20 | // GL_LINE_SMOOTH
         0x0B41 | // GL_POLYGON_SMOOTH
         0x809D | // GL_MULTISAMPLE
-        0x0B21   // GL_LINE_STIPPLE
+        0x0B21 // GL_LINE_STIPPLE
     )
 }
 
@@ -32,7 +33,10 @@ fn is_unsupported_gles_cap(cap: u32) -> bool {
 #[allow(non_snake_case)]
 pub extern "C" fn glEnable(cap: u32) {
     if is_unsupported_gles_cap(cap) {
-        log::debug!("[FluorateGL] glEnable(0x{:04X}) ignored (unsupported in GLES)", cap);
+        log::debug!(
+            "[FluorateGL] glEnable(0x{:04X}) ignored (unsupported in GLES)",
+            cap
+        );
         return;
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -44,7 +48,10 @@ pub extern "C" fn glEnable(cap: u32) {
 #[allow(non_snake_case)]
 pub extern "C" fn glDisable(cap: u32) {
     if is_unsupported_gles_cap(cap) {
-        log::debug!("[FluorateGL] glDisable(0x{:04X}) ignored (unsupported in GLES)", cap);
+        log::debug!(
+            "[FluorateGL] glDisable(0x{:04X}) ignored (unsupported in GLES)",
+            cap
+        );
         return;
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -166,7 +173,12 @@ pub extern "C" fn glDrawArrays(mode: u32, first: i32, count: i32) {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glDrawElements(mode: u32, count: i32, type_: u32, indices: *const std::ffi::c_void) {
+pub extern "C" fn glDrawElements(
+    mode: u32,
+    count: i32,
+    type_: u32,
+    indices: *const std::ffi::c_void,
+) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.draw_elements)(mode, count, type_, indices);
     });
@@ -319,7 +331,11 @@ pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
         }
         _ => getter::get_integerv(pname, data),
     }
-    log::debug!("[FluorateGL] glGetIntegerv(0x{:04X}) -> {}", pname, unsafe { *data });
+    log::debug!(
+        "[FluorateGL] glGetIntegerv(0x{:04X}) -> {}",
+        pname,
+        unsafe { *data }
+    );
 }
 
 #[unsafe(no_mangle)]
@@ -330,6 +346,11 @@ pub extern "C" fn glGetStringi(name: u32, index: u32) -> *const c_char {
     } else {
         std::ptr::null()
     };
-    log::debug!("[FluorateGL] glGetStringi(0x{:04X}, {}) -> {:?}", name, index, result);
+    log::debug!(
+        "[FluorateGL] glGetStringi(0x{:04X}, {}) -> {:?}",
+        name,
+        index,
+        result
+    );
     result
 }

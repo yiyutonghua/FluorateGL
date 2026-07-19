@@ -20,7 +20,11 @@ pub extern "C" fn eglGetDisplay(display_id: *mut std::ffi::c_void) -> *mut std::
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn eglInitialize(dpy: *mut std::ffi::c_void, major: *mut i32, minor: *mut i32) -> u32 {
+pub extern "C" fn eglInitialize(
+    dpy: *mut std::ffi::c_void,
+    major: *mut i32,
+    minor: *mut i32,
+) -> u32 {
     let result = dispatcher::initialize(dpy, major, minor);
     // Ensure the application sees EGL 1.4 even if the driver reports lower.
     if result == EGL_SUCCESS {
@@ -246,7 +250,10 @@ pub extern "C" fn eglMakeCurrent(
 ) -> u32 {
     log::debug!(
         "[EGL] eglMakeCurrent dpy={:?} draw={:?} read={:?} ctx={:?}",
-        dpy, draw, read, ctx
+        dpy,
+        draw,
+        read,
+        ctx
     );
     let result = dispatcher::make_current(dpy, draw, read, ctx);
     log::debug!("[EGL] eglMakeCurrent result=0x{:04X}", result);
@@ -323,7 +330,10 @@ pub extern "C" fn eglReleaseThread() -> u32 {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn eglSwapBuffers(dpy: *mut std::ffi::c_void, surface: *mut std::ffi::c_void) -> u32 {
+pub extern "C" fn eglSwapBuffers(
+    dpy: *mut std::ffi::c_void,
+    surface: *mut std::ffi::c_void,
+) -> u32 {
     dispatcher::swap_buffers(dpy, surface)
 }
 
@@ -335,7 +345,11 @@ pub extern "C" fn eglSwapInterval(dpy: *mut c_void, interval: i32) -> u32 {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn eglCopyBuffers(dpy: *mut c_void, surface: *mut c_void, target: *mut c_void) -> u32 {
+pub extern "C" fn eglCopyBuffers(
+    dpy: *mut c_void,
+    surface: *mut c_void,
+    target: *mut c_void,
+) -> u32 {
     dispatcher::copy_buffers(dpy, surface, target)
 }
 

@@ -1,8 +1,8 @@
-pub mod loader;
 pub mod dispatch;
+pub mod loader;
 
-use std::sync::OnceLock;
 use crate::config::Config;
+use std::sync::OnceLock;
 
 // 全局状态
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -39,13 +39,13 @@ pub fn init_gles() -> Result<(), &'static str> {
 
 pub fn init_egl() -> Result<(), &'static str> {
     let config = CONFIG.get().expect("config not set");
-    
+
     let loader = crate::egl_sys::loader::EglLoader::new(config)?;
     let dispatch = crate::egl_sys::dispatch::EglDispatch::load_from(&loader)
         .ok_or("failed to load required EGL function")?;
-    
+
     let _ = EGL_DISPATCH.set(dispatch);
-    
+
     Box::leak(Box::new(loader));
     Ok(())
 }

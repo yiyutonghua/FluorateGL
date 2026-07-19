@@ -1,7 +1,7 @@
-pub mod exports;
-pub mod dispatcher;
 pub mod buffer;
+pub mod dispatcher;
 pub mod drawing;
+pub mod exports;
 pub mod framebuffer;
 pub mod getter;
 pub mod program;

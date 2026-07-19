@@ -56,7 +56,12 @@ fn is_stub(dispatch: &backend::dispatch::GlesDispatch, ptr: *const ()) -> bool {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glMultiDrawArrays(mode: u32, first: *const i32, count: *const i32, drawcount: i32) {
+pub extern "C" fn glMultiDrawArrays(
+    mode: u32,
+    first: *const i32,
+    count: *const i32,
+    drawcount: i32,
+) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.multi_draw_arrays as *const ()) {
             for i in 0..drawcount as isize {

@@ -3,27 +3,19 @@ use libc::c_char;
 use std::ffi::c_void;
 
 pub fn get_display(display_id: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.get_display)(display_id)
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.get_display)(display_id) })
 }
 
 pub fn initialize(dpy: *mut std::ffi::c_void, major: *mut i32, minor: *mut i32) -> u32 {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.initialize)(dpy, major, minor)
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.initialize)(dpy, major, minor) })
 }
 
 pub fn terminate(dpy: *mut c_void) -> u32 {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.terminate)(dpy)
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.terminate)(dpy) })
 }
 
 pub fn query_string(dpy: *mut c_void, name: i32) -> *const c_char {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.query_string)(dpy, name)
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.query_string)(dpy, name) })
 }
 
 pub fn get_configs(
@@ -105,17 +97,10 @@ pub fn create_pixmap_surface(
 }
 
 pub fn destroy_surface(dpy: *mut c_void, surface: *mut c_void) -> u32 {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.destroy_surface)(dpy, surface)
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.destroy_surface)(dpy, surface) })
 }
 
-pub fn surface_attrib(
-    dpy: *mut c_void,
-    surface: *mut c_void,
-    attribute: i32,
-    value: i32,
-) -> u32 {
+pub fn surface_attrib(dpy: *mut c_void, surface: *mut c_void, attribute: i32, value: i32) -> u32 {
     backend::with_egl_dispatch(|dispatch| unsafe {
         (dispatch.surface_attrib)(dpy, surface, attribute, value)
     })
@@ -145,9 +130,7 @@ pub fn create_context(
 }
 
 pub fn destroy_context(dpy: *mut c_void, ctx: *mut c_void) -> u32 {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.destroy_context)(dpy, ctx)
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.destroy_context)(dpy, ctx) })
 }
 
 pub fn make_current(
@@ -156,17 +139,10 @@ pub fn make_current(
     read: *mut std::ffi::c_void,
     ctx: *mut std::ffi::c_void,
 ) -> u32 {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.make_current)(dpy, draw, read, ctx)
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.make_current)(dpy, draw, read, ctx) })
 }
 
-pub fn query_context(
-    dpy: *mut c_void,
-    ctx: *mut c_void,
-    attribute: i32,
-    value: *mut i32,
-) -> u32 {
+pub fn query_context(dpy: *mut c_void, ctx: *mut c_void, attribute: i32, value: *mut i32) -> u32 {
     backend::with_egl_dispatch(|dispatch| unsafe {
         (dispatch.query_context)(dpy, ctx, attribute, value)
     })
@@ -184,86 +160,58 @@ pub fn query_surface(
 }
 
 pub fn get_current_context() -> *mut c_void {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.get_current_context)()
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.get_current_context)() })
 }
 
 pub fn get_current_surface(readdraw: i32) -> *mut c_void {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.get_current_surface)(readdraw)
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.get_current_surface)(readdraw) })
 }
 
 pub fn get_current_display() -> *mut c_void {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.get_current_display)()
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.get_current_display)() })
 }
 
 pub fn wait_client() -> u32 {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.wait_client)()
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.wait_client)() })
 }
 
 pub fn wait_native(engine: i32) -> u32 {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.wait_native)(engine)
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.wait_native)(engine) })
 }
 
 pub fn wait_gl() -> u32 {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.wait_gl)()
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.wait_gl)() })
 }
 
 pub fn release_thread() -> u32 {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.release_thread)()
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.release_thread)() })
 }
 
 pub fn bind_api(api: u32) -> u32 {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.bind_api)(api)
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.bind_api)(api) })
 }
 
 #[allow(dead_code)]
 pub fn query_api() -> u32 {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.query_api)()
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.query_api)() })
 }
 
 pub fn swap_buffers(dpy: *mut std::ffi::c_void, surface: *mut std::ffi::c_void) -> u32 {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.swap_buffers)(dpy, surface)
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.swap_buffers)(dpy, surface) })
 }
 
 pub fn swap_interval(dpy: *mut c_void, interval: i32) -> u32 {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.swap_interval)(dpy, interval)
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.swap_interval)(dpy, interval) })
 }
 
 pub fn copy_buffers(dpy: *mut c_void, surface: *mut c_void, target: *mut c_void) -> u32 {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.copy_buffers)(dpy, surface, target)
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.copy_buffers)(dpy, surface, target) })
 }
 
 pub fn get_error() -> u32 {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.get_error)()
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.get_error)() })
 }
 
 pub fn get_proc_address(proc_name: *const c_char) -> *mut c_void {
-    backend::with_egl_dispatch(|dispatch| unsafe {
-        (dispatch.get_proc_address)(proc_name)
-    })
+    backend::with_egl_dispatch(|dispatch| unsafe { (dispatch.get_proc_address)(proc_name) })
 }

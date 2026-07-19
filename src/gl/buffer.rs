@@ -8,7 +8,7 @@ pub extern "C" fn glGenBuffers(n: i32, buffers: *mut u32) {
         for i in 0..n as isize {
             let mut gles_id = 0u32;
             (dispatch.gen_buffers)(1, &mut gles_id);
-            
+
             let desktop_id = state::with_state(|s| s.buffers.alloc(gles_id));
             *buffers.offset(i) = desktop_id;
         }
@@ -37,10 +37,11 @@ pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
         } else {
             state::with_state(|s| s.buffers.get_gles(buffer).unwrap_or(0))
         };
-        
+
         (dispatch.bind_buffer)(target, gles_id);
-        
-        if target == 0x8892 || target == 0x8893 { // GL_ARRAY_BUFFER or GL_ELEMENT_ARRAY_BUFFER
+
+        if target == 0x8892 || target == 0x8893 {
+            // GL_ARRAY_BUFFER or GL_ELEMENT_ARRAY_BUFFER
             state::with_state(|s| s.bound_buffer = buffer);
         }
     });
@@ -48,7 +49,12 @@ pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glBufferData(target: u32, size: isize, data: *const std::ffi::c_void, usage: u32) {
+pub extern "C" fn glBufferData(
+    target: u32,
+    size: isize,
+    data: *const std::ffi::c_void,
+    usage: u32,
+) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.buffer_data)(target, size, data, usage);
     });
@@ -56,7 +62,12 @@ pub extern "C" fn glBufferData(target: u32, size: isize, data: *const std::ffi::
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glBufferSubData(target: u32, offset: isize, size: isize, data: *const std::ffi::c_void) {
+pub extern "C" fn glBufferSubData(
+    target: u32,
+    offset: isize,
+    size: isize,
+    data: *const std::ffi::c_void,
+) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.buffer_sub_data)(target, offset, size, data);
     });
@@ -71,7 +82,12 @@ fn is_stub(dispatch: &backend::dispatch::GlesDispatch, f: usize) -> bool {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glBufferStorage(target: u32, size: isize, data: *const std::ffi::c_void, flags: u32) {
+pub extern "C" fn glBufferStorage(
+    target: u32,
+    size: isize,
+    data: *const std::ffi::c_void,
+    flags: u32,
+) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         // GLES does not support persistent/coherent mapping. Strip those bits
         // and fall back to ordinary immutable storage or buffer data.
@@ -96,9 +112,9 @@ pub extern "C" fn glMapBuffer(target: u32, access: u32) -> *mut std::ffi::c_void
         (dispatch.get_buffer_parameter_iv)(target, 0x8764, &mut size); // GL_BUFFER_SIZE
 
         let range_access = match access {
-            0x88B8 => 0x0001,                   // GL_READ_ONLY -> GL_MAP_READ_BIT
-            0x88B9 => 0x0002,                   // GL_WRITE_ONLY -> GL_MAP_WRITE_BIT
-            0x88BA => 0x0001 | 0x0002,          // GL_READ_WRITE -> GL_MAP_READ_BIT | GL_MAP_WRITE_BIT
+            0x88B8 => 0x0001,          // GL_READ_ONLY -> GL_MAP_READ_BIT
+            0x88B9 => 0x0002,          // GL_WRITE_ONLY -> GL_MAP_WRITE_BIT
+            0x88BA => 0x0001 | 0x0002, // GL_READ_WRITE -> GL_MAP_READ_BIT | GL_MAP_WRITE_BIT
             _ => access,
         };
 
@@ -108,7 +124,12 @@ pub extern "C" fn glMapBuffer(target: u32, access: u32) -> *mut std::ffi::c_void
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glMapBufferRange(target: u32, offset: isize, length: isize, access: u32) -> *mut std::ffi::c_void {
+pub extern "C" fn glMapBufferRange(
+    target: u32,
+    offset: isize,
+    length: isize,
+    access: u32,
+) -> *mut std::ffi::c_void {
     backend::with_gles_dispatch(|dispatch| unsafe {
         // GLES does not support persistent/coherent mapping. Strip those bits
         // so the underlying driver accepts the call.
@@ -120,9 +141,7 @@ pub extern "C" fn glMapBufferRange(target: u32, offset: isize, length: isize, ac
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glUnmapBuffer(target: u32) -> u8 {
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.unmap_buffer)(target)
-    })
+    backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.unmap_buffer)(target) })
 }
 
 #[unsafe(no_mangle)]
@@ -135,7 +154,13 @@ pub extern "C" fn glFlushMappedBufferRange(target: u32, offset: isize, length: i
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glCopyBufferSubData(readTarget: u32, writeTarget: u32, readOffset: isize, writeOffset: isize, size: isize) {
+pub extern "C" fn glCopyBufferSubData(
+    readTarget: u32,
+    writeTarget: u32,
+    readOffset: isize,
+    writeOffset: isize,
+    size: isize,
+) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.copy_buffer_sub_data)(readTarget, writeTarget, readOffset, writeOffset, size);
     });
@@ -157,7 +182,13 @@ pub extern "C" fn glBindBufferBase(target: u32, index: u32, buffer: u32) {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glBindBufferRange(target: u32, index: u32, buffer: u32, offset: isize, size: isize) {
+pub extern "C" fn glBindBufferRange(
+    target: u32,
+    index: u32,
+    buffer: u32,
+    offset: isize,
+    size: isize,
+) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = if buffer == 0 {
             0
@@ -171,7 +202,12 @@ pub extern "C" fn glBindBufferRange(target: u32, index: u32, buffer: u32, offset
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glGetBufferSubData(target: u32, offset: isize, size: isize, data: *mut std::ffi::c_void) {
+pub extern "C" fn glGetBufferSubData(
+    target: u32,
+    offset: isize,
+    size: isize,
+    data: *mut std::ffi::c_void,
+) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_buffer_sub_data)(target, offset, size, data);
     });
@@ -205,4 +241,3 @@ pub extern "C" fn glIsBuffer(buffer: u32) -> u8 {
         (dispatch.is_buffer)(gles_id)
     })
 }
-

@@ -8,7 +8,7 @@ pub extern "C" fn glGenVertexArrays(n: i32, arrays: *mut u32) {
         for i in 0..n as isize {
             let mut gles_id = 0u32;
             (dispatch.gen_vertex_arrays)(1, &mut gles_id);
-            
+
             let desktop_id = state::with_state(|s| s.vertex_arrays.alloc(gles_id));
             *arrays.offset(i) = desktop_id;
         }
@@ -37,7 +37,7 @@ pub extern "C" fn glBindVertexArray(array: u32) {
         } else {
             state::with_state(|s| s.vertex_arrays.get_gles(array).unwrap_or(0))
         };
-        
+
         (dispatch.bind_vertex_array)(gles_id);
         state::with_state(|s| s.bound_vertex_array = array);
     });
