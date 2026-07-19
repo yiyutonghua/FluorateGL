@@ -26,7 +26,7 @@ gcc -o tests/gl/test_shader_translation tests/gl/test_shader_translation.c -ldl 
 
 # --- GLSL tests: translate the glslang test suite ---
 echo "=== GLSL tests ==="
-SHADERC_LIB_DIR="" cargo run --quiet \
+cargo run --quiet \
     --example glslang_suite \
     --features shaderc/build-from-source \
     --target x86_64-unknown-linux-gnu
