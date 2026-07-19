@@ -453,9 +453,7 @@ impl GlesDispatch {
             compile_shader: unsafe { std::mem::transmute(load!("glCompileShader")) },
             get_shader_iv: unsafe { std::mem::transmute(load!("glGetShaderiv")) },
             get_shader_info_log: unsafe { std::mem::transmute(load!("glGetShaderInfoLog")) },
-            gl_create_shader_programv: unsafe {
-                std::mem::transmute(load!("glcreateshaderprogramv"))
-            },
+            gl_create_shader_programv: load_opt!("glCreateShaderProgramv"),
 
             create_program: unsafe { std::mem::transmute(load!("glCreateProgram")) },
             delete_program: unsafe { std::mem::transmute(load!("glDeleteProgram")) },

@@ -26,7 +26,6 @@ pub extern "C" fn eglInitialize(
     minor: *mut i32,
 ) -> u32 {
     let result = dispatcher::initialize(dpy, major, minor);
-    // Ensure the application sees EGL 1.4 even if the driver reports lower.
     if result == EGL_SUCCESS {
         if !major.is_null() {
             unsafe { *major = 1 };
@@ -191,30 +190,26 @@ pub extern "C" fn eglCreateContext(
         return dispatcher::create_context(dpy, config, share_context, std::ptr::null());
     }
 
-    // Rewrite attrib_list: OpenGL 3.2 Core -> GLES 3.2
     let mut new_attribs = Vec::new();
     let mut i = 0;
 
     loop {
         let attr = unsafe { *attrib_list.offset(i) };
-
         if attr == EGL_NONE {
             break;
         }
-
         let value = unsafe { *attrib_list.offset(i + 1) };
 
         match attr {
             EGL_CONTEXT_CLIENT_VERSION => {
                 new_attribs.push(EGL_CONTEXT_CLIENT_VERSION);
-                new_attribs.push(3); // Force GLES 3.x
+                new_attribs.push(3);
             }
             EGL_CONTEXT_OPENGL_PROFILE_MASK => {
-                // GLES does not have core/compatibility profiles.
+                // GLES 没有 profile，跳过
             }
             EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY => {
-                // GLES supports this via EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT only.
-                // Skip for safety.
+                // 跳过
             }
             _ => {
                 new_attribs.push(attr);
@@ -226,11 +221,7 @@ pub extern "C" fn eglCreateContext(
     }
 
     new_attribs.push(EGL_NONE);
-
-    // The underlying EGL implementation reads attrib_list synchronously and does
-    // not retain the pointer, so it is safe to keep the Vec scoped to this call.
     let ptr = new_attribs.as_ptr();
-
     dispatcher::create_context(dpy, config, share_context, ptr)
 }
 
@@ -359,22 +350,41 @@ pub extern "C" fn eglGetError() -> u32 {
     dispatcher::get_error()
 }
 
+use std::sync::OnceLock;
+
+// ✅ 改为存 usize，规避 Send/Sync 检查
+static SELF_HANDLE: OnceLock<usize> = OnceLock::new();
+
+fn get_self_handle() -> *mut std::ffi::c_void {
+    // 取出来的时候再转回指针
+    let handle = *SELF_HANDLE.get_or_init(|| {
+        unsafe {
+            let ptr = libc::dlopen(
+                b"libfluorategl.so\0".as_ptr() as *const libc::c_char,
+                libc::RTLD_NOW | libc::RTLD_NOLOAD,
+            );
+            ptr as usize // ✅ 存入时转为 usize
+        }
+    });
+    handle as *mut std::ffi::c_void
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn eglGetProcAddress(proc_name: *const c_char) -> *mut c_void {
+pub extern "C" fn eglGetProcAddress(proc_name: *const libc::c_char) -> *mut std::ffi::c_void {
     if proc_name.is_null() {
         return std::ptr::null_mut();
     }
 
-    // First, try to resolve the symbol from FluorateGL itself.
-    // This lets applications retrieve our wrapped OpenGL / EGL entry points.
-    unsafe {
-        let local = libc::dlsym(std::ptr::null_mut(), proc_name as *const libc::c_char);
+    // 1. 优先从 FluorateGL 自己查找
+    let handle = get_self_handle();
+    if !handle.is_null() {
+        let local = unsafe { libc::dlsym(handle, proc_name) };
         if !local.is_null() {
             return local;
         }
     }
 
-    // Fallback to the underlying EGL implementation.
+    // 2. Fallback 到底层 EGL 驱动
     dispatcher::get_proc_address(proc_name)
 }

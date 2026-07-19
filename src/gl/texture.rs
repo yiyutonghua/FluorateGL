@@ -4,32 +4,59 @@ use crate::state;
 // Texture internal format mappings: desktop OpenGL -> GLES 3.x
 // GLES 3.x supports sized internal formats, but some legacy desktop-only
 // formats (e.g. GL_RGB16, GL_DEPTH_COMPONENT32) need to be emulated.
+// ================= 补充完整的常量映射 =================
+const GL_RED: u32 = 0x1903;
+const GL_ALPHA: u32 = 0x1906;
+const GL_RGB: u32 = 0x1907;
+const GL_RGBA: u32 = 0x1908;
+const GL_LUMINANCE: u32 = 0x1909;
+const GL_LUMINANCE_ALPHA: u32 = 0x190A;
+const GL_RG: u32 = 0x8227;
+const GL_DEPTH_COMPONENT: u32 = 0x1902;
+const GL_DEPTH_STENCIL: u32 = 0x84F9;
+
+const GL_R8: u32 = 0x8229;
+const GL_RG8: u32 = 0x822B;
+const GL_RGB8: u32 = 0x8051;
+const GL_RGBA8: u32 = 0x8058;
+const GL_DEPTH_COMPONENT16: u32 = 0x81A5;
+const GL_DEPTH_COMPONENT24: u32 = 0x81A6;
+const GL_DEPTH24_STENCIL8: u32 = 0x88F0;
+
+// 你原有的常量保留...
 const GL_R3_G3_B2: u32 = 0x2A10;
 const GL_RGB4: u32 = 0x804F;
 const GL_RGB5: u32 = 0x8050;
-const GL_RGB8: u32 = 0x8051;
 const GL_RGB10: u32 = 0x8052;
 const GL_RGB12: u32 = 0x8053;
 const GL_RGB16: u32 = 0x8054;
 const GL_RGBA2: u32 = 0x8055;
 const GL_RGBA4: u32 = 0x8056;
-const GL_RGBA8: u32 = 0x8058;
 const GL_RGB10_A2: u32 = 0x8059;
 const GL_RGBA12: u32 = 0x805A;
 const GL_RGBA16: u32 = 0x805B;
 const GL_BGR: u32 = 0x80E0;
 const GL_BGRA: u32 = 0x80E1;
-const GL_R8: u32 = 0x8229;
 const GL_DEPTH_COMPONENT32: u32 = 0x81A7;
 const GL_DEPTH_COMPONENT32F: u32 = 0x8CAC;
 const GL_STENCIL_INDEX8: u32 = 0x8D48;
 const GL_STENCIL_INDEX16: u32 = 0x8D49;
 
 /// Convert a desktop OpenGL internal format to the closest GLES-compatible
-/// internal format. The caller's device (Adreno 810 / GLES 3.2) supports
-/// GL_EXT_texture_norm16, so 16-bit normalized formats are kept when possible.
+/// internal format.
 fn normalize_internal_format(internalformat: u32) -> u32 {
     match internalformat {
+        // 1. 最常见的 Unsized Formats (MC 常用，GLES3 的 glTexStorage 必须转换)
+        GL_RED | GL_ALPHA | GL_LUMINANCE => GL_R8,
+        GL_RG | GL_LUMINANCE_ALPHA => GL_RG8,
+        GL_RGB => GL_RGB8,
+        GL_RGBA => GL_RGBA8,
+
+        // 2. 深度/模板缓冲格式
+        GL_DEPTH_COMPONENT => GL_DEPTH_COMPONENT24,
+        GL_DEPTH_STENCIL => GL_DEPTH24_STENCIL8,
+
+        // 3. 你原有的 Legacy Desktop 格式映射
         GL_R3_G3_B2 | GL_RGB4 | GL_RGB5 | GL_RGB12 => GL_RGB8,
         GL_RGB10 => GL_RGB10_A2,
         GL_RGB16 => GL_RGBA16,
@@ -38,6 +65,8 @@ fn normalize_internal_format(internalformat: u32) -> u32 {
         GL_BGRA => GL_RGBA8,
         GL_DEPTH_COMPONENT32 => GL_DEPTH_COMPONENT32F,
         GL_STENCIL_INDEX8 | GL_STENCIL_INDEX16 => GL_R8,
+
+        // 4. 其他情况（已经是 Sized Format）原样返回
         _ => internalformat,
     }
 }

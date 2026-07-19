@@ -41,7 +41,10 @@ pub extern "C" fn glDrawElementsInstanced(
 #[allow(non_snake_case)]
 pub extern "C" fn glPrimitiveRestartIndex(index: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.primitive_restart_index)(index);
+        if !is_stub(dispatch, dispatch.primitive_restart_index as *const ()) {
+            (dispatch.primitive_restart_index)(index);
+        }
+        // GLES 不支持此函数时静默忽略
     });
 }
 

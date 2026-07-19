@@ -1,1 +1,1 @@
-纯vibe coding
+纯vibe coding作品，不建议使用

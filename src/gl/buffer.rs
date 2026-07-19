@@ -76,8 +76,8 @@ pub extern "C" fn glBufferSubData(
 const GL_MAP_PERSISTENT_BIT: u32 = 0x0040;
 const GL_MAP_COHERENT_BIT: u32 = 0x0080;
 
-fn is_stub(dispatch: &backend::dispatch::GlesDispatch, f: usize) -> bool {
-    f == dispatch.stub as usize
+fn is_stub(dispatch: &backend::dispatch::GlesDispatch, f: *const ()) -> bool {
+    f == dispatch.stub as *const ()
 }
 
 #[unsafe(no_mangle)]
@@ -89,16 +89,14 @@ pub extern "C" fn glBufferStorage(
     flags: u32,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        // GLES does not support persistent/coherent mapping. Strip those bits
-        // and fall back to ordinary immutable storage or buffer data.
-        let adjusted_flags = flags & !(GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
-
-        if is_stub(dispatch, dispatch.buffer_storage as usize) {
-            // No glBufferStorage support: emulate with glBufferData.
-            // GL_DYNAMIC_DRAW is a safe default for buffers that will be mapped.
+        // 注意：这里 is_stub 的签名请确保和 drawing.rs 里一致（推荐用 *const ()）
+        if is_stub(dispatch, dispatch.buffer_storage as *const ()) {
+            // 如果底层真的没有 glBufferStorage，只能降级为 glBufferData
             (dispatch.buffer_data)(target, size, data, 0x88E8); // GL_DYNAMIC_DRAW
         } else {
-            (dispatch.buffer_storage)(target, size, data, adjusted_flags);
+            // ✅ 修复：原样传入 flags！不要剥离 PERSISTENT 和 COHERENT！
+            // MC 的顶点流式上传完全依赖这两个 Bit。
+            (dispatch.buffer_storage)(target, size, data, flags);
         }
     });
 }
@@ -131,13 +129,10 @@ pub extern "C" fn glMapBufferRange(
     access: u32,
 ) -> *mut std::ffi::c_void {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        // GLES does not support persistent/coherent mapping. Strip those bits
-        // so the underlying driver accepts the call.
-        let adjusted_access = access & !(GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
-        (dispatch.map_buffer_range)(target, offset, length, adjusted_access)
+        // ✅ 修复：原样传入 access！不要剥离 PERSISTENT 和 COHERENT！
+        (dispatch.map_buffer_range)(target, offset, length, access)
     })
 }
-
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glUnmapBuffer(target: u32) -> u8 {
@@ -209,7 +204,18 @@ pub extern "C" fn glGetBufferSubData(
     data: *mut std::ffi::c_void,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.get_buffer_sub_data)(target, offset, size, data);
+        if is_stub(dispatch, dispatch.get_buffer_sub_data as *const ()) {
+            // GLES 没有 glGetBufferSubData，用 MapBufferRange 模拟
+            let ptr = (dispatch.map_buffer_range)(
+                target, offset, size, 0x0001, /* GL_MAP_READ_BIT */
+            );
+            if !ptr.is_null() {
+                std::ptr::copy_nonoverlapping(ptr, data, size as usize);
+                (dispatch.unmap_buffer)(target);
+            }
+        } else {
+            (dispatch.get_buffer_sub_data)(target, offset, size, data);
+        }
     });
 }
 
