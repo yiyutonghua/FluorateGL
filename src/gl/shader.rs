@@ -69,11 +69,6 @@ pub extern "C" fn glShaderSource(
             source.push_str(&piece);
         }
 
-        // Use the shaderc+naga SPIR-V pipeline. Geometry/tessellation stages
-        // cannot be represented by naga 30; if the GLES driver supports the
-        // matching extension, pass the original desktop GLSL through unchanged.
-        // For all other failures, fall back to the original source as a last
-        // resort so the GLES compiler can give us its native error message.
         use crate::shader_translator::spirv_pass::TranslationResult;
         let (upload_source, translated) = match crate::shader_translator::spirv_pass::translate(
             &source, stage,
@@ -300,4 +295,61 @@ pub extern "C" fn glReleaseShaderCompiler() {
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.release_shader_compiler)();
     });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glCreateShaderProgramv(
+    shader_type: u32,
+    count: i32,
+    strings: *const *const libc::c_char,
+) -> u32 {
+    log::info!(
+        "[FluorateGL] Intercepted glCreateShaderProgramv for stage 0x{:04X}",
+        shader_type
+    );
+
+    // 1. 手动创建 Shader
+    let shader_id = glCreateShader(shader_type);
+    if shader_id == 0 {
+        return 0;
+    }
+
+    // 2. 手动上传源码（这里会触发我们的 SPIR-V 翻译管线！）
+    glShaderSource(shader_id, count, strings, std::ptr::null());
+
+    // 3. 手动编译
+    glCompileShader(shader_id);
+
+    // 4. 检查编译状态
+    let mut status = 0i32;
+    glGetShaderiv(shader_id, 0x8B81 /* GL_COMPILE_STATUS */, &mut status);
+
+    if status == 0 {
+        log::error!("[FluorateGL] glCreateShaderProgramv: Shader compilation failed internally.");
+        // 即使失败也要创建 program 返回，否则 MC 会崩溃
+    }
+
+    // 5. 创建 Program 并链接
+    let program_id = backend::with_gles_dispatch(|dispatch| unsafe {
+        let prog = (dispatch.create_program)();
+        if prog == 0 {
+            return 0;
+        }
+
+        // 获取底层的 GLES shader id
+        let gles_shader = state::with_state(|s| s.shaders.get_gles(shader_id).unwrap_or(0));
+        if gles_shader != 0 {
+            (dispatch.attach_shader)(prog, gles_shader);
+            (dispatch.link_program)(prog);
+            (dispatch.detach_shader)(prog, gles_shader);
+        }
+
+        prog
+    });
+
+    // 6. 清理 Shader 对象（glCreateShaderProgramv 规范要求隐式删除 shader）
+    glDeleteShader(shader_id);
+
+    program_id
 }

@@ -1,3 +1,4 @@
+use regex::Regex;
 use spirv_cross2::compile::glsl::GlslVersion;
 use spirv_cross2::compile::{CompilableTarget, CompiledArtifact};
 use spirv_cross2::targets::Glsl;
@@ -41,10 +42,7 @@ fn translate_internal(source: &str, stage: u32) -> TranslationResult {
     let spv = match compile_to_spirv(source, stage) {
         Some(s) => s,
         None => {
-            log::warn!(
-                "[ShaderTranslator] shaderc compile failed for stage {}",
-                stage_name
-            );
+            // 这里不需要再 log 了，compile_to_spirv 内部已经打印了详细错误
             return TranslationResult::Failed;
         }
     };
@@ -83,9 +81,11 @@ fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
     let mut options = shaderc::CompileOptions::new().ok()?;
 
     options.set_target_env(
-        shaderc::TargetEnv::Vulkan,
-        shaderc::EnvVersion::Vulkan1_1 as u32,
+        shaderc::TargetEnv::OpenGL,
+        shaderc::EnvVersion::OpenGL4_5 as u32,
     );
+    options.set_source_language(shaderc::SourceLanguage::GLSL);
+
     options.set_optimization_level(shaderc::OptimizationLevel::Zero);
     options.set_auto_map_locations(true);
     options.set_auto_bind_uniforms(true);
@@ -97,7 +97,7 @@ fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
     compiler
         .compile_into_spirv(source, kind, &file_name, "main", Some(&options))
         .map_err(|e| {
-            log::warn!("[ShaderTranslator] shaderc compile failed: {}", e);
+            log::error!("[ShaderTranslator] shaderc compile failed: {}", e);
         })
         .ok()
         .map(|a| a.as_binary().to_vec())
@@ -116,7 +116,10 @@ fn spirv_to_gles(spv: &[u32], version: u16) -> Result<String, SpirvCrossError> {
     };
 
     let artifact: CompiledArtifact<Glsl> = compiler.compile(&options)?;
-    Ok(artifact.to_string())
+    let src = artifact.to_string();
+
+    // ✅ 核心修复：调用后处理函数，解决 Link 阶段的所有冲突
+    Ok(post_process_glsl_es(&src))
 }
 
 fn shader_kind(stage: u32) -> shaderc::ShaderKind {
@@ -133,13 +136,13 @@ fn shader_kind(stage: u32) -> shaderc::ShaderKind {
 
 fn stage_name(stage: u32) -> &'static str {
     match stage {
-        GL_VERTEX_SHADER => "vertex ",
-        GL_FRAGMENT_SHADER => "fragment ",
-        GL_GEOMETRY_SHADER => "geometry ",
-        GL_TESS_CONTROL_SHADER => "tess_control ",
-        GL_TESS_EVALUATION_SHADER => "tess_eval ",
-        GL_COMPUTE_SHADER => "compute ",
-        _ => "unknown ",
+        GL_VERTEX_SHADER => "vertex",
+        GL_FRAGMENT_SHADER => "fragment",
+        GL_GEOMETRY_SHADER => "geometry",
+        GL_TESS_CONTROL_SHADER => "tess_control",
+        GL_TESS_EVALUATION_SHADER => "tess_eval",
+        GL_COMPUTE_SHADER => "compute",
+        _ => "unknown",
     }
 }
 
@@ -157,10 +160,48 @@ fn gles_version_candidates(source: &str) -> Vec<u16> {
                 .and_then(|v| v.parse::<u32>().ok())
         })
         .unwrap_or(150);
-
     match desktop_version {
-        460 | 450 | 440 => vec![300, 310, 320],
-        430 | 420 | 410 | 400 | 330 => vec![300, 310],
-        _ => vec![300],
+        460 | 450 | 440 | 430 | 420 | 410 | 400 | 330 => vec![320, 310, 300],
+        _ => vec![310, 300],
     }
+}
+
+/// 后处理 GLSL ES 代码，移除会导致链接冲突的硬编码 layout 修饰符
+fn post_process_glsl_es(src: &str) -> String {
+    let mut result = src.to_string();
+
+    // 1. 移除 Sampler 和 Image 的 layout
+    let re_sampler = Regex::new(
+        r"(?i)layout\s*\([^)]*\)\s*(uniform\s+(?:highp\s+|mediump\s+|lowp\s+)?(?:sampler|image))",
+    )
+    .unwrap();
+    result = re_sampler.replace_all(&result, "$1").to_string();
+
+    // 2. 移除 Uniform Block (UBO) 的 binding = X
+    let re_ubo = Regex::new(r"(?i)layout\s*\(([^)]*)\)\s*(uniform\s+[A-Za-z0-9_]+\s*\{)").unwrap();
+    let re_binding = Regex::new(r"(?i),?\s*binding\s*=\s*\d+\s*,?").unwrap();
+    let re_multi_comma = Regex::new(r",\s*,").unwrap();
+
+    result = re_ubo
+        .replace_all(&result, |caps: &regex::Captures| {
+            let mut params = caps[1].to_string();
+            params = re_binding.replace_all(&params, "").to_string();
+            params = params
+                .trim_matches(|c: char| c == ',' || c.is_whitespace())
+                .to_string();
+            params = re_multi_comma.replace_all(&params, ",").to_string();
+            if params.is_empty() {
+                format!("{}", &caps[2])
+            } else {
+                format!("layout({}) {}", params, &caps[2])
+            }
+        })
+        .to_string();
+
+    // ✅ 3. 核心修复：移除 in/out 变量的 location，解决 VS/FS 链接时的 Input Output Mismatch
+    // 匹配: layout(location = 0) in vec4 texCoord0; -> in vec4 texCoord0;
+    let re_io = Regex::new(r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*\)\s*(in|out)\b").unwrap();
+    result = re_io.replace_all(&result, "$1").to_string();
+
+    result
 }

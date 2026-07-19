@@ -98,6 +98,7 @@ pub struct GlesDispatch {
     pub compile_shader: unsafe extern "C" fn(u32),
     pub get_shader_iv: unsafe extern "C" fn(u32, u32, *mut i32),
     pub get_shader_info_log: unsafe extern "C" fn(u32, i32, *mut i32, *mut c_char),
+    pub gl_create_shader_programv: unsafe extern "C" fn(u32, i32, *const *const c_char) -> u32,
 
     // B类：Program
     pub create_program: unsafe extern "C" fn() -> u32,
@@ -452,6 +453,9 @@ impl GlesDispatch {
             compile_shader: unsafe { std::mem::transmute(load!("glCompileShader")) },
             get_shader_iv: unsafe { std::mem::transmute(load!("glGetShaderiv")) },
             get_shader_info_log: unsafe { std::mem::transmute(load!("glGetShaderInfoLog")) },
+            gl_create_shader_programv: unsafe {
+                std::mem::transmute(load!("glcreateshaderprogramv"))
+            },
 
             create_program: unsafe { std::mem::transmute(load!("glCreateProgram")) },
             delete_program: unsafe { std::mem::transmute(load!("glDeleteProgram")) },
