@@ -32,6 +32,7 @@ impl Config {
         let log_level = match env::var("FLUORATEGL_LOG").as_deref() {
             Ok("error") => LogLevel::Error,
             Ok("warn") => LogLevel::Warn,
+            Ok("info") => LogLevel::Info,
             Ok("debug") => LogLevel::Debug,
             Ok("trace") => LogLevel::Trace,
             _ => LogLevel::Debug,

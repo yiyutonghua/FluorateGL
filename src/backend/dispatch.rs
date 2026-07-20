@@ -318,7 +318,7 @@ impl GlesDispatch {
             ($name:expr) => {{
                 let ptr = loader.get_proc($name);
                 if ptr.is_null() {
-                    eprintln!("[GlesDispatch] failed to load required function: {}", $name);
+                    log::warn!("[GlesDispatch] failed to load required function: {}", $name);
                     return None;
                 }
                 ptr
@@ -329,7 +329,7 @@ impl GlesDispatch {
             ($name:expr) => {{
                 let ptr = loader.get_proc($name);
                 if ptr.is_null() {
-                    eprintln!(
+                    log::warn!(
                         "[GlesDispatch] warning: optional function not available: {}",
                         $name
                     );

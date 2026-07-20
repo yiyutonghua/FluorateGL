@@ -25,7 +25,7 @@ pub extern "C" fn fluorategl_init() -> i32 {
     util::log::init(&cfg);
 
     log::info!("[FluorateGL] Initializing...");
-    log::info!("[FluorateGL] Backend: {:?}", cfg.backend);
+    log::info!("[FluorateGL] Backend: {:?}, LogLevel: {:?}", cfg.backend, cfg.log_level);
 
     backend::set_config(cfg);
 
