@@ -74,6 +74,10 @@ impl EglDispatch {
             ($name:expr) => {{
                 let ptr = loader.get_proc($name);
                 if ptr.is_null() {
+                    log::warn!(
+                        "[EglDispatch] warning: optional function not available: {}",
+                        $name
+                    );
                     unimplemented_stub as *mut c_void
                 } else {
                     ptr
