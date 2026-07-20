@@ -35,7 +35,7 @@ impl Config {
             Ok("info") => LogLevel::Info,
             Ok("debug") => LogLevel::Debug,
             Ok("trace") => LogLevel::Trace,
-            _ => LogLevel::Debug,
+            _ => LogLevel::Info,
         };
 
         Self { backend, log_level }

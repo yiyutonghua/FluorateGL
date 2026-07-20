@@ -60,5 +60,9 @@ fn translate_legacy_150_vertex_fails_gracefully() {
 fn translate_invalid_source_does_not_panic() {
     let src = "#version 330 core\nthis is not valid glsl\n";
     let result = translate(src, GL_VERTEX_SHADER);
-    assert!(matches!(result, TranslationResult::Failed), "got {:?}", result);
+    assert!(
+        matches!(result, TranslationResult::Failed),
+        "got {:?}",
+        result
+    );
 }

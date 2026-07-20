@@ -133,18 +133,24 @@ pub extern "C" fn glDeleteTextures(n: i32, textures: *const u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glBindTexture(target: u32, texture: u32) {
-    log::debug!("[FluorateGL] glBindTexture(target=0x{:04X}, texture={})", target, texture);
+    log::debug!(
+        "[FluorateGL] glBindTexture(target=0x{:04X}, texture={})",
+        target,
+        texture
+    );
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = if texture == 0 {
             0
         } else {
-            state::with_state(|s| s.textures.get_gles(texture).unwrap_or_else(|| {
+            state::with_state(|s| {
+                s.textures.get_gles(texture).unwrap_or_else(|| {
                 log::warn!(
                     "[FluorateGL] glBindTexture(0x{:04X}, {}): desktop ID not found in IdMap, unbinding",
                     target, texture
                 );
                 0
-            }))
+            })
+            })
         };
 
         (dispatch.bind_texture)(target, gles_id);
@@ -168,12 +174,20 @@ pub extern "C" fn glTexImage2D(
     let normalized = normalize_internal_format(internalformat as u32) as i32;
     log::debug!(
         "[FluorateGL] glTexImage2D(target=0x{:04X}, level={}, internalformat=0x{:04X}, {}x{}, format=0x{:04X}, type=0x{:04X}, pixels={:?})",
-        target, level, internalformat, width, height, format, type_, pixels
+        target,
+        level,
+        internalformat,
+        width,
+        height,
+        format,
+        type_,
+        pixels
     );
     if normalized != internalformat {
         log::debug!(
             "[FluorateGL] glTexImage2D: normalized internalformat 0x{:04X} -> 0x{:04X}",
-            internalformat, normalized
+            internalformat,
+            normalized
         );
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -208,7 +222,9 @@ pub extern "C" fn glTexSubImage2D(
 pub extern "C" fn glTexParameteri(target: u32, pname: u32, param: i32) {
     log::debug!(
         "[FluorateGL] glTexParameteri(target=0x{:04X}, pname=0x{:04X}, param={})",
-        target, pname, param
+        target,
+        pname,
+        param
     );
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.tex_parameter_i)(target, pname, param);
@@ -278,12 +294,17 @@ pub extern "C" fn glTexStorage2D(
     let normalized = normalize_internal_format(internalformat);
     log::debug!(
         "[FluorateGL] glTexStorage2D(target=0x{:04X}, levels={}, internalformat=0x{:04X}, {}x{})",
-        target, levels, internalformat, width, height
+        target,
+        levels,
+        internalformat,
+        width,
+        height
     );
     if normalized != internalformat {
         log::debug!(
             "[FluorateGL] glTexStorage2D: normalized internalformat 0x{:04X} -> 0x{:04X}",
-            internalformat, normalized
+            internalformat,
+            normalized
         );
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -319,7 +340,9 @@ pub extern "C" fn glTexStorage3D(
 pub extern "C" fn glTexParameterf(target: u32, pname: u32, param: f32) {
     log::debug!(
         "[FluorateGL] glTexParameterf(target=0x{:04X}, pname=0x{:04X}, param={})",
-        target, pname, param
+        target,
+        pname,
+        param
     );
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.tex_parameter_f)(target, pname, param);
@@ -356,7 +379,13 @@ pub extern "C" fn glCompressedTexImage2D(
 ) {
     log::debug!(
         "[FluorateGL] glCompressedTexImage2D(target=0x{:04X}, level={}, internalformat=0x{:04X}, {}x{}, imageSize={}, data={:?})",
-        target, level, internalformat, width, height, imageSize, data
+        target,
+        level,
+        internalformat,
+        width,
+        height,
+        imageSize,
+        data
     );
 
     // 防止将非压缩格式透传给 GLES 导致 GL_INVALID_ENUM 崩溃
@@ -364,13 +393,20 @@ pub extern "C" fn glCompressedTexImage2D(
         let normalized = normalize_internal_format(internalformat);
         log::warn!(
             "[FluorateGL] glCompressedTexImage2D: internalformat 0x{:04X} is not a compressed format, normalizing to 0x{:04X} and using glTexImage2D instead",
-            internalformat, normalized
+            internalformat,
+            normalized
         );
         // 对非压缩格式降级为 glTexImage2D（data 指针直接复用，格式兼容）
         backend::with_gles_dispatch(|dispatch| unsafe {
             (dispatch.tex_image_2d)(
-                target, level, normalized as i32, width, height, border,
-                GL_RGBA, 0x1401, // GL_UNSIGNED_BYTE
+                target,
+                level,
+                normalized as i32,
+                width,
+                height,
+                border,
+                GL_RGBA,
+                0x1401, // GL_UNSIGNED_BYTE
                 data,
             );
         });
@@ -426,7 +462,14 @@ pub extern "C" fn glCompressedTexImage3D(
 ) {
     log::debug!(
         "[FluorateGL] glCompressedTexImage3D(target=0x{:04X}, level={}, internalformat=0x{:04X}, {}x{}x{}, imageSize={}, data={:?})",
-        target, level, internalformat, width, height, depth, imageSize, data
+        target,
+        level,
+        internalformat,
+        width,
+        height,
+        depth,
+        imageSize,
+        data
     );
 
     if !is_compressed_format(internalformat) {

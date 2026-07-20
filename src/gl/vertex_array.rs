@@ -35,13 +35,15 @@ pub extern "C" fn glBindVertexArray(array: u32) {
         let gles_id = if array == 0 {
             0
         } else {
-            state::with_state(|s| s.vertex_arrays.get_gles(array).unwrap_or_else(|| {
+            state::with_state(|s| {
+                s.vertex_arrays.get_gles(array).unwrap_or_else(|| {
                 log::warn!(
                     "[FluorateGL] glBindVertexArray({}): desktop ID not found in IdMap, unbinding",
                     array
                 );
                 0
-            }))
+            })
+            })
         };
 
         (dispatch.bind_vertex_array)(gles_id);

@@ -311,10 +311,17 @@ mod tests {
         match result {
             TranslationResult::Translated(out) => {
                 assert!(out.contains("#version"), "missing #version: {}", out);
-                assert!(out.contains("uniform mat4 MVP"), "plain uniform kept layout: {}", out);
+                assert!(
+                    out.contains("uniform mat4 MVP"),
+                    "plain uniform kept layout: {}",
+                    out
+                );
                 assert!(!out.contains("binding = 0) uniform mat4"), "got: {}", out);
             }
-            other => panic!("expected Translated, got {:?} (shaderc/spirv-cross available?)", other),
+            other => panic!(
+                "expected Translated, got {:?} (shaderc/spirv-cross available?)",
+                other
+            ),
         }
     }
 
@@ -338,7 +345,11 @@ mod tests {
     fn translate_invalid_shader_does_not_panic() {
         let src = "#version 330 core\nthis is not valid glsl\n";
         let result = translate(src, GL_VERTEX_SHADER);
-        assert!(matches!(result, TranslationResult::Failed), "expected Failed, got {:?}", result);
+        assert!(
+            matches!(result, TranslationResult::Failed),
+            "expected Failed, got {:?}",
+            result
+        );
     }
 
     #[test]

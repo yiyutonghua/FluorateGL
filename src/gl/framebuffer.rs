@@ -48,7 +48,8 @@ pub extern "C" fn glBindFramebuffer(target: u32, framebuffer: u32) {
         } else {
             log::warn!(
                 "[FluorateGL] glBindFramebuffer(0x{:04X}, {}): desktop ID not found in IdMap, ignored",
-                target, framebuffer
+                target,
+                framebuffer
             );
         }
     });
@@ -65,19 +66,25 @@ pub extern "C" fn glFramebufferTexture2D(
 ) {
     log::debug!(
         "[FluorateGL] glFramebufferTexture2D(target=0x{:04X}, attachment=0x{:04X}, textarget=0x{:04X}, texture={}, level={})",
-        target, attachment, textarget, texture, level
+        target,
+        attachment,
+        textarget,
+        texture,
+        level
     );
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_texture = if texture == 0 {
             0
         } else {
-            state::with_state(|s| s.textures.get_gles(texture).unwrap_or_else(|| {
+            state::with_state(|s| {
+                s.textures.get_gles(texture).unwrap_or_else(|| {
                 log::warn!(
                     "[FluorateGL] glFramebufferTexture2D: texture desktop ID {} not found in IdMap, unbinding",
                     texture
                 );
                 0
-            }))
+            })
+            })
         };
 
         (dispatch.framebuffer_texture_2d)(target, attachment, textarget, gles_texture, level);
@@ -97,13 +104,15 @@ pub extern "C" fn glFramebufferTextureLayer(
         let gles_texture = if texture == 0 {
             0
         } else {
-            state::with_state(|s| s.textures.get_gles(texture).unwrap_or_else(|| {
+            state::with_state(|s| {
+                s.textures.get_gles(texture).unwrap_or_else(|| {
                 log::warn!(
                     "[FluorateGL] glFramebufferTextureLayer: texture desktop ID {} not found in IdMap, unbinding",
                     texture
                 );
                 0
-            }))
+            })
+            })
         };
 
         (dispatch.framebuffer_texture_layer)(target, attachment, gles_texture, level, layer);
@@ -122,13 +131,15 @@ pub extern "C" fn glFramebufferRenderbuffer(
         let gles_renderbuffer = if renderbuffer == 0 {
             0
         } else {
-            state::with_state(|s| s.renderbuffers.get_gles(renderbuffer).unwrap_or_else(|| {
+            state::with_state(|s| {
+                s.renderbuffers.get_gles(renderbuffer).unwrap_or_else(|| {
                 log::warn!(
                     "[FluorateGL] glFramebufferRenderbuffer: renderbuffer desktop ID {} not found in IdMap, unbinding",
                     renderbuffer
                 );
                 0
-            }))
+            })
+            })
         };
 
         (dispatch.framebuffer_renderbuffer)(
@@ -193,7 +204,8 @@ pub extern "C" fn glBindRenderbuffer(target: u32, renderbuffer: u32) {
         } else {
             log::warn!(
                 "[FluorateGL] glBindRenderbuffer(0x{:04X}, {}): desktop ID not found in IdMap, ignored",
-                target, renderbuffer
+                target,
+                renderbuffer
             );
         }
     });
@@ -204,7 +216,10 @@ pub extern "C" fn glBindRenderbuffer(target: u32, renderbuffer: u32) {
 pub extern "C" fn glRenderbufferStorage(target: u32, internalformat: u32, width: i32, height: i32) {
     log::debug!(
         "[FluorateGL] glRenderbufferStorage(target=0x{:04X}, internalformat=0x{:04X}, {}x{})",
-        target, internalformat, width, height
+        target,
+        internalformat,
+        width,
+        height
     );
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.renderbuffer_storage)(target, internalformat, width, height);

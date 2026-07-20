@@ -50,7 +50,8 @@ pub extern "C" fn glShaderSource(
         if string.is_null() || count <= 0 {
             log::warn!(
                 "[FluorateGL] glShaderSource: invalid args (string={:?}, count={})",
-                string, count
+                string,
+                count
             );
             return;
         }

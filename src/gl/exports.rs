@@ -366,7 +366,8 @@ fn translate_binding_to_desktop(pname: u32, data: *mut i32) {
     } else {
         log::warn!(
             "[FluorateGL] glGetIntegerv(0x{:04X}): GLES ID {} not found in IdMap, returning raw GLES ID",
-            pname, gles_id
+            pname,
+            gles_id
         );
     }
 }

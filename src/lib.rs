@@ -23,9 +23,8 @@ fn capture_self_handle() {
     if unsafe { libc::dladdr(addr as *const _, &mut info) } != 0 {
         if !info.dli_fname.is_null() {
             // 先尝试 RTLD_NOLOAD（不重新加载，只增加引用计数）
-            let handle = unsafe {
-                libc::dlopen(info.dli_fname, libc::RTLD_NOW | libc::RTLD_NOLOAD)
-            };
+            let handle =
+                unsafe { libc::dlopen(info.dli_fname, libc::RTLD_NOW | libc::RTLD_NOLOAD) };
             // Android 旧版本可能不支持 RTLD_NOLOAD，回退到普通 dlopen
             let handle = if handle.is_null() {
                 unsafe { libc::dlopen(info.dli_fname, libc::RTLD_NOW) }
@@ -40,14 +39,15 @@ fn capture_self_handle() {
                     unsafe { std::ffi::CStr::from_ptr(info.dli_fname) }
                 );
             } else {
-                log::warn!(
-                    "[FluorateGL] dlopen failed for self handle: {:?}",
-                    unsafe { std::ffi::CStr::from_ptr(info.dli_fname) }
-                );
+                log::warn!("[FluorateGL] dlopen failed for self handle: {:?}", unsafe {
+                    std::ffi::CStr::from_ptr(info.dli_fname)
+                });
             }
         }
     } else {
-        log::warn!("[FluorateGL] dladdr failed, eglGetProcAddress may return wrong function pointers");
+        log::warn!(
+            "[FluorateGL] dladdr failed, eglGetProcAddress may return wrong function pointers"
+        );
     }
 }
 
@@ -70,7 +70,11 @@ pub extern "C" fn fluorategl_init() -> i32 {
     util::log::init(&cfg);
 
     log::info!("[FluorateGL] Initializing...");
-    log::info!("[FluorateGL] Backend: {:?}, LogLevel: {:?}", cfg.backend, cfg.log_level);
+    log::info!(
+        "[FluorateGL] Backend: {:?}, LogLevel: {:?}",
+        cfg.backend,
+        cfg.log_level
+    );
 
     // 在初始化日志后立即捕获自己的库句柄（用于 eglGetProcAddress）
     capture_self_handle();

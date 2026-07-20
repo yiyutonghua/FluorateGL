@@ -35,13 +35,15 @@ pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
         let gles_id = if buffer == 0 {
             0
         } else {
-            state::with_state(|s| s.buffers.get_gles(buffer).unwrap_or_else(|| {
+            state::with_state(|s| {
+                s.buffers.get_gles(buffer).unwrap_or_else(|| {
                 log::warn!(
                     "[FluorateGL] glBindBuffer(0x{:04X}, {}): desktop ID not found in IdMap, unbinding",
                     target, buffer
                 );
                 0
-            }))
+            })
+            })
         };
 
         (dispatch.bind_buffer)(target, gles_id);
@@ -114,9 +116,7 @@ pub extern "C" fn glMapBuffer(target: u32, access: u32) -> *mut std::ffi::c_void
         // glMapBuffer is not available in GLES 3.0; emulate it with glMapBufferRange.
         // 若 map_buffer_range 也是 stub（驱动不支持），返回 null 避免后续 UB。
         if is_stub(dispatch, dispatch.map_buffer_range as *const ()) {
-            log::warn!(
-                "[FluorateGL] glMapBuffer: glMapBufferRange not available, returning null"
-            );
+            log::warn!("[FluorateGL] glMapBuffer: glMapBufferRange not available, returning null");
             return std::ptr::null_mut();
         }
 
@@ -191,13 +191,15 @@ pub extern "C" fn glBindBufferBase(target: u32, index: u32, buffer: u32) {
         let gles_id = if buffer == 0 {
             0
         } else {
-            state::with_state(|s| s.buffers.get_gles(buffer).unwrap_or_else(|| {
+            state::with_state(|s| {
+                s.buffers.get_gles(buffer).unwrap_or_else(|| {
                 log::warn!(
                     "[FluorateGL] glBindBufferBase(0x{:04X}, {}): desktop ID {} not found in IdMap, unbinding",
                     target, index, buffer
                 );
                 0
-            }))
+            })
+            })
         };
 
         (dispatch.bind_buffer_base)(target, index, gles_id);
@@ -217,13 +219,15 @@ pub extern "C" fn glBindBufferRange(
         let gles_id = if buffer == 0 {
             0
         } else {
-            state::with_state(|s| s.buffers.get_gles(buffer).unwrap_or_else(|| {
+            state::with_state(|s| {
+                s.buffers.get_gles(buffer).unwrap_or_else(|| {
                 log::warn!(
                     "[FluorateGL] glBindBufferRange(0x{:04X}, {}): desktop ID {} not found in IdMap, unbinding",
                     target, index, buffer
                 );
                 0
-            }))
+            })
+            })
         };
 
         (dispatch.bind_buffer_range)(target, index, gles_id, offset, size);
