@@ -239,7 +239,7 @@ pub extern "C" fn eglMakeCurrent(
     read: *mut std::ffi::c_void,
     ctx: *mut std::ffi::c_void,
 ) -> u32 {
-    log::debug!(
+    log::info!(
         "[EGL] eglMakeCurrent dpy={:?} draw={:?} read={:?} ctx={:?}",
         dpy,
         draw,
@@ -247,7 +247,7 @@ pub extern "C" fn eglMakeCurrent(
         ctx
     );
     let result = dispatcher::make_current(dpy, draw, read, ctx);
-    log::debug!("[EGL] eglMakeCurrent result=0x{:04X}", result);
+    log::info!("[EGL] eglMakeCurrent result=0x{:04X}", result);
     result
 }
 

@@ -5,7 +5,7 @@ use crate::gl::exports::is_unsupported_gles_cap;
 #[allow(non_snake_case)]
 pub extern "C" fn glEnablei(cap: u32, index: u32) {
     if is_unsupported_gles_cap(cap) {
-        log::debug!(
+        log::info!(
             "[FluorateGL] glEnablei(0x{:04X}, {}) ignored (unsupported in GLES)",
             cap, index
         );
@@ -20,7 +20,7 @@ pub extern "C" fn glEnablei(cap: u32, index: u32) {
 #[allow(non_snake_case)]
 pub extern "C" fn glDisablei(cap: u32, index: u32) {
     if is_unsupported_gles_cap(cap) {
-        log::debug!(
+        log::info!(
             "[FluorateGL] glDisablei(0x{:04X}, {}) ignored (unsupported in GLES)",
             cap, index
         );

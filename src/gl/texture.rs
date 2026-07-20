@@ -225,7 +225,7 @@ pub extern "C" fn glTexImage3D(
 ) {
     let normalized = normalize_internal_format(internalformat as u32) as i32;
     if normalized != internalformat {
-        log::debug!(
+        log::info!(
             "glTexImage3D: normalized internalformat 0x{:04X} -> 0x{:04X}",
             internalformat,
             normalized
@@ -297,7 +297,7 @@ pub extern "C" fn glTexStorage3D(
 ) {
     let normalized = normalize_internal_format(internalformat);
     if normalized != internalformat {
-        log::debug!(
+        log::info!(
             "glTexStorage3D: normalized internalformat 0x{:04X} -> 0x{:04X}",
             internalformat,
             normalized

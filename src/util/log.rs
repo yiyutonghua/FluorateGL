@@ -35,7 +35,9 @@ pub fn init(cfg: &Config) {
 
     static LOGGER: OnceLock<Logger> = OnceLock::new();
     let logger = LOGGER.get_or_init(|| Logger { max_level });
-    let _ = log::set_logger(logger).map(|()| log::set_max_level(max_level));
+    // set_logger 可能因已有 logger 而失败，但 set_max_level 是全局的，必须单独调用
+    let _ = log::set_logger(logger);
+    log::set_max_level(max_level);
 }
 
 fn level_filter(level: LogLevel) -> LevelFilter {
