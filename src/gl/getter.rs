@@ -1,4 +1,5 @@
 use crate::backend;
+use crate::state;
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -66,6 +67,36 @@ pub extern "C" fn glGetBooleani_v(target: u32, index: u32, data: *mut u8) {
     });
 }
 
+/// 检查 target 是否为索引绑定查询，若是则将 GLES ID 翻译为桌面 ID。
+fn translate_indexed_binding_to_desktop(target: u32, data: *mut i32) {
+    let gles_id = unsafe { *data } as u32;
+    if gles_id == 0 {
+        return;
+    }
+
+    let desktop_id = match target {
+        // 索引 Buffer 绑定查询 → buffers IdMap
+        0x8C8F | // GL_TRANSFORM_FEEDBACK_BUFFER_BINDING
+        0x8A28 | // GL_UNIFORM_BUFFER_BINDING
+        0x90D3 // GL_SHADER_STORAGE_BUFFER_BINDING
+        => {
+            state::with_state(|s| s.buffers.get_desktop(gles_id))
+        }
+        _ => return, // 不是绑定查询，无需翻译
+    };
+
+    if let Some(desktop_id) = desktop_id {
+        if desktop_id != gles_id {
+            unsafe { *data = desktop_id as i32 };
+        }
+    } else {
+        log::warn!(
+            "[FluorateGL] glGetIntegeri_v(0x{:04X}): GLES ID {} not found in IdMap, returning raw GLES ID",
+            target, gles_id
+        );
+    }
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetIntegeri_v(target: u32, index: u32, data: *mut i32) {
@@ -75,6 +106,8 @@ pub extern "C" fn glGetIntegeri_v(target: u32, index: u32, data: *mut i32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_integeri_v)(target, index, data);
     });
+    // 将 GLES 驱动返回的原始 GLES ID 翻译为桌面 ID
+    translate_indexed_binding_to_desktop(target, data);
 }
 
 #[unsafe(no_mangle)]

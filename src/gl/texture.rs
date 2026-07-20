@@ -138,7 +138,13 @@ pub extern "C" fn glBindTexture(target: u32, texture: u32) {
         let gles_id = if texture == 0 {
             0
         } else {
-            state::with_state(|s| s.textures.get_gles(texture).unwrap_or(0))
+            state::with_state(|s| s.textures.get_gles(texture).unwrap_or_else(|| {
+                log::warn!(
+                    "[FluorateGL] glBindTexture(0x{:04X}, {}): desktop ID not found in IdMap, unbinding",
+                    target, texture
+                );
+                0
+            }))
         };
 
         (dispatch.bind_texture)(target, gles_id);

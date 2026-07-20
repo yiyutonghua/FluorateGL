@@ -1,5 +1,6 @@
 use crate::backend;
 use crate::gl::getter;
+use crate::state;
 use libc::c_char;
 use std::ffi::CString;
 use std::sync::OnceLock;
@@ -306,6 +307,70 @@ static FAKE_EXTENSIONS: &[&[u8]] = &[
     b"GL_OES_rgb8_rgba8\0",
 ];
 
+/// 将 GLES 驱动返回的绑定查询结果中的原始 GLES ID 翻译为桌面 ID。
+/// 如果 pname 不是绑定查询，或返回值为 0，则不做任何修改。
+fn translate_binding_to_desktop(pname: u32, data: *mut i32) {
+    let gles_id = unsafe { *data } as u32;
+    if gles_id == 0 {
+        return;
+    }
+
+    let desktop_id = match pname {
+        // Buffer 绑定查询 → buffers IdMap
+        0x8894 | // GL_ARRAY_BUFFER_BINDING
+        0x8895 | // GL_ELEMENT_ARRAY_BUFFER_BINDING
+        0x8A28 | // GL_UNIFORM_BUFFER_BINDING
+        0x8F36 | // GL_COPY_READ_BUFFER_BINDING
+        0x8F37 | // GL_COPY_WRITE_BUFFER_BINDING
+        0x8C8F | // GL_TRANSFORM_FEEDBACK_BUFFER_BINDING
+        0x88ED | // GL_PIXEL_PACK_BUFFER_BINDING
+        0x88EF | // GL_PIXEL_UNPACK_BUFFER_BINDING
+        0x8F43 | // GL_DRAW_INDIRECT_BUFFER_BINDING
+        0x90D3 // GL_SHADER_STORAGE_BUFFER_BINDING
+        => {
+            state::with_state(|s| s.buffers.get_desktop(gles_id))
+        }
+        // Vertex Array 绑定 → vertex_arrays IdMap
+        0x85B5 /* GL_VERTEX_ARRAY_BINDING */ => {
+            state::with_state(|s| s.vertex_arrays.get_desktop(gles_id))
+        }
+        // Program 绑定 → programs IdMap
+        0x8B8D /* GL_CURRENT_PROGRAM */ => {
+            state::with_state(|s| s.programs.get_desktop(gles_id))
+        }
+        // Texture 绑定 → textures IdMap
+        0x8069 | // GL_TEXTURE_BINDING_2D
+        0x806A | // GL_TEXTURE_BINDING_3D
+        0x8C1D | // GL_TEXTURE_BINDING_2D_ARRAY
+        0x8514 // GL_TEXTURE_BINDING_CUBE_MAP
+        => {
+            state::with_state(|s| s.textures.get_desktop(gles_id))
+        }
+        // Framebuffer 绑定 → framebuffers IdMap
+        0x8CA6 | // GL_DRAW_FRAMEBUFFER_BINDING (= GL_FRAMEBUFFER_BINDING)
+        0x8CAA // GL_READ_FRAMEBUFFER_BINDING
+        => {
+            state::with_state(|s| s.framebuffers.get_desktop(gles_id))
+        }
+        // Renderbuffer 绑定 → renderbuffers IdMap
+        0x8CA7 /* GL_RENDERBUFFER_BINDING */ => {
+            state::with_state(|s| s.renderbuffers.get_desktop(gles_id))
+        }
+        _ => return, // 不是绑定查询，无需翻译
+    };
+
+    if let Some(desktop_id) = desktop_id {
+        if desktop_id != gles_id {
+            unsafe { *data = desktop_id as i32 };
+        }
+    } else {
+        log::warn!(
+            "[FluorateGL] glGetIntegerv(0x{:04X}): GLES ID {} not found in IdMap, returning raw GLES ID",
+            pname, gles_id
+        );
+    }
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
@@ -329,7 +394,11 @@ pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
             // GL_CONTEXT_PROFILE_MASK
             unsafe { *data = 0x00000001 }; // GL_CONTEXT_CORE_PROFILE_BIT
         }
-        _ => getter::get_integerv(pname, data),
+        _ => {
+            getter::get_integerv(pname, data);
+            // 将 GLES 驱动返回的原始 GLES ID 翻译为桌面 ID
+            translate_binding_to_desktop(pname, data);
+        }
     }
     log::debug!(
         "[FluorateGL] glGetIntegerv(0x{:04X}) -> {}",

@@ -35,7 +35,13 @@ pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
         let gles_id = if buffer == 0 {
             0
         } else {
-            state::with_state(|s| s.buffers.get_gles(buffer).unwrap_or(0))
+            state::with_state(|s| s.buffers.get_gles(buffer).unwrap_or_else(|| {
+                log::warn!(
+                    "[FluorateGL] glBindBuffer(0x{:04X}, {}): desktop ID not found in IdMap, unbinding",
+                    target, buffer
+                );
+                0
+            }))
         };
 
         (dispatch.bind_buffer)(target, gles_id);
@@ -185,7 +191,13 @@ pub extern "C" fn glBindBufferBase(target: u32, index: u32, buffer: u32) {
         let gles_id = if buffer == 0 {
             0
         } else {
-            state::with_state(|s| s.buffers.get_gles(buffer).unwrap_or(0))
+            state::with_state(|s| s.buffers.get_gles(buffer).unwrap_or_else(|| {
+                log::warn!(
+                    "[FluorateGL] glBindBufferBase(0x{:04X}, {}): desktop ID {} not found in IdMap, unbinding",
+                    target, index, buffer
+                );
+                0
+            }))
         };
 
         (dispatch.bind_buffer_base)(target, index, gles_id);
@@ -205,7 +217,13 @@ pub extern "C" fn glBindBufferRange(
         let gles_id = if buffer == 0 {
             0
         } else {
-            state::with_state(|s| s.buffers.get_gles(buffer).unwrap_or(0))
+            state::with_state(|s| s.buffers.get_gles(buffer).unwrap_or_else(|| {
+                log::warn!(
+                    "[FluorateGL] glBindBufferRange(0x{:04X}, {}): desktop ID {} not found in IdMap, unbinding",
+                    target, index, buffer
+                );
+                0
+            }))
         };
 
         (dispatch.bind_buffer_range)(target, index, gles_id, offset, size);
