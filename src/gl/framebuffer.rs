@@ -281,6 +281,9 @@ pub extern "C" fn glGetFramebufferAttachmentParameteriv(
     pname: u32,
     params: *mut i32,
 ) {
+    if params.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_framebuffer_attachment_parameter_iv)(target, attachment, pname, params);
     });

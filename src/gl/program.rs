@@ -63,6 +63,9 @@ pub extern "C" fn glUseProgram(program: u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetProgramiv(program: u32, pname: u32, params: *mut i32) {
+    if params.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
@@ -350,6 +353,9 @@ pub extern "C" fn glGetActiveUniformBlockiv(
     pname: u32,
     params: *mut i32,
 ) {
+    if params.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
@@ -409,6 +415,9 @@ pub extern "C" fn glGetActiveUniformsiv(
     pname: u32,
     params: *mut i32,
 ) {
+    if params.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {

@@ -402,6 +402,9 @@ pub extern "C" fn glGetTexImage(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetTexLevelParameteriv(target: u32, level: i32, pname: u32, params: *mut i32) {
+    if params.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_tex_level_parameter_iv)(target, level, pname, params);
     });
@@ -410,6 +413,9 @@ pub extern "C" fn glGetTexLevelParameteriv(target: u32, level: i32, pname: u32, 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetTexParameteriv(target: u32, pname: u32, params: *mut i32) {
+    if params.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_tex_parameter_iv)(target, pname, params);
     });
@@ -418,5 +424,15 @@ pub extern "C" fn glGetTexParameteriv(target: u32, pname: u32, params: *mut i32)
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glIsTexture(texture: u32) -> u8 {
-    backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.is_texture)(texture) })
+    if texture == 0 {
+        return 0;
+    }
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        // texture 是 desktop id，需要先转回 gles id
+        let gles_id = state::with_state(|s| s.textures.get_gles(texture).unwrap_or(0));
+        if gles_id == 0 {
+            return 0;
+        }
+        (dispatch.is_texture)(gles_id)
+    })
 }

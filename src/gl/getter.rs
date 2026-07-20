@@ -3,6 +3,9 @@ use crate::backend;
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetBooleanv(pname: u32, data: *mut u8) {
+    if data.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_boolean_v)(pname, data);
     });
@@ -11,6 +14,9 @@ pub extern "C" fn glGetBooleanv(pname: u32, data: *mut u8) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetFloatv(pname: u32, data: *mut f32) {
+    if data.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_float_v)(pname, data);
     });
@@ -19,6 +25,9 @@ pub extern "C" fn glGetFloatv(pname: u32, data: *mut f32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetDoublev(pname: u32, data: *mut f64) {
+    if data.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_double_v)(pname, data);
     });
@@ -27,6 +36,9 @@ pub extern "C" fn glGetDoublev(pname: u32, data: *mut f64) {
 /// `glGetIntegerv` 的透传版本，供 exports.rs 中特殊处理回退时调用，
 /// 避免在 getter.rs 与 exports.rs 中重复导出 C 符号。
 pub fn get_integerv(pname: u32, data: *mut i32) {
+    if data.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_integerv)(pname, data);
     });
@@ -35,6 +47,9 @@ pub fn get_integerv(pname: u32, data: *mut i32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetInteger64v(pname: u32, data: *mut i64) {
+    if data.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_integer_64v)(pname, data);
     });
@@ -43,6 +58,9 @@ pub extern "C" fn glGetInteger64v(pname: u32, data: *mut i64) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetBooleani_v(target: u32, index: u32, data: *mut u8) {
+    if data.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_booleani_v)(target, index, data);
     });
@@ -51,6 +69,9 @@ pub extern "C" fn glGetBooleani_v(target: u32, index: u32, data: *mut u8) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetIntegeri_v(target: u32, index: u32, data: *mut i32) {
+    if data.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_integeri_v)(target, index, data);
     });
@@ -59,6 +80,9 @@ pub extern "C" fn glGetIntegeri_v(target: u32, index: u32, data: *mut i32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetFloati_v(target: u32, index: u32, data: *mut f32) {
+    if data.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_floati_v)(target, index, data);
     });
@@ -67,6 +91,9 @@ pub extern "C" fn glGetFloati_v(target: u32, index: u32, data: *mut f32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetDoublei_v(target: u32, index: u32, data: *mut f64) {
+    if data.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_doublei_v)(target, index, data);
     });
