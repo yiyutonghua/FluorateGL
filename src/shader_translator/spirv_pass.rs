@@ -203,5 +203,152 @@ fn post_process_glsl_es(src: &str) -> String {
     let re_io = Regex::new(r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*\)\s*(in|out)\b").unwrap();
     result = re_io.replace_all(&result, "$1").to_string();
 
+    // ✅ 4. 修复：移除非 opaque 普通 uniform（如 mat4/vec3/float）上的 layout 限定符。
+    // spirv-cross 会给所有 uniform 加 layout(location=.., binding=..)，但 GLES 只允许
+    // 在 UBO / storage block / opaque 变量上使用 binding，否则报：
+    //   "the binding qualifier only applies to uniform blocks, storage blocks, opaque variables..."
+    // 仅匹配以 `;` 结尾且不含 `{` 的普通 uniform 声明（UBO block 以 `{` 开头，自然排除）。
+    // 注：Rust regex crate 不支持 lookahead，故用 `[^;{]+` 显式限定。
+    let re_uniform = Regex::new(
+        r"(?i)layout\s*\(\s*(?:location\s*=\s*\d+\s*,?\s*|binding\s*=\s*\d+\s*,?\s*)+\)\s*(uniform\s+[^;{]+;)",
+    )
+    .unwrap();
+    result = re_uniform.replace_all(&result, "$1").to_string();
+
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_version_finds_version_line() {
+        let src = "#version 330 core\nvoid main() {}\n";
+        assert_eq!(extract_version(src), Some("#version 330 core"));
+    }
+
+    #[test]
+    fn extract_version_skips_leading_whitespace_and_comments() {
+        let src = "  #version 460 core\nvoid main() {}\n";
+        assert!(extract_version(src).unwrap().contains("#version 460"));
+    }
+
+    #[test]
+    fn extract_version_returns_none_when_absent() {
+        assert_eq!(extract_version("void main() {}\n"), None);
+    }
+
+    #[test]
+    fn gles_version_candidates_for_330_plus_yields_320_first() {
+        let src = "#version 460 core\nvoid main() {}\n";
+        let v = gles_version_candidates(src);
+        assert_eq!(v, vec![320, 310, 300]);
+    }
+
+    #[test]
+    fn gles_version_candidates_for_legacy_yields_310_first() {
+        let src = "#version 150 core\nvoid main() {}\n";
+        let v = gles_version_candidates(src);
+        assert_eq!(v, vec![310, 300]);
+    }
+
+    #[test]
+    fn gles_version_candidates_defaults_to_legacy_when_no_version() {
+        let v = gles_version_candidates("void main() {}\n");
+        assert_eq!(v, vec![310, 300]);
+    }
+
+    /// 测试 post_process_glsl_es 移除普通 uniform 的 layout 限定符。
+    /// 这是测试驱动的修复：spirv-cross 给 `uniform mat4` 加了
+    /// `layout(location=0, binding=0)`，GLES 不接受。
+    #[test]
+    fn post_process_strips_layout_from_plain_uniform() {
+        let src = "#version 320 es\nlayout(location = 0, binding = 0) uniform mat4 MVP;\nvoid main() {}\n";
+        let out = post_process_glsl_es(src);
+        assert!(
+            out.contains("uniform mat4 MVP;"),
+            "expected plain uniform, got: {}",
+            out
+        );
+        assert!(!out.contains("binding = 0) uniform mat4"));
+    }
+
+    /// 测试 post_process_glsl_es 移除 in/out 变量的 location 限定符。
+    #[test]
+    fn post_process_strips_location_from_in_out() {
+        let src = "#version 320 es\nlayout(location = 0) in vec3 Position;\nlayout(location = 0) out vec2 vUV;\nvoid main() {}\n";
+        let out = post_process_glsl_es(src);
+        assert!(out.contains("in vec3 Position;"), "got: {}", out);
+        assert!(out.contains("out vec2 vUV;"), "got: {}", out);
+    }
+
+    /// 测试 post_process_glsl_es 移除 sampler 的 layout 限定符。
+    #[test]
+    fn post_process_strips_layout_from_sampler() {
+        let src = "#version 320 es\nlayout(binding = 0) uniform sampler2D tex;\nvoid main() {}\n";
+        let out = post_process_glsl_es(src);
+        assert!(out.contains("uniform sampler2D tex;"), "got: {}", out);
+    }
+
+    /// 测试 post_process_glsl_es 保留 UBO 的 std140 layout（仅清理 binding）。
+    #[test]
+    fn post_process_keeps_ubo_std140_layout() {
+        let src = "#version 320 es\nlayout(std140, binding = 0) uniform Block { mat4 m; };\nvoid main() {}\n";
+        let out = post_process_glsl_es(src);
+        // UBO 应保留 std140，仅移除 binding
+        assert!(out.contains("layout(std140)"), "got: {}", out);
+        assert!(!out.contains("binding = 0) uniform Block"), "got: {}", out);
+    }
+
+    /// 测试完整 translate 流程：桌面 GLSL vertex shader → GLSL ES。
+    /// 这是端到端测试，依赖 shaderc（已静态链接进库）和 spirv-cross。
+    /// 注：translate 内部的 log 调用在未设置全局 logger 时是 no-op，不影响测试结果。
+    #[test]
+    fn translate_vertex_shader_330_to_gles_es() {
+        let src = "#version 330 core\nuniform mat4 MVP;\nin vec3 Position;\nvoid main() { gl_Position = MVP * vec4(Position, 1.0); }\n";
+        let result = translate(src, GL_VERTEX_SHADER);
+        match result {
+            TranslationResult::Translated(out) => {
+                assert!(out.contains("#version"), "missing #version: {}", out);
+                assert!(out.contains("uniform mat4 MVP"), "plain uniform kept layout: {}", out);
+                assert!(!out.contains("binding = 0) uniform mat4"), "got: {}", out);
+            }
+            other => panic!("expected Translated, got {:?} (shaderc/spirv-cross available?)", other),
+        }
+    }
+
+    /// 测试完整 translate 流程：fragment shader + sampler2D。
+    #[test]
+    fn translate_fragment_shader_with_sampler() {
+        let src = "#version 330 core\nuniform sampler2D tex;\nin vec2 uv;\nout vec4 fragColor;\nvoid main() { fragColor = texture(tex, uv); }\n";
+        let result = translate(src, GL_FRAGMENT_SHADER);
+        match result {
+            TranslationResult::Translated(out) => {
+                // spirv-cross 会注入精度限定符（如 highp），故用更宽松的匹配
+                assert!(out.contains("sampler2D tex"), "got: {}", out);
+                assert!(out.contains("texture(tex, uv)"), "got: {}", out);
+            }
+            other => panic!("expected Translated, got {:?}", other),
+        }
+    }
+
+    /// 测试无效源码不会 panic，返回 Failed。
+    #[test]
+    fn translate_invalid_shader_does_not_panic() {
+        let src = "#version 330 core\nthis is not valid glsl\n";
+        let result = translate(src, GL_VERTEX_SHADER);
+        assert!(matches!(result, TranslationResult::Failed), "expected Failed, got {:?}", result);
+    }
+
+    #[test]
+    fn stage_name_covers_all_stages() {
+        assert_eq!(stage_name(GL_VERTEX_SHADER), "vertex");
+        assert_eq!(stage_name(GL_FRAGMENT_SHADER), "fragment");
+        assert_eq!(stage_name(GL_GEOMETRY_SHADER), "geometry");
+        assert_eq!(stage_name(GL_TESS_CONTROL_SHADER), "tess_control");
+        assert_eq!(stage_name(GL_TESS_EVALUATION_SHADER), "tess_eval");
+        assert_eq!(stage_name(GL_COMPUTE_SHADER), "compute");
+        assert_eq!(stage_name(0xDEAD_BEEF), "unknown");
+    }
 }
