@@ -105,6 +105,7 @@ fn is_compressed_format(internalformat: u32) -> bool {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGenTextures(n: i32, textures: *mut u32) {
+    log::info!("[FluorateGL] glGenTextures(n={})", n);
     backend::with_gles_dispatch(|dispatch| unsafe {
         for i in 0..n as isize {
             let mut gles_id = 0u32;
@@ -132,6 +133,7 @@ pub extern "C" fn glDeleteTextures(n: i32, textures: *const u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glBindTexture(target: u32, texture: u32) {
+    log::info!("[FluorateGL] glBindTexture(target=0x{:04X}, texture={})", target, texture);
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = if texture == 0 {
             0
@@ -198,6 +200,10 @@ pub extern "C" fn glTexSubImage2D(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glTexParameteri(target: u32, pname: u32, param: i32) {
+    log::info!(
+        "[FluorateGL] glTexParameteri(target=0x{:04X}, pname=0x{:04X}, param={})",
+        target, pname, param
+    );
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.tex_parameter_i)(target, pname, param);
     });
@@ -305,6 +311,10 @@ pub extern "C" fn glTexStorage3D(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glTexParameterf(target: u32, pname: u32, param: f32) {
+    log::info!(
+        "[FluorateGL] glTexParameterf(target=0x{:04X}, pname=0x{:04X}, param={})",
+        target, pname, param
+    );
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.tex_parameter_f)(target, pname, param);
     });

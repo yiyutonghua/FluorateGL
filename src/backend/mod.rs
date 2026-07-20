@@ -3,6 +3,8 @@ pub mod loader;
 
 use crate::config::Config;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 // 全局状态
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -54,6 +56,11 @@ pub fn with_gles_dispatch<F, R>(f: F) -> R
 where
     F: FnOnce(&dispatch::GlesDispatch) -> R,
 {
+    static FIRST_CALL: AtomicBool = AtomicBool::new(true);
+    if FIRST_CALL.swap(false, Ordering::Relaxed) {
+        log::info!("[FluorateGL] === 首次 GL 调用，游戏渲染管线已启动 ===");
+    }
+
     //ensure_initialized();
     let dispatch = GLES_DISPATCH.get().unwrap_or_else(|| {
         static STUB: OnceLock<dispatch::GlesDispatch> = OnceLock::new();
@@ -66,6 +73,11 @@ pub fn with_egl_dispatch<F, R>(f: F) -> R
 where
     F: FnOnce(&crate::egl_sys::dispatch::EglDispatch) -> R,
 {
+    static FIRST_EGL_CALL: AtomicBool = AtomicBool::new(true);
+    if FIRST_EGL_CALL.swap(false, Ordering::Relaxed) {
+        log::info!("[FluorateGL] === 首次 EGL 调用 ===");
+    }
+
     //ensure_initialized();
     let dispatch = EGL_DISPATCH.get().unwrap_or_else(|| {
         static STUB: OnceLock<crate::egl_sys::dispatch::EglDispatch> = OnceLock::new();

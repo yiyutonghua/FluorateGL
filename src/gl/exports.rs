@@ -213,7 +213,7 @@ pub extern "C" fn glGenerateMipmap(target: u32) {
 pub extern "C" fn glGetError() -> u32 {
     let err = backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.get_error)() });
     if err != 0 {
-        log::debug!("[FluorateGL] glGetError() -> 0x{:04X}", err);
+        log::warn!("[FluorateGL] glGetError() -> 0x{:04X} (GL error)", err);
     }
     err
 }

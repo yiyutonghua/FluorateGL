@@ -22,7 +22,11 @@ pub fn init(cfg: &Config) {
 
         fn log(&self, record: &log::Record) {
             if self.enabled(record.metadata()) {
-                eprintln!("[{}] {}", record.level(), record.args());
+                use std::io::Write;
+                let _ = std::io::stderr().write_all(
+                    format!("[{}] {}\n", record.level(), record.args()).as_bytes(),
+                );
+                let _ = std::io::stderr().flush();
             }
         }
 
