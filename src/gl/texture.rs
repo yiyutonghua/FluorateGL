@@ -158,12 +158,12 @@ pub extern "C" fn glTexImage2D(
     pixels: *const std::ffi::c_void,
 ) {
     let normalized = normalize_internal_format(internalformat as u32) as i32;
-    log::debug!(
+    log::info!(
         "[FluorateGL] glTexImage2D(target=0x{:04X}, level={}, internalformat=0x{:04X}, {}x{}, format=0x{:04X}, type=0x{:04X}, pixels={:?})",
         target, level, internalformat, width, height, format, type_, pixels
     );
     if normalized != internalformat {
-        log::debug!(
+        log::info!(
             "[FluorateGL] glTexImage2D: normalized internalformat 0x{:04X} -> 0x{:04X}",
             internalformat, normalized
         );
@@ -264,12 +264,12 @@ pub extern "C" fn glTexStorage2D(
     height: i32,
 ) {
     let normalized = normalize_internal_format(internalformat);
-    log::debug!(
+    log::info!(
         "[FluorateGL] glTexStorage2D(target=0x{:04X}, levels={}, internalformat=0x{:04X}, {}x{})",
         target, levels, internalformat, width, height
     );
     if normalized != internalformat {
-        log::debug!(
+        log::info!(
             "[FluorateGL] glTexStorage2D: normalized internalformat 0x{:04X} -> 0x{:04X}",
             internalformat, normalized
         );
@@ -338,7 +338,7 @@ pub extern "C" fn glCompressedTexImage2D(
     imageSize: i32,
     data: *const std::ffi::c_void,
 ) {
-    log::debug!(
+    log::info!(
         "[FluorateGL] glCompressedTexImage2D(target=0x{:04X}, level={}, internalformat=0x{:04X}, {}x{}, imageSize={}, data={:?})",
         target, level, internalformat, width, height, imageSize, data
     );
@@ -408,7 +408,7 @@ pub extern "C" fn glCompressedTexImage3D(
     imageSize: i32,
     data: *const std::ffi::c_void,
 ) {
-    log::debug!(
+    log::info!(
         "[FluorateGL] glCompressedTexImage3D(target=0x{:04X}, level={}, internalformat=0x{:04X}, {}x{}x{}, imageSize={}, data={:?})",
         target, level, internalformat, width, height, depth, imageSize, data
     );
