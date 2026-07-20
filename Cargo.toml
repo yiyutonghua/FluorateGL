@@ -12,7 +12,6 @@ name = "glslang_suite"
 path = "tests/glsl/glslang_suite.rs"
 
 [dependencies]
-android_logger = "0.15.1"
 bytemuck = { version = "1", default-features = false }
 ctor = "1.0.9"
 libc = "0.2.186"
