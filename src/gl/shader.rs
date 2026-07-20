@@ -6,7 +6,7 @@ use std::ffi::{CStr, CString};
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glCreateShader(shader_type: u32) -> u32 {
-    log::info!("[FluorateGL] glCreateShader(0x{:04X})", shader_type);
+    log::debug!("[FluorateGL] glCreateShader(0x{:04X})", shader_type);
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = (dispatch.create_shader)(shader_type);
         let desktop_id = state::with_state(|s| s.shaders.alloc(gles_id));
@@ -85,7 +85,7 @@ pub extern "C" fn glShaderSource(
             &source, stage,
         ) {
             TranslationResult::Translated(translated) => {
-                log::info!(
+                log::debug!(
                     "[ShaderTranslator] shader {} stage 0x{:04X} translated via SPIR-V ({} chars)",
                     shader,
                     stage,
@@ -94,7 +94,7 @@ pub extern "C" fn glShaderSource(
                 (translated, true)
             }
             TranslationResult::PassThrough => {
-                log::info!(
+                log::debug!(
                     "[ShaderTranslator] shader {} stage 0x{:04X} passed through unchanged (driver extension supported)",
                     shader,
                     stage
@@ -316,7 +316,7 @@ pub extern "C" fn glCreateShaderProgramv(
     count: i32,
     strings: *const *const libc::c_char,
 ) -> u32 {
-    log::info!(
+    log::debug!(
         "[FluorateGL] Intercepted glCreateShaderProgramv for stage 0x{:04X}",
         shader_type
     );

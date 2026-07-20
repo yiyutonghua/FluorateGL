@@ -33,7 +33,7 @@ pub fn translate(source: &str, stage: u32) -> TranslationResult {
 
 fn translate_internal(source: &str, stage: u32) -> TranslationResult {
     let stage_name = stage_name(stage);
-    log::info!(
+    log::debug!(
         "[ShaderTranslator] SPIR-V translate start: stage={} (0x{:04X})",
         stage_name,
         stage
@@ -50,7 +50,7 @@ fn translate_internal(source: &str, stage: u32) -> TranslationResult {
     for gles_version in gles_version_candidates(source) {
         match spirv_to_gles(&spv, gles_version) {
             Ok(src) => {
-                log::info!(
+                log::debug!(
                     "[ShaderTranslator] SPIR-V translate success: stage={}, version=ES{}",
                     stage_name,
                     gles_version
