@@ -11,7 +11,16 @@ pub extern "C" fn glDrawRangeElements(
     indices: *const std::ffi::c_void,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.draw_range_elements)(mode, start, end, count, type_, indices);
+        if is_stub(dispatch, dispatch.draw_range_elements as *const ()) {
+            // GLES 不支持 glDrawRangeElements 时降级为 glDrawElements
+            // start/end 只是 hint，跳过它们不影响正确性
+            log::debug!(
+                "[FluorateGL] glDrawRangeElements fallback to glDrawElements (stub detected)"
+            );
+            (dispatch.draw_elements)(mode, count, type_, indices);
+        } else {
+            (dispatch.draw_range_elements)(mode, start, end, count, type_, indices);
+        }
     });
 }
 

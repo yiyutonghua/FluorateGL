@@ -106,8 +106,25 @@ pub extern "C" fn glBufferStorage(
 pub extern "C" fn glMapBuffer(target: u32, access: u32) -> *mut std::ffi::c_void {
     backend::with_gles_dispatch(|dispatch| unsafe {
         // glMapBuffer is not available in GLES 3.0; emulate it with glMapBufferRange.
+        // 若 map_buffer_range 也是 stub（驱动不支持），返回 null 避免后续 UB。
+        if is_stub(dispatch, dispatch.map_buffer_range as *const ()) {
+            log::warn!(
+                "[FluorateGL] glMapBuffer: glMapBufferRange not available, returning null"
+            );
+            return std::ptr::null_mut();
+        }
+
         let mut size = 0i32;
         (dispatch.get_buffer_parameter_iv)(target, 0x8764, &mut size); // GL_BUFFER_SIZE
+
+        // size 为负或零时无意义，直接返回 null
+        if size <= 0 {
+            log::warn!(
+                "[FluorateGL] glMapBuffer: invalid buffer size {}, returning null",
+                size
+            );
+            return std::ptr::null_mut();
+        }
 
         let range_access = match access {
             0x88B8 => 0x0001,          // GL_READ_ONLY -> GL_MAP_READ_BIT
@@ -203,9 +220,19 @@ pub extern "C" fn glGetBufferSubData(
     size: isize,
     data: *mut std::ffi::c_void,
 ) {
+    // size/offset 为负或 data 为空时无意义，直接返回
+    if data.is_null() || size <= 0 || offset < 0 {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.get_buffer_sub_data as *const ()) {
             // GLES 没有 glGetBufferSubData，用 MapBufferRange 模拟
+            if is_stub(dispatch, dispatch.map_buffer_range as *const ()) {
+                log::warn!(
+                    "[FluorateGL] glGetBufferSubData: both sub_data and map_range unavailable"
+                );
+                return;
+            }
             let ptr = (dispatch.map_buffer_range)(
                 target, offset, size, 0x0001, /* GL_MAP_READ_BIT */
             );
@@ -222,6 +249,9 @@ pub extern "C" fn glGetBufferSubData(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetBufferParameteriv(target: u32, pname: u32, params: *mut i32) {
+    if params.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_buffer_parameter_iv)(target, pname, params);
     });
@@ -230,6 +260,9 @@ pub extern "C" fn glGetBufferParameteriv(target: u32, pname: u32, params: *mut i
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetBufferPointerv(target: u32, pname: u32, params: *mut *mut std::ffi::c_void) {
+    if params.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_buffer_pointer_v)(target, pname, params);
     });

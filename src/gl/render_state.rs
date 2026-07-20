@@ -98,7 +98,8 @@ pub extern "C" fn glColorMaski(buf: u32, red: u8, green: u8, blue: u8, alpha: u8
 #[allow(non_snake_case)]
 pub extern "C" fn glDepthRange(near: f64, far: f64) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.depth_range)(near, far);
+        // GLES 没有 glDepthRange(f64, f64)，统一走 glDepthRangef(f32, f32)
+        (dispatch.depth_range_f)(near as f32, far as f32);
     });
 }
 

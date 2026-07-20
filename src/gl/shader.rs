@@ -46,6 +46,15 @@ pub extern "C" fn glShaderSource(
             return;
         }
 
+        // string 为 null 或 count <= 0 时无源码可上传，直接返回
+        if string.is_null() || count <= 0 {
+            log::warn!(
+                "[FluorateGL] glShaderSource: invalid args (string={:?}, count={})",
+                string, count
+            );
+            return;
+        }
+
         let stage = state::with_state(|s| s.shader_types.get(&shader).copied().unwrap_or(0));
 
         // Concatenate all source strings.
@@ -58,7 +67,9 @@ pub extern "C" fn glShaderSource(
             let len = if length.is_null() {
                 0
             } else {
-                *length.offset(i) as usize
+                // length[i] < 0 表示该字符串以 null 结尾，按 0 处理走 CStr 路径
+                let v = *length.offset(i);
+                if v < 0 { 0 } else { v as usize }
             };
             let piece = if len == 0 {
                 CStr::from_ptr(ptr).to_string_lossy().into_owned()
@@ -196,6 +207,9 @@ pub extern "C" fn glCompileShader(shader: u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
+    if params.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.shaders.get_gles(shader).unwrap_or(0));
         if gles_id == 0 {
@@ -210,9 +224,7 @@ pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
                     .map(|src| src.len() as i32 + 1)
                     .unwrap_or(0)
             });
-            if !params.is_null() {
-                *params = len;
-            }
+            *params = len;
             return;
         }
         (dispatch.get_shader_iv)(gles_id, pname, params);
