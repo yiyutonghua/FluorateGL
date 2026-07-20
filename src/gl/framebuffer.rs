@@ -58,7 +58,7 @@ pub extern "C" fn glFramebufferTexture2D(
     texture: u32,
     level: i32,
 ) {
-    log::info!(
+    log::debug!(
         "[FluorateGL] glFramebufferTexture2D(target=0x{:04X}, attachment=0x{:04X}, textarget=0x{:04X}, texture={}, level={})",
         target, attachment, textarget, texture, level
     );
@@ -174,7 +174,7 @@ pub extern "C" fn glBindRenderbuffer(target: u32, renderbuffer: u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glRenderbufferStorage(target: u32, internalformat: u32, width: i32, height: i32) {
-    log::info!(
+    log::debug!(
         "[FluorateGL] glRenderbufferStorage(target=0x{:04X}, internalformat=0x{:04X}, {}x{})",
         target, internalformat, width, height
     );

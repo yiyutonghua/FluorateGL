@@ -105,7 +105,7 @@ fn is_compressed_format(internalformat: u32) -> bool {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGenTextures(n: i32, textures: *mut u32) {
-    log::info!("[FluorateGL] glGenTextures(n={})", n);
+    log::debug!("[FluorateGL] glGenTextures(n={})", n);
     backend::with_gles_dispatch(|dispatch| unsafe {
         for i in 0..n as isize {
             let mut gles_id = 0u32;
@@ -133,7 +133,7 @@ pub extern "C" fn glDeleteTextures(n: i32, textures: *const u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glBindTexture(target: u32, texture: u32) {
-    log::info!("[FluorateGL] glBindTexture(target=0x{:04X}, texture={})", target, texture);
+    log::debug!("[FluorateGL] glBindTexture(target=0x{:04X}, texture={})", target, texture);
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = if texture == 0 {
             0
@@ -160,12 +160,12 @@ pub extern "C" fn glTexImage2D(
     pixels: *const std::ffi::c_void,
 ) {
     let normalized = normalize_internal_format(internalformat as u32) as i32;
-    log::info!(
+    log::debug!(
         "[FluorateGL] glTexImage2D(target=0x{:04X}, level={}, internalformat=0x{:04X}, {}x{}, format=0x{:04X}, type=0x{:04X}, pixels={:?})",
         target, level, internalformat, width, height, format, type_, pixels
     );
     if normalized != internalformat {
-        log::info!(
+        log::debug!(
             "[FluorateGL] glTexImage2D: normalized internalformat 0x{:04X} -> 0x{:04X}",
             internalformat, normalized
         );
@@ -200,7 +200,7 @@ pub extern "C" fn glTexSubImage2D(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glTexParameteri(target: u32, pname: u32, param: i32) {
-    log::info!(
+    log::debug!(
         "[FluorateGL] glTexParameteri(target=0x{:04X}, pname=0x{:04X}, param={})",
         target, pname, param
     );
@@ -225,7 +225,7 @@ pub extern "C" fn glTexImage3D(
 ) {
     let normalized = normalize_internal_format(internalformat as u32) as i32;
     if normalized != internalformat {
-        log::info!(
+        log::debug!(
             "glTexImage3D: normalized internalformat 0x{:04X} -> 0x{:04X}",
             internalformat,
             normalized
@@ -270,12 +270,12 @@ pub extern "C" fn glTexStorage2D(
     height: i32,
 ) {
     let normalized = normalize_internal_format(internalformat);
-    log::info!(
+    log::debug!(
         "[FluorateGL] glTexStorage2D(target=0x{:04X}, levels={}, internalformat=0x{:04X}, {}x{})",
         target, levels, internalformat, width, height
     );
     if normalized != internalformat {
-        log::info!(
+        log::debug!(
             "[FluorateGL] glTexStorage2D: normalized internalformat 0x{:04X} -> 0x{:04X}",
             internalformat, normalized
         );
@@ -297,7 +297,7 @@ pub extern "C" fn glTexStorage3D(
 ) {
     let normalized = normalize_internal_format(internalformat);
     if normalized != internalformat {
-        log::info!(
+        log::debug!(
             "glTexStorage3D: normalized internalformat 0x{:04X} -> 0x{:04X}",
             internalformat,
             normalized
@@ -311,7 +311,7 @@ pub extern "C" fn glTexStorage3D(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glTexParameterf(target: u32, pname: u32, param: f32) {
-    log::info!(
+    log::debug!(
         "[FluorateGL] glTexParameterf(target=0x{:04X}, pname=0x{:04X}, param={})",
         target, pname, param
     );
@@ -348,7 +348,7 @@ pub extern "C" fn glCompressedTexImage2D(
     imageSize: i32,
     data: *const std::ffi::c_void,
 ) {
-    log::info!(
+    log::debug!(
         "[FluorateGL] glCompressedTexImage2D(target=0x{:04X}, level={}, internalformat=0x{:04X}, {}x{}, imageSize={}, data={:?})",
         target, level, internalformat, width, height, imageSize, data
     );
@@ -418,7 +418,7 @@ pub extern "C" fn glCompressedTexImage3D(
     imageSize: i32,
     data: *const std::ffi::c_void,
 ) {
-    log::info!(
+    log::debug!(
         "[FluorateGL] glCompressedTexImage3D(target=0x{:04X}, level={}, internalformat=0x{:04X}, {}x{}x{}, imageSize={}, data={:?})",
         target, level, internalformat, width, height, depth, imageSize, data
     );

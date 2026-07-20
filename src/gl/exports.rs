@@ -33,7 +33,7 @@ pub(crate) fn is_unsupported_gles_cap(cap: u32) -> bool {
 #[allow(non_snake_case)]
 pub extern "C" fn glEnable(cap: u32) {
     if is_unsupported_gles_cap(cap) {
-        log::info!(
+        log::debug!(
             "[FluorateGL] glEnable(0x{:04X}) ignored (unsupported in GLES)",
             cap
         );
@@ -48,7 +48,7 @@ pub extern "C" fn glEnable(cap: u32) {
 #[allow(non_snake_case)]
 pub extern "C" fn glDisable(cap: u32) {
     if is_unsupported_gles_cap(cap) {
-        log::info!(
+        log::debug!(
             "[FluorateGL] glDisable(0x{:04X}) ignored (unsupported in GLES)",
             cap
         );
@@ -250,7 +250,7 @@ pub extern "C" fn glGetString(name: u32) -> *const c_char {
     } else {
         backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.get_string)(name) })
     };
-    log::info!("[FluorateGL] glGetString(0x{:04X}) -> {:?}", name, result);
+    log::debug!("[FluorateGL] glGetString(0x{:04X}) -> {:?}", name, result);
     result
 }
 
@@ -346,7 +346,7 @@ pub extern "C" fn glGetStringi(name: u32, index: u32) -> *const c_char {
     } else {
         std::ptr::null()
     };
-    log::info!(
+    log::debug!(
         "[FluorateGL] glGetStringi(0x{:04X}, {}) -> {:?}",
         name,
         index,
