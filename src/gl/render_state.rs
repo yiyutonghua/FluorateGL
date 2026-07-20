@@ -1,8 +1,16 @@
 use crate::backend;
+use crate::gl::exports::is_unsupported_gles_cap;
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glEnablei(cap: u32, index: u32) {
+    if is_unsupported_gles_cap(cap) {
+        log::debug!(
+            "[FluorateGL] glEnablei(0x{:04X}, {}) ignored (unsupported in GLES)",
+            cap, index
+        );
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.enable_i)(cap, index);
     });
@@ -11,6 +19,13 @@ pub extern "C" fn glEnablei(cap: u32, index: u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glDisablei(cap: u32, index: u32) {
+    if is_unsupported_gles_cap(cap) {
+        log::debug!(
+            "[FluorateGL] glDisablei(0x{:04X}, {}) ignored (unsupported in GLES)",
+            cap, index
+        );
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.disable_i)(cap, index);
     });

@@ -16,7 +16,7 @@ pub extern "C" fn glClear(mask: u32) {
 
 // Capabilities that exist in desktop GL but are unsupported (or always on)
 // in OpenGL ES. Passing them to GLES produces `GL_INVALID_ENUM`.
-fn is_unsupported_gles_cap(cap: u32) -> bool {
+pub(crate) fn is_unsupported_gles_cap(cap: u32) -> bool {
     matches!(
         cap,
         0x884F | // GL_TEXTURE_CUBE_MAP_SEAMLESS

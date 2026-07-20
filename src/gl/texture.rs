@@ -41,6 +41,8 @@ const GL_DEPTH_COMPONENT32: u32 = 0x81A7;
 const GL_DEPTH_COMPONENT32F: u32 = 0x8CAC;
 const GL_STENCIL_INDEX8: u32 = 0x8D48;
 const GL_STENCIL_INDEX16: u32 = 0x8D49;
+const GL_COMPRESSED_RGBA: u32 = 0x84EE;
+const GL_COMPRESSED_RGB: u32 = 0x84ED;
 
 /// Convert a desktop OpenGL internal format to the closest GLES-compatible
 /// internal format.
@@ -66,9 +68,38 @@ fn normalize_internal_format(internalformat: u32) -> u32 {
         GL_DEPTH_COMPONENT32 => GL_DEPTH_COMPONENT32F,
         GL_STENCIL_INDEX8 | GL_STENCIL_INDEX16 => GL_R8,
 
-        // 4. 其他情况（已经是 Sized Format）原样返回
+        // 4. 桌面 GL 的"让驱动自选压缩格式"标志，GLES 不支持，降级为 sized 格式
+        GL_COMPRESSED_RGBA => GL_RGBA8,
+        GL_COMPRESSED_RGB => GL_RGB8,
+
+        // 5. 其他情况（已经是 Sized Format）原样返回
         _ => internalformat,
     }
+}
+
+/// 判断 internalformat 是否为已知的压缩纹理格式。
+/// 用于 `glCompressedTexImage*` 系列函数，防止将非压缩格式透传给 GLES 驱动导致 GL_INVALID_ENUM。
+fn is_compressed_format(internalformat: u32) -> bool {
+    matches!(
+        internalformat,
+        // S3TC / DXT
+        0x83F0 | 0x83F1 | 0x83F2 | 0x83F3
+        // ETC2 / EAC
+        | 0x9274 | 0x9275 | 0x9276 | 0x9277 | 0x9278
+        // ASTC LDR (4x4 ~ 12x12)
+        | 0x93B0 | 0x93B1 | 0x93B2 | 0x93B3
+        | 0x93B4 | 0x93B5 | 0x93B6 | 0x93B7
+        | 0x93B8 | 0x93B9 | 0x93BA | 0x93BB
+        | 0x93BC | 0x93BD | 0x93BE | 0x93BF
+        | 0x93C0 | 0x93C1 | 0x93C2 | 0x93C3
+        | 0x93C4 | 0x93C5 | 0x93C6 | 0x93C7
+        | 0x93C8 | 0x93C9 | 0x93CA | 0x93CB
+        | 0x93CC | 0x93CD | 0x93CE | 0x93CF
+        | 0x93D0 | 0x93D1 | 0x93D2 | 0x93D3
+        | 0x93D4 | 0x93D5 | 0x93D6
+        // PVRTC
+        | 0x8C00 | 0x8C01 | 0x8C02 | 0x8C03 | 0x8C04
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -127,11 +158,14 @@ pub extern "C" fn glTexImage2D(
     pixels: *const std::ffi::c_void,
 ) {
     let normalized = normalize_internal_format(internalformat as u32) as i32;
+    log::debug!(
+        "[FluorateGL] glTexImage2D(target=0x{:04X}, level={}, internalformat=0x{:04X}, {}x{}, format=0x{:04X}, type=0x{:04X}, pixels={:?})",
+        target, level, internalformat, width, height, format, type_, pixels
+    );
     if normalized != internalformat {
         log::debug!(
-            "glTexImage2D: normalized internalformat 0x{:04X} -> 0x{:04X}",
-            internalformat,
-            normalized
+            "[FluorateGL] glTexImage2D: normalized internalformat 0x{:04X} -> 0x{:04X}",
+            internalformat, normalized
         );
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -230,11 +264,14 @@ pub extern "C" fn glTexStorage2D(
     height: i32,
 ) {
     let normalized = normalize_internal_format(internalformat);
+    log::debug!(
+        "[FluorateGL] glTexStorage2D(target=0x{:04X}, levels={}, internalformat=0x{:04X}, {}x{})",
+        target, levels, internalformat, width, height
+    );
     if normalized != internalformat {
         log::debug!(
-            "glTexStorage2D: normalized internalformat 0x{:04X} -> 0x{:04X}",
-            internalformat,
-            normalized
+            "[FluorateGL] glTexStorage2D: normalized internalformat 0x{:04X} -> 0x{:04X}",
+            internalformat, normalized
         );
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -301,6 +338,29 @@ pub extern "C" fn glCompressedTexImage2D(
     imageSize: i32,
     data: *const std::ffi::c_void,
 ) {
+    log::debug!(
+        "[FluorateGL] glCompressedTexImage2D(target=0x{:04X}, level={}, internalformat=0x{:04X}, {}x{}, imageSize={}, data={:?})",
+        target, level, internalformat, width, height, imageSize, data
+    );
+
+    // 防止将非压缩格式透传给 GLES 导致 GL_INVALID_ENUM 崩溃
+    if !is_compressed_format(internalformat) {
+        let normalized = normalize_internal_format(internalformat);
+        log::warn!(
+            "[FluorateGL] glCompressedTexImage2D: internalformat 0x{:04X} is not a compressed format, normalizing to 0x{:04X} and using glTexImage2D instead",
+            internalformat, normalized
+        );
+        // 对非压缩格式降级为 glTexImage2D（data 指针直接复用，格式兼容）
+        backend::with_gles_dispatch(|dispatch| unsafe {
+            (dispatch.tex_image_2d)(
+                target, level, normalized as i32, width, height, border,
+                GL_RGBA, 0x1401, // GL_UNSIGNED_BYTE
+                data,
+            );
+        });
+        return;
+    }
+
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.compressed_tex_image_2d)(
             target,
@@ -348,6 +408,19 @@ pub extern "C" fn glCompressedTexImage3D(
     imageSize: i32,
     data: *const std::ffi::c_void,
 ) {
+    log::debug!(
+        "[FluorateGL] glCompressedTexImage3D(target=0x{:04X}, level={}, internalformat=0x{:04X}, {}x{}x{}, imageSize={}, data={:?})",
+        target, level, internalformat, width, height, depth, imageSize, data
+    );
+
+    if !is_compressed_format(internalformat) {
+        log::warn!(
+            "[FluorateGL] glCompressedTexImage3D: internalformat 0x{:04X} is not a compressed format, skipping",
+            internalformat
+        );
+        return;
+    }
+
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.compressed_tex_image_3d)(
             target,
