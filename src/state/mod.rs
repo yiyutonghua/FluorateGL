@@ -52,11 +52,34 @@ impl State {
 
 thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::new());
+    static FIRST_ACCESS: std::cell::Cell<bool> = std::cell::Cell::new(true);
 }
 
 pub fn with_state<F, R>(f: F) -> R
 where
     F: FnOnce(&mut State) -> R,
 {
+    // 首次在该线程上访问 State 时，记录线程 ID 用于诊断跨线程问题
+    FIRST_ACCESS.with(|first| {
+        if first.replace(false) {
+            log::info!(
+                "[FluorateGL] State initialized on thread {:?} (tid={})",
+                std::thread::current().name(),
+                thread_id_u64()
+            );
+        }
+    });
     STATE.with(|s| f(&mut s.borrow_mut()))
+}
+
+/// 获取当前线程 ID（用于诊断日志）
+fn thread_id_u64() -> u64 {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        libc::gettid() as u64
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        0
+    }
 }

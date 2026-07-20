@@ -10,6 +10,51 @@ mod util;
 use config::Config;
 use ctor::ctor;
 use libc::c_char;
+use std::sync::OnceLock;
+
+/// 我们自己库的 dlopen 句柄，用于 eglGetProcAddress 中确保返回我们的函数指针
+/// 使用 usize 存储（指针本身是 Send + Sync 的，只是 Rust 不自动为裸指针实现）
+static SELF_HANDLE: OnceLock<usize> = OnceLock::new();
+
+fn capture_self_handle() {
+    // 使用 dladdr 获取 fluorategl_init 所在库的路径，然后 dlopen 获取句柄
+    let addr = fluorategl_init as *const ();
+    let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+    if unsafe { libc::dladdr(addr as *const _, &mut info) } != 0 {
+        if !info.dli_fname.is_null() {
+            // 先尝试 RTLD_NOLOAD（不重新加载，只增加引用计数）
+            let handle = unsafe {
+                libc::dlopen(info.dli_fname, libc::RTLD_NOW | libc::RTLD_NOLOAD)
+            };
+            // Android 旧版本可能不支持 RTLD_NOLOAD，回退到普通 dlopen
+            let handle = if handle.is_null() {
+                unsafe { libc::dlopen(info.dli_fname, libc::RTLD_NOW) }
+            } else {
+                handle
+            };
+            if !handle.is_null() {
+                let _ = SELF_HANDLE.set(handle as usize);
+                log::info!(
+                    "[FluorateGL] Captured self handle {:?} from {:?}",
+                    handle,
+                    unsafe { std::ffi::CStr::from_ptr(info.dli_fname) }
+                );
+            } else {
+                log::warn!(
+                    "[FluorateGL] dlopen failed for self handle: {:?}",
+                    unsafe { std::ffi::CStr::from_ptr(info.dli_fname) }
+                );
+            }
+        }
+    } else {
+        log::warn!("[FluorateGL] dladdr failed, eglGetProcAddress may return wrong function pointers");
+    }
+}
+
+/// 获取我们自己库的句柄，用于 dlsym 查找
+pub fn get_self_handle() -> Option<*mut libc::c_void> {
+    SELF_HANDLE.get().map(|h| *h as *mut libc::c_void)
+}
 
 #[ctor(unsafe)]
 fn auto_init() {
@@ -26,6 +71,9 @@ pub extern "C" fn fluorategl_init() -> i32 {
 
     log::info!("[FluorateGL] Initializing...");
     log::info!("[FluorateGL] Backend: {:?}, LogLevel: {:?}", cfg.backend, cfg.log_level);
+
+    // 在初始化日志后立即捕获自己的库句柄（用于 eglGetProcAddress）
+    capture_self_handle();
 
     backend::set_config(cfg);
 

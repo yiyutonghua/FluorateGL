@@ -357,12 +357,33 @@ pub extern "C" fn eglGetProcAddress(proc_name: *const libc::c_char) -> *mut std:
         return std::ptr::null_mut();
     }
 
-    // 1. 优先返回 FluorateGL 自己的函数指针，确保所有 GL 调用都经过拦截器
+    // 1. 优先使用我们自己库的句柄查找，确保返回 FluorateGL 的函数指针
+    //    这在 Android 上至关重要：RTLD_DEFAULT 可能返回 libGLESv2.so 的函数指针
+    if let Some(handle) = crate::get_self_handle() {
+        let local = unsafe { libc::dlsym(handle, proc_name) };
+        if !local.is_null() {
+            log::debug!(
+                "[FluorateGL] eglGetProcAddress({:?}) -> self handle",
+                unsafe { std::ffi::CStr::from_ptr(proc_name) }
+            );
+            return local;
+        }
+    }
+
+    // 2. Fallback: RTLD_DEFAULT（全局符号表查找）
     let local = unsafe { libc::dlsym(libc::RTLD_DEFAULT, proc_name) };
     if !local.is_null() {
+        log::debug!(
+            "[FluorateGL] eglGetProcAddress({:?}) -> RTLD_DEFAULT",
+            unsafe { std::ffi::CStr::from_ptr(proc_name) }
+        );
         return local;
     }
 
-    // 2. Fallback 到底层 EGL 驱动
+    // 3. 最后回退到底层 EGL 驱动
+    log::debug!(
+        "[FluorateGL] eglGetProcAddress({:?}) -> EGL driver fallback",
+        unsafe { std::ffi::CStr::from_ptr(proc_name) }
+    );
     dispatcher::get_proc_address(proc_name)
 }
