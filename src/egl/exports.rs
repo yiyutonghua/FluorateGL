@@ -350,25 +350,6 @@ pub extern "C" fn eglGetError() -> u32 {
     dispatcher::get_error()
 }
 
-use std::sync::OnceLock;
-
-// ✅ 改为存 usize，规避 Send/Sync 检查
-static SELF_HANDLE: OnceLock<usize> = OnceLock::new();
-
-fn get_self_handle() -> *mut std::ffi::c_void {
-    // 取出来的时候再转回指针
-    let handle = *SELF_HANDLE.get_or_init(|| {
-        unsafe {
-            let ptr = libc::dlopen(
-                b"libfluorategl.so\0".as_ptr() as *const libc::c_char,
-                libc::RTLD_NOW | libc::RTLD_NOLOAD,
-            );
-            ptr as usize // ✅ 存入时转为 usize
-        }
-    });
-    handle as *mut std::ffi::c_void
-}
-
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglGetProcAddress(proc_name: *const libc::c_char) -> *mut std::ffi::c_void {
@@ -376,13 +357,10 @@ pub extern "C" fn eglGetProcAddress(proc_name: *const libc::c_char) -> *mut std:
         return std::ptr::null_mut();
     }
 
-    // 1. 优先从 FluorateGL 自己查找
-    let handle = get_self_handle();
-    if !handle.is_null() {
-        let local = unsafe { libc::dlsym(handle, proc_name) };
-        if !local.is_null() {
-            return local;
-        }
+    // 1. 优先返回 FluorateGL 自己的函数指针，确保所有 GL 调用都经过拦截器
+    let local = unsafe { libc::dlsym(libc::RTLD_DEFAULT, proc_name) };
+    if !local.is_null() {
+        return local;
     }
 
     // 2. Fallback 到底层 EGL 驱动
