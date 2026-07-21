@@ -12,6 +12,9 @@ use ctor::ctor;
 use libc::c_char;
 use std::sync::OnceLock;
 
+/// FluorateGL 版本号
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// 我们自己库的 dlopen 句柄，用于 eglGetProcAddress 中确保返回我们的函数指针
 /// 使用 usize 存储（指针本身是 Send + Sync 的，只是 Rust 不自动为裸指针实现）
 static SELF_HANDLE: OnceLock<usize> = OnceLock::new();
@@ -69,7 +72,7 @@ pub extern "C" fn fluorategl_init() -> i32 {
     let cfg = Config::from_env();
     util::log::init(&cfg);
 
-    log::info!("[FluorateGL] Initializing...");
+    log::info!("[FluorateGL] v{} Initializing...", VERSION);
     log::info!(
         "[FluorateGL] Backend: {:?}, LogLevel: {:?}",
         cfg.backend,
@@ -110,7 +113,7 @@ pub extern "C" fn fluorategl_init() -> i32 {
         }
     }
 
-    log::info!("[FluorateGL] Initialized successfully");
+    log::info!("[FluorateGL] v{} Initialized successfully", VERSION);
     crate::backend::mark_initialized();
     0
 }

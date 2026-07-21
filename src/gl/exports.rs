@@ -15,6 +15,13 @@ pub extern "C" fn glClear(mask: u32) {
     });
 }
 
+// glAlphaFunc 是桌面 GL 固定功能，GLES 2.0+ 不支持，直接忽略
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glAlphaFunc(_func: u32, _ref: f32) {
+    // no-op: GLES 不支持固定功能 alpha test，alpha test 在 shader 中通过 discard 实现
+}
+
 // Capabilities that exist in desktop GL but are unsupported (or always on)
 // in OpenGL ES. Passing them to GLES produces `GL_INVALID_ENUM`.
 pub(crate) fn is_unsupported_gles_cap(cap: u32) -> bool {
