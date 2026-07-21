@@ -51,6 +51,13 @@ pub struct GlesDispatch {
     pub get_buffer_pointer_v: unsafe extern "C" fn(u32, u32, *mut *mut c_void),
     pub is_buffer: unsafe extern "C" fn(u32) -> u8,
 
+    // B类：Buffer → Texture 绑定（GL_EXT_texture_buffer / GLES 3.2）
+    pub tex_buffer: unsafe extern "C" fn(u32, u32, u32),
+    pub tex_buffer_range: unsafe extern "C" fn(u32, u32, u32, isize, isize),
+
+    // B类：Debug 输出控制
+    pub debug_message_control: unsafe extern "C" fn(u32, u32, u32, i32, *const u32, u8),
+
     // B类：VAO
     pub gen_vertex_arrays: unsafe extern "C" fn(i32, *mut u32),
     pub delete_vertex_arrays: unsafe extern "C" fn(i32, *const u32),
@@ -405,6 +412,12 @@ impl GlesDispatch {
             },
             get_buffer_pointer_v: load_opt!("glGetBufferPointerv"),
             is_buffer: unsafe { std::mem::transmute(load!("glIsBuffer")) },
+
+            // GL_EXT_texture_buffer / GLES 3.2
+            tex_buffer: load_opt!("glTexBuffer"),
+            tex_buffer_range: load_opt!("glTexBufferRange"),
+            // GL_KHR_debug
+            debug_message_control: load_opt!("glDebugMessageControl"),
 
             gen_vertex_arrays: unsafe { std::mem::transmute(load!("glGenVertexArrays")) },
             delete_vertex_arrays: unsafe { std::mem::transmute(load!("glDeleteVertexArrays")) },

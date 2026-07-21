@@ -378,6 +378,9 @@ fn is_key_gl_function(name: &str) -> bool {
             | "glVertexAttribFormat"
             | "glVertexAttribIFormat"
             | "glVertexAttribBinding"
+            // GL_EXT_texture_buffer / GLES 3.2
+            | "glTexBuffer"
+            | "glTexBufferRange"
     )
 }
 

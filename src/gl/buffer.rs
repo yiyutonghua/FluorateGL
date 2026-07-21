@@ -329,3 +329,76 @@ pub extern "C" fn glIsBuffer(buffer: u32) -> u8 {
         (dispatch.is_buffer)(gles_id)
     })
 }
+
+// === GL_EXT_texture_buffer / GLES 3.2 ===
+// glTexBuffer 将 buffer 绑定到纹理，buffer ID 需要从 desktop 翻译为 GLES。
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glTexBuffer(target: u32, internalformat: u32, buffer: u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        if is_stub(dispatch, dispatch.tex_buffer as *const ()) {
+            log::warn!("[FluorateGL] glTexBuffer: stub, ignored");
+            return;
+        }
+
+        let gles_id = if buffer == 0 {
+            0
+        } else {
+            state::with_state(|s| {
+                s.buffers.get_gles(buffer).unwrap_or_else(|| {
+                    log::warn!(
+                        "[FluorateGL] glTexBuffer(target=0x{:04X}): desktop ID {} not found in IdMap, unbinding",
+                        target, buffer
+                    );
+                    0
+                })
+            })
+        };
+
+        log::info!(
+            "[FluorateGL] glTexBuffer(target=0x{:04X}, fmt=0x{:04X}) desktop {} -> GLES {} (tid={})",
+            target, internalformat, buffer, gles_id, state::thread_id_u64()
+        );
+
+        (dispatch.tex_buffer)(target, internalformat, gles_id);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glTexBufferRange(
+    target: u32,
+    internalformat: u32,
+    buffer: u32,
+    offset: isize,
+    size: isize,
+) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        if is_stub(dispatch, dispatch.tex_buffer_range as *const ()) {
+            log::warn!("[FluorateGL] glTexBufferRange: stub, ignored");
+            return;
+        }
+
+        let gles_id = if buffer == 0 {
+            0
+        } else {
+            state::with_state(|s| {
+                s.buffers.get_gles(buffer).unwrap_or_else(|| {
+                    log::warn!(
+                        "[FluorateGL] glTexBufferRange(target=0x{:04X}): desktop ID {} not found in IdMap, unbinding",
+                        target, buffer
+                    );
+                    0
+                })
+            })
+        };
+
+        log::info!(
+            "[FluorateGL] glTexBufferRange(target=0x{:04X}, fmt=0x{:04X}) desktop {} -> GLES {} (tid={})",
+            target, internalformat, buffer, gles_id, state::thread_id_u64()
+        );
+
+        (dispatch.tex_buffer_range)(target, internalformat, gles_id, offset, size);
+    });
+}

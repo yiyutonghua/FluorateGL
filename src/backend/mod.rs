@@ -59,6 +59,7 @@ where
     static FIRST_CALL: AtomicBool = AtomicBool::new(true);
     if FIRST_CALL.swap(false, Ordering::Relaxed) {
         log::info!("[FluorateGL] === 首次 GL 调用，游戏渲染管线已启动 ===");
+        suppress_debug_noise();
     }
 
     //ensure_initialized();
@@ -67,6 +68,47 @@ where
         STUB.get_or_init(dispatch::GlesDispatch::all_stub)
     });
     f(dispatch)
+}
+
+/// 屏蔽 GLES 驱动的 PERFORMANCE / OTHER 类型 Debug 消息，
+/// 避免 "Packing allocations" / "high level of unsubmitted work" 等刷屏。
+/// 只保留 ERROR 类型消息用于诊断。
+fn suppress_debug_noise() {
+    const GL_DONT_CARE: u32 = 0x1100;
+    const GL_DEBUG_TYPE_PERFORMANCE: u32 = 0x8250;
+    const GL_DEBUG_TYPE_OTHER: u32 = 0x8251;
+    const GL_FALSE: u8 = 0;
+
+    let dispatch = GLES_DISPATCH.get().unwrap_or_else(|| {
+        static STUB: OnceLock<dispatch::GlesDispatch> = OnceLock::new();
+        STUB.get_or_init(dispatch::GlesDispatch::all_stub)
+    });
+
+    // 如果 debug_message_control 是 stub（GLES 驱动不支持），则静默跳过
+    if dispatch.debug_message_control as *const () == dispatch.stub as *const () {
+        return;
+    }
+
+    unsafe {
+        (dispatch.debug_message_control)(
+            GL_DONT_CARE,
+            GL_DEBUG_TYPE_PERFORMANCE,
+            GL_DONT_CARE,
+            0,
+            std::ptr::null(),
+            GL_FALSE,
+        );
+        (dispatch.debug_message_control)(
+            GL_DONT_CARE,
+            GL_DEBUG_TYPE_OTHER,
+            GL_DONT_CARE,
+            0,
+            std::ptr::null(),
+            GL_FALSE,
+        );
+    }
+
+    log::info!("[FluorateGL] 已屏蔽 GLES Debug PERFORMANCE/OTHER 消息");
 }
 
 pub fn with_egl_dispatch<F, R>(f: F) -> R
