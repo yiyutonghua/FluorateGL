@@ -1,6 +1,6 @@
 use glslang::{
-    Compiler, CompilerOptions, ShaderInput, ShaderMessage, ShaderSource, ShaderStage, SourceLanguage,
-    SpirvVersion, Target, VulkanVersion,
+    Compiler, CompilerOptions, OpenGlVersion, ShaderInput, ShaderMessage, ShaderSource,
+    ShaderStage, SourceLanguage, SpirvVersion, Target,
 };
 use regex::Regex;
 use spirv_cross2::compile::glsl::GlslVersion;
@@ -86,9 +86,9 @@ fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
 
     let options = CompilerOptions {
         source_language: SourceLanguage::GLSL,
-        target: Target::Vulkan {
-            version: VulkanVersion::Vulkan1_0,
-            spirv_version: SpirvVersion::SPIRV1_0,
+        target: Target::OpenGL {
+            version: OpenGlVersion::OpenGL4_5,
+            spirv_version: Some(SpirvVersion::SPIRV1_0),
         },
         version_profile: None,
         messages: ShaderMessage::SUPPRESS_WARNINGS,
