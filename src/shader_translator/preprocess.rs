@@ -90,10 +90,7 @@ fn parse_version_number(version_line: &str) -> Option<u32> {
 /// 策略：扫描所有顶层 in/out 声明（非函数参数、非 block 成员），
 /// 为缺少 location 的声明按出现顺序分配递增 location 编号。
 fn inject_missing_locations(result: &mut String) {
-    let re = Regex::new(
-        r"(?m)^(?P<indent>\s*)(?P<qualifier>in|out)\s+(?P<rest>.+?;\s*)$",
-    )
-    .unwrap();
+    let re = Regex::new(r"(?m)^(?P<indent>\s*)(?P<qualifier>in|out)\s+(?P<rest>.+?;\s*)$").unwrap();
 
     let mut location_counter: u32 = 0;
     let mut modified = String::with_capacity(result.len());
@@ -121,7 +118,10 @@ fn inject_missing_locations(result: &mut String) {
             }
 
             // 注入 layout(location=N)
-            let new_line = format!("{}layout(location={}) {} {}", indent, location_counter, qualifier, rest);
+            let new_line = format!(
+                "{}layout(location={}) {} {}",
+                indent, location_counter, qualifier, rest
+            );
             modified.push_str(&new_line);
             modified.push('\n');
             location_counter += 1;
@@ -153,19 +153,11 @@ fn inject_missing_locations(result: &mut String) {
 fn inject_missing_uniform_locations(result: &mut String) {
     // 匹配: uniform <type> <name>[<array>];
     // Rust regex crate 不支持 lookahead，opaque 类型在代码中过滤
-    let re = Regex::new(
-        r"(?m)^(?P<indent>\s*)uniform\s+(?P<type>\w+)\s+(?P<rest>.+?;\s*)$",
-    )
-    .unwrap();
+    let re =
+        Regex::new(r"(?m)^(?P<indent>\s*)uniform\s+(?P<type>\w+)\s+(?P<rest>.+?;\s*)$").unwrap();
 
     // opaque 类型前缀：这些类型由 AUTO_MAP_BINDINGS 处理，不需要 layout(location)
-    const OPAQUE_PREFIXES: &[&str] = &[
-        "sampler",
-        "texture",
-        "image",
-        "atomic_uint",
-        "subpass",
-    ];
+    const OPAQUE_PREFIXES: &[&str] = &["sampler", "texture", "image", "atomic_uint", "subpass"];
 
     let mut location_counter: u32 = 0;
     let mut modified = String::with_capacity(result.len());
@@ -242,10 +234,8 @@ fn inject_missing_bindings(result: &mut String) -> bool {
     // 匹配无 layout 的 uniform/buffer 块声明
     // 例如：
     //   uniform MyBlock {
-    let re_plain_block = Regex::new(
-        r"(?m)^(?P<indent>\s*)(?P<kind>uniform|buffer)\s+(?P<name>\w+)\s*\{",
-    )
-    .unwrap();
+    let re_plain_block =
+        Regex::new(r"(?m)^(?P<indent>\s*)(?P<kind>uniform|buffer)\s+(?P<name>\w+)\s*\{").unwrap();
 
     let mut binding_counter: u32 = 0;
     let mut injected = false;
@@ -288,7 +278,10 @@ fn inject_missing_bindings(result: &mut String) -> bool {
             } else {
                 format!("std140, binding={}", binding_counter)
             };
-            let new_line = format!("{}layout({}) {} {} {{", indent, layout_qualifier, kind, name);
+            let new_line = format!(
+                "{}layout({}) {} {} {{",
+                indent, layout_qualifier, kind, name
+            );
             modified.push_str(&new_line);
             modified.push('\n');
             binding_counter += 1;
@@ -370,7 +363,8 @@ mod tests {
 
     #[test]
     fn test_inject_locations() {
-        let mut result = "#version 450\nin vec4 color;\nout vec4 fragColor;\nvoid main() {}\n".to_string();
+        let mut result =
+            "#version 450\nin vec4 color;\nout vec4 fragColor;\nvoid main() {}\n".to_string();
         inject_missing_locations(&mut result);
         assert!(result.contains("layout(location=0) in vec4 color;"));
         assert!(result.contains("layout(location=1) out vec4 fragColor;"));
@@ -378,7 +372,8 @@ mod tests {
 
     #[test]
     fn test_inject_locations_skip_existing() {
-        let mut result = "#version 450\nlayout(location=5) in vec4 color;\nout vec4 fragColor;\n".to_string();
+        let mut result =
+            "#version 450\nlayout(location=5) in vec4 color;\nout vec4 fragColor;\n".to_string();
         inject_missing_locations(&mut result);
         // 已有 location=5 的不变
         assert!(result.contains("layout(location=5) in vec4 color;"));
@@ -388,7 +383,8 @@ mod tests {
 
     #[test]
     fn test_inject_uniform_locations() {
-        let mut result = "#version 450\nuniform mat4 MVP;\nuniform vec3 color;\nvoid main() {}\n".to_string();
+        let mut result =
+            "#version 450\nuniform mat4 MVP;\nuniform vec3 color;\nvoid main() {}\n".to_string();
         inject_missing_uniform_locations(&mut result);
         assert!(result.contains("layout(location=0) uniform mat4 MVP;"));
         assert!(result.contains("layout(location=1) uniform vec3 color;"));
@@ -406,7 +402,9 @@ mod tests {
     #[test]
     fn test_inject_uniform_locations_skip_block() {
         // uniform block 不应注入 location
-        let mut result = "#version 450\nuniform MyBlock {\n    mat4 data;\n};\nuniform float scale;\n".to_string();
+        let mut result =
+            "#version 450\nuniform MyBlock {\n    mat4 data;\n};\nuniform float scale;\n"
+                .to_string();
         inject_missing_uniform_locations(&mut result);
         assert!(!result.contains("layout(location=0) uniform MyBlock"));
         assert!(result.contains("layout(location=0) uniform float scale;"));
@@ -414,7 +412,9 @@ mod tests {
 
     #[test]
     fn test_inject_uniform_locations_skip_existing_layout() {
-        let mut result = "#version 450\nlayout(location=3) uniform mat4 MVP;\nuniform float scale;\n".to_string();
+        let mut result =
+            "#version 450\nlayout(location=3) uniform mat4 MVP;\nuniform float scale;\n"
+                .to_string();
         inject_missing_uniform_locations(&mut result);
         assert!(result.contains("layout(location=3) uniform mat4 MVP;"));
         assert!(result.contains("layout(location=0) uniform float scale;"));
@@ -438,7 +438,9 @@ mod tests {
 
     #[test]
     fn test_inject_bindings_skip_existing() {
-        let mut result = "#version 330\nlayout(std140, binding=3) uniform MyBlock {\n    mat4 data;\n};\n".to_string();
+        let mut result =
+            "#version 330\nlayout(std140, binding=3) uniform MyBlock {\n    mat4 data;\n};\n"
+                .to_string();
         let injected = inject_missing_bindings(&mut result);
         assert!(!injected);
         assert!(result.contains("layout(std140, binding=3) uniform MyBlock"));

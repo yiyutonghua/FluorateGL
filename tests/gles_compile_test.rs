@@ -76,7 +76,11 @@ fn gles_version_candidates_sorted_descending() {
     let src = "#version 330\nvoid main() {}\n";
     let candidates = gles_compile::gles_version_candidates(src);
     for i in 1..candidates.len() {
-        assert!(candidates[i - 1] > candidates[i], "candidates not descending: {:?}", candidates);
+        assert!(
+            candidates[i - 1] > candidates[i],
+            "candidates not descending: {:?}",
+            candidates
+        );
     }
 }
 
@@ -97,7 +101,11 @@ fn compile_vertex_spv_to_gles_succeeds() {
     let result = gles_compile::compile(&spv, 300);
     assert!(result.is_ok(), "expected Ok, got Err: {:?}", result.err());
     let gles_src = result.unwrap();
-    assert!(gles_src.contains("#version"), "missing #version: {}", gles_src);
+    assert!(
+        gles_src.contains("#version"),
+        "missing #version: {}",
+        gles_src
+    );
 }
 
 #[test]
@@ -111,7 +119,11 @@ fn compile_fragment_spv_to_gles_succeeds() {
     let result = gles_compile::compile(&spv, 300);
     assert!(result.is_ok(), "got Err: {:?}", result.err());
     let gles_src = result.unwrap();
-    assert!(gles_src.contains("texture("), "missing texture() call: {}", gles_src);
+    assert!(
+        gles_src.contains("texture("),
+        "missing texture() call: {}",
+        gles_src
+    );
 }
 
 #[test]
@@ -138,7 +150,11 @@ fn compile_spv_to_gles_320() {
     let result = gles_compile::compile(&spv, 320);
     assert!(result.is_ok());
     let gles_src = result.unwrap();
-    assert!(gles_src.contains("#version 320 es"), "expected #version 320 es: {}", gles_src);
+    assert!(
+        gles_src.contains("#version 320 es"),
+        "expected #version 320 es: {}",
+        gles_src
+    );
 }
 
 #[test]
@@ -148,7 +164,11 @@ fn compile_spv_to_gles_310() {
     let result = gles_compile::compile(&spv, 310);
     assert!(result.is_ok());
     let gles_src = result.unwrap();
-    assert!(gles_src.contains("#version 310 es"), "expected #version 310 es: {}", gles_src);
+    assert!(
+        gles_src.contains("#version 310 es"),
+        "expected #version 310 es: {}",
+        gles_src
+    );
 }
 
 #[test]
@@ -158,7 +178,11 @@ fn compile_spv_to_gles_300() {
     let result = gles_compile::compile(&spv, 300);
     assert!(result.is_ok());
     let gles_src = result.unwrap();
-    assert!(gles_src.contains("#version 300 es"), "expected #version 300 es: {}", gles_src);
+    assert!(
+        gles_src.contains("#version 300 es"),
+        "expected #version 300 es: {}",
+        gles_src
+    );
 }
 
 // ============ compile: 后处理验证 ============
@@ -175,7 +199,11 @@ fn compile_removes_binding_in_output() {
     let result = gles_compile::compile(&spv, 300);
     assert!(result.is_ok());
     let gles_src = result.unwrap();
-    assert!(!gles_src.contains("binding"), "binding should be removed: {}", gles_src);
+    assert!(
+        !gles_src.contains("binding"),
+        "binding should be removed: {}",
+        gles_src
+    );
 }
 
 #[test]
@@ -185,7 +213,11 @@ fn compile_injects_precision_in_output() {
     let result = gles_compile::compile(&spv, 300);
     assert!(result.is_ok());
     let gles_src = result.unwrap();
-    assert!(gles_src.contains("precision highp float;"), "missing precision: {}", gles_src);
+    assert!(
+        gles_src.contains("precision highp float;"),
+        "missing precision: {}",
+        gles_src
+    );
     assert!(gles_src.contains("precision highp int;"));
 }
 
@@ -253,6 +285,11 @@ fn compile_fallback_through_gles_versions() {
     let spv = make_spirv(src, spirv_compile::GL_VERTEX_SHADER);
     for version in [320, 310, 300] {
         let result = gles_compile::compile(&spv, version);
-        assert!(result.is_ok(), "GLES {} failed: {:?}", version, result.err());
+        assert!(
+            result.is_ok(),
+            "GLES {} failed: {:?}",
+            version,
+            result.err()
+        );
     }
 }

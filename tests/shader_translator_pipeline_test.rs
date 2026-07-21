@@ -12,8 +12,8 @@
 //! - TranslationResult 枚举变体验证
 //! - 翻译输出包含 GLSL ES 版本和 precision
 
-use fluorategl::shader_translator::spirv_pass::{translate, TranslationResult};
 use fluorategl::shader_translator::spirv_compile;
+use fluorategl::shader_translator::spirv_pass::{TranslationResult, translate};
 
 const GL_VERTEX_SHADER: u32 = spirv_compile::GL_VERTEX_SHADER;
 const GL_FRAGMENT_SHADER: u32 = spirv_compile::GL_FRAGMENT_SHADER;
@@ -139,7 +139,11 @@ fn translate_fragment_with_multiple_samplers_succeeds() {
     match result {
         TranslationResult::Translated(out) => {
             // binding 应被后处理移除
-            assert!(!out.contains("binding"), "binding should be removed: {}", out);
+            assert!(
+                !out.contains("binding"),
+                "binding should be removed: {}",
+                out
+            );
         }
         other => panic!("expected Translated, got {:?}", other),
     }
@@ -167,7 +171,11 @@ fn translate_minecraft_realistic_fragment_succeeds() {
     match result {
         TranslationResult::Translated(out) => {
             assert!(out.contains("discard"), "missing discard: {}", out);
-            assert!(out.contains("ColorModulator"), "missing UBO member: {}", out);
+            assert!(
+                out.contains("ColorModulator"),
+                "missing UBO member: {}",
+                out
+            );
         }
         other => panic!("expected Translated, got {:?}", other),
     }
@@ -219,7 +227,11 @@ fn translate_output_contains_precision() {
     let src = "#version 330 core\nvoid main() { gl_Position = vec4(1.0); }\n";
     let result = translate(src, GL_VERTEX_SHADER);
     if let TranslationResult::Translated(out) = result {
-        assert!(out.contains("precision highp float;"), "missing precision: {}", out);
+        assert!(
+            out.contains("precision highp float;"),
+            "missing precision: {}",
+            out
+        );
         assert!(out.contains("precision highp int;"));
     } else {
         panic!("expected Translated");
@@ -235,7 +247,11 @@ fn translate_output_does_not_contain_binding() {
                void main() { fragColor = texture(tex, uv); }\n";
     let result = translate(src, GL_FRAGMENT_SHADER);
     if let TranslationResult::Translated(out) = result {
-        assert!(!out.contains("binding"), "binding should be removed: {}", out);
+        assert!(
+            !out.contains("binding"),
+            "binding should be removed: {}",
+            out
+        );
     } else {
         panic!("expected Translated");
     }
@@ -352,7 +368,10 @@ fn translate_does_not_panic_on_malformed_input() {
 
 #[test]
 fn translate_does_not_panic_on_large_input() {
-    let large_src = format!("#version 330 core\nvoid main() {{\n{}\n}}\n", "float x = 0.0;\n".repeat(1000));
+    let large_src = format!(
+        "#version 330 core\nvoid main() {{\n{}\n}}\n",
+        "float x = 0.0;\n".repeat(1000)
+    );
     let result = translate(&large_src, GL_VERTEX_SHADER);
     let _ = result;
 }
@@ -375,7 +394,10 @@ fn translate_same_shader_produces_consistent_output() {
         (TranslationResult::Translated(out1), TranslationResult::Translated(out2)) => {
             assert_eq!(out1, out2, "output should be consistent");
         }
-        _ => panic!("expected both Translated, got {:?} and {:?}", result1, result2),
+        _ => panic!(
+            "expected both Translated, got {:?} and {:?}",
+            result1, result2
+        ),
     }
 }
 
@@ -383,10 +405,13 @@ fn translate_same_shader_produces_consistent_output() {
 fn translate_different_stages_produce_different_output() {
     // vertex 和 fragment shader 应产生不同的输出
     let vert_src = "#version 330 core\nvoid main() { gl_Position = vec4(1.0); }\n";
-    let frag_src = "#version 330 core\nout vec4 fragColor;\nvoid main() { fragColor = vec4(1.0); }\n";
+    let frag_src =
+        "#version 330 core\nout vec4 fragColor;\nvoid main() { fragColor = vec4(1.0); }\n";
     let vert_result = translate(vert_src, GL_VERTEX_SHADER);
     let frag_result = translate(frag_src, GL_FRAGMENT_SHADER);
-    if let (TranslationResult::Translated(v), TranslationResult::Translated(f)) = (vert_result, frag_result) {
+    if let (TranslationResult::Translated(v), TranslationResult::Translated(f)) =
+        (vert_result, frag_result)
+    {
         assert_ne!(v, f, "vertex and fragment output should differ");
     } else {
         panic!("expected both Translated");

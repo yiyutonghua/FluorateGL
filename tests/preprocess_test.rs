@@ -136,7 +136,11 @@ fn preprocess_strips_core_profile_on_upgrade() {
 fn preprocess_removes_line_directives() {
     let src = "#version 330\n#line 0 2\nvoid main() {}\n";
     let result = preprocess::preprocess(src);
-    assert!(!result.contains("#line"), "result still contains #line: {}", result);
+    assert!(
+        !result.contains("#line"),
+        "result still contains #line: {}",
+        result
+    );
 }
 
 #[test]
@@ -159,15 +163,27 @@ fn preprocess_removes_indented_line_directives() {
 fn preprocess_injects_location_for_in_variables() {
     let src = "#version 330\nin vec4 color;\nin vec2 uv;\nvoid main() {}\n";
     let result = preprocess::preprocess(src);
-    assert!(result.contains("layout(location=0) in vec4 color;"), "got: {}", result);
-    assert!(result.contains("layout(location=1) in vec2 uv;"), "got: {}", result);
+    assert!(
+        result.contains("layout(location=0) in vec4 color;"),
+        "got: {}",
+        result
+    );
+    assert!(
+        result.contains("layout(location=1) in vec2 uv;"),
+        "got: {}",
+        result
+    );
 }
 
 #[test]
 fn preprocess_injects_location_for_out_variables() {
     let src = "#version 330\nout vec4 fragColor;\nvoid main() {}\n";
     let result = preprocess::preprocess(src);
-    assert!(result.contains("layout(location=0) out vec4 fragColor;"), "got: {}", result);
+    assert!(
+        result.contains("layout(location=0) out vec4 fragColor;"),
+        "got: {}",
+        result
+    );
 }
 
 #[test]
@@ -181,7 +197,8 @@ fn preprocess_injects_incrementing_locations_for_in_and_out() {
 
 #[test]
 fn preprocess_skips_existing_location_on_in_out() {
-    let src = "#version 330\nlayout(location=5) in vec4 color;\nout vec4 fragColor;\nvoid main() {}\n";
+    let src =
+        "#version 330\nlayout(location=5) in vec4 color;\nout vec4 fragColor;\nvoid main() {}\n";
     let result = preprocess::preprocess(src);
     assert!(result.contains("layout(location=5) in vec4 color;"));
     // 缺少 location 的 out 仍从 0 开始
@@ -194,8 +211,16 @@ fn preprocess_skips_existing_location_on_in_out() {
 fn preprocess_injects_location_for_non_opaque_uniform() {
     let src = "#version 330\nuniform mat4 MVP;\nuniform vec3 color;\nvoid main() {}\n";
     let result = preprocess::preprocess(src);
-    assert!(result.contains("layout(location=0) uniform mat4 MVP;"), "got: {}", result);
-    assert!(result.contains("layout(location=1) uniform vec3 color;"), "got: {}", result);
+    assert!(
+        result.contains("layout(location=0) uniform mat4 MVP;"),
+        "got: {}",
+        result
+    );
+    assert!(
+        result.contains("layout(location=1) uniform vec3 color;"),
+        "got: {}",
+        result
+    );
 }
 
 #[test]
@@ -261,7 +286,11 @@ fn preprocess_injects_binding_for_plain_ubo() {
 fn preprocess_injects_binding_for_ssbo() {
     let src = "#version 430\nbuffer MyBuffer {\n    vec4 data[];\n};\nvoid main() {}\n";
     let result = preprocess::preprocess(src);
-    assert!(result.contains("layout(std430, binding=0) buffer MyBuffer"), "got: {}", result);
+    assert!(
+        result.contains("layout(std430, binding=0) buffer MyBuffer"),
+        "got: {}",
+        result
+    );
 }
 
 #[test]
@@ -282,7 +311,8 @@ fn preprocess_assigns_incrementing_bindings() {
 #[test]
 fn preprocess_upgrades_version_when_binding_injected() {
     // #version 330 + UBO 注入 binding → 升级到 420+
-    let src = "#version 330\nlayout(std140) uniform MyBlock {\n    mat4 data;\n};\nvoid main() {}\n";
+    let src =
+        "#version 330\nlayout(std140) uniform MyBlock {\n    mat4 data;\n};\nvoid main() {}\n";
     let result = preprocess::preprocess(src);
     // 升级到 450（force_glsl_version 先升级到 450，ensure_binding_version 不再触发）
     assert!(result.starts_with("#version 450 core"));

@@ -1,7 +1,7 @@
 //! 独立测试：验证 GLSL -> SPIR-V -> GLSL ES 翻译管线
 //! 运行：cargo run --example translate_test
 
-use fluorategl::shader_translator::spirv_pass::{translate, TranslationResult};
+use fluorategl::shader_translator::spirv_pass::{TranslationResult, translate};
 
 const GL_VERTEX_SHADER: u32 = 0x8B31;
 const GL_FRAGMENT_SHADER: u32 = 0x8B30;

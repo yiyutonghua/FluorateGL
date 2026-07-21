@@ -50,7 +50,8 @@ fn postprocess_removes_binding_trailing_in_layout() {
 
 #[test]
 fn postprocess_removes_multiple_bindings() {
-    let src = "layout(binding = 0) uniform sampler2D tex;\nlayout(binding = 1) uniform sampler2D tex2;";
+    let src =
+        "layout(binding = 0) uniform sampler2D tex;\nlayout(binding = 1) uniform sampler2D tex2;";
     let result = postprocess::post_process(src);
     assert!(!result.contains("binding"));
 }
@@ -84,7 +85,11 @@ fn postprocess_cleans_empty_layout_parens() {
     // 移除 binding 后若 layout() 为空，整个 layout() 也移除
     let src = "layout(binding = 0) uniform sampler2D tex;";
     let result = postprocess::post_process(src);
-    assert!(!result.contains("layout()"), "empty layout() should be cleaned: {}", result);
+    assert!(
+        !result.contains("layout()"),
+        "empty layout() should be cleaned: {}",
+        result
+    );
 }
 
 #[test]
@@ -102,7 +107,11 @@ fn postprocess_preserves_push_constant_layout() {
 fn postprocess_injects_location_for_out_color() {
     let src = "out vec4 outColor0;";
     let result = postprocess::post_process(src);
-    assert!(result.contains("layout(location=0) out vec4 outColor0;"), "got: {}", result);
+    assert!(
+        result.contains("layout(location=0) out vec4 outColor0;"),
+        "got: {}",
+        result
+    );
 }
 
 #[test]
@@ -167,7 +176,10 @@ fn postprocess_inserts_precision_after_version() {
     let result = postprocess::post_process(src);
     let version_pos = result.find("#version").unwrap();
     let precision_pos = result.find("precision highp float;").unwrap();
-    assert!(precision_pos > version_pos, "precision should come after #version");
+    assert!(
+        precision_pos > version_pos,
+        "precision should come after #version"
+    );
 }
 
 // ============ 组合场景 ============
@@ -224,7 +236,8 @@ fn postprocess_preserves_layout_location_on_in() {
 #[test]
 fn postprocess_preserves_layout_std140_on_ubo() {
     // UBO 的 std140 不应被移除
-    let src = "#version 320 es\nlayout(std140, binding = 0) uniform Block { mat4 m; };\nvoid main() {}\n";
+    let src =
+        "#version 320 es\nlayout(std140, binding = 0) uniform Block { mat4 m; };\nvoid main() {}\n";
     let result = postprocess::post_process(src);
     assert!(result.contains("layout(std140)"));
     assert!(!result.contains("binding"));

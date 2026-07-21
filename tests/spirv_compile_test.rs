@@ -90,32 +90,50 @@ fn map_gl_stage_invalid_returns_none() {
 
 #[test]
 fn stage_name_vertex() {
-    assert_eq!(spirv_compile::stage_name(spirv_compile::GL_VERTEX_SHADER), "vertex");
+    assert_eq!(
+        spirv_compile::stage_name(spirv_compile::GL_VERTEX_SHADER),
+        "vertex"
+    );
 }
 
 #[test]
 fn stage_name_fragment() {
-    assert_eq!(spirv_compile::stage_name(spirv_compile::GL_FRAGMENT_SHADER), "fragment");
+    assert_eq!(
+        spirv_compile::stage_name(spirv_compile::GL_FRAGMENT_SHADER),
+        "fragment"
+    );
 }
 
 #[test]
 fn stage_name_geometry() {
-    assert_eq!(spirv_compile::stage_name(spirv_compile::GL_GEOMETRY_SHADER), "geometry");
+    assert_eq!(
+        spirv_compile::stage_name(spirv_compile::GL_GEOMETRY_SHADER),
+        "geometry"
+    );
 }
 
 #[test]
 fn stage_name_tess_control() {
-    assert_eq!(spirv_compile::stage_name(spirv_compile::GL_TESS_CONTROL_SHADER), "tess_control");
+    assert_eq!(
+        spirv_compile::stage_name(spirv_compile::GL_TESS_CONTROL_SHADER),
+        "tess_control"
+    );
 }
 
 #[test]
 fn stage_name_tess_evaluation() {
-    assert_eq!(spirv_compile::stage_name(spirv_compile::GL_TESS_EVALUATION_SHADER), "tess_eval");
+    assert_eq!(
+        spirv_compile::stage_name(spirv_compile::GL_TESS_EVALUATION_SHADER),
+        "tess_eval"
+    );
 }
 
 #[test]
 fn stage_name_compute() {
-    assert_eq!(spirv_compile::stage_name(spirv_compile::GL_COMPUTE_SHADER), "compute");
+    assert_eq!(
+        spirv_compile::stage_name(spirv_compile::GL_COMPUTE_SHADER),
+        "compute"
+    );
 }
 
 #[test]
@@ -137,7 +155,11 @@ fn compile_simple_vertex_shader_succeeds() {
     let spv = result.unwrap();
     assert!(!spv.is_empty(), "SPIR-V should not be empty");
     // SPIR-V 魔数检查：0x07230203
-    assert_eq!(spv[0], 0x07230203, "invalid SPIR-V magic number: 0x{:08X}", spv[0]);
+    assert_eq!(
+        spv[0], 0x07230203,
+        "invalid SPIR-V magic number: 0x{:08X}",
+        spv[0]
+    );
 }
 
 #[test]
@@ -185,7 +207,10 @@ fn compile_fragment_with_multiple_samplers_succeeds() {
                    fragColor = c0 * c1;\n\
                }\n";
     let result = spirv_compile::compile(src, spirv_compile::GL_FRAGMENT_SHADER);
-    assert!(result.is_some(), "expected SPIR-V for multi-sampler fragment shader");
+    assert!(
+        result.is_some(),
+        "expected SPIR-V for multi-sampler fragment shader"
+    );
 }
 
 #[test]

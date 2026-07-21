@@ -31,7 +31,9 @@ pub fn post_process(src: &str) -> String {
     // 先处理 binding 在中间的情况: layout(..., binding=X, ...) → layout(..., ...)
     result = re_binding_middle.replace_all(&result, "").to_string();
     // 再处理 binding 在开头的情况: layout(binding=X, ...) → layout(...)
-    result = re_binding_leading.replace_all(&result, "layout(").to_string();
+    result = re_binding_leading
+        .replace_all(&result, "layout(")
+        .to_string();
     // 最后处理 binding 是唯一项的情况: layout(binding=X) → 移除
     result = re_binding.replace_all(&result, "").to_string();
 
@@ -59,8 +61,7 @@ fn ensure_precision(source: &str) -> String {
     let mut result = source.to_string();
 
     // 移除所有已有的 precision 声明（注释中的不受影响，因为 #version 之后不会有注释行）
-    let re_precision =
-        Regex::new(r"(?m)^\s*precision\s+\w+\s+(?:float|int)\s*;.*$(\n)?").unwrap();
+    let re_precision = Regex::new(r"(?m)^\s*precision\s+\w+\s+(?:float|int)\s*;.*$(\n)?").unwrap();
     result = re_precision.replace_all(&result, "").to_string();
 
     let precision_decl = "precision highp float;\nprecision highp int;\n";
