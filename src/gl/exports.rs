@@ -169,7 +169,7 @@ pub extern "C" fn glPixelStorei(pname: u32, param: i32) {
 pub extern "C" fn glDrawArrays(mode: u32, first: i32, count: i32) {
     let bound_vao = state::with_state(|s| s.bound_vertex_array);
     let bound_buf = state::with_state(|s| s.bound_buffer);
-    log::info!(
+    log::debug!(
         "[FluorateGL] glDrawArrays(mode=0x{:04X}, first={}, count={}) bound_vao={} bound_buf={} (tid={})",
         mode,
         first,
@@ -193,7 +193,7 @@ pub extern "C" fn glDrawElements(
 ) {
     let bound_vao = state::with_state(|s| s.bound_vertex_array);
     let bound_buf = state::with_state(|s| s.bound_buffer);
-    log::info!(
+    log::debug!(
         "[FluorateGL] glDrawElements(mode=0x{:04X}, count={}, type=0x{:04X}, indices={:?}) bound_vao={} bound_buf={} (tid={})",
         mode,
         count,

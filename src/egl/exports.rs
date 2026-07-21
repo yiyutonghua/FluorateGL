@@ -397,7 +397,7 @@ pub extern "C" fn eglGetProcAddress(proc_name: *const libc::c_char) -> *mut std:
         let local = unsafe { libc::dlsym(handle, proc_name) };
         if !local.is_null() {
             if is_key {
-                log::info!("[FluorateGL] eglGetProcAddress({}) -> self handle", name);
+                log::debug!("[FluorateGL] eglGetProcAddress({}) -> self handle", name);
             }
             return local;
         }
@@ -413,14 +413,14 @@ pub extern "C" fn eglGetProcAddress(proc_name: *const libc::c_char) -> *mut std:
     let local = unsafe { libc::dlsym(libc::RTLD_DEFAULT, proc_name) };
     if !local.is_null() {
         if is_key {
-            log::info!("[FluorateGL] eglGetProcAddress({}) -> RTLD_DEFAULT", name);
+            log::debug!("[FluorateGL] eglGetProcAddress({}) -> RTLD_DEFAULT", name);
         }
         return local;
     }
 
     // 3. 最后回退到底层 EGL 驱动
     if is_key {
-        log::info!("[FluorateGL] eglGetProcAddress({}) -> EGL driver", name);
+        log::debug!("[FluorateGL] eglGetProcAddress({}) -> EGL driver", name);
     }
     dispatcher::get_proc_address(proc_name)
 }

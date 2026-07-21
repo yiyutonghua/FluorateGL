@@ -79,7 +79,7 @@ pub extern "C" fn glVertexAttribPointer(
 ) {
     let bound_buffer = state::with_state(|s| s.bound_buffer);
     let bound_vao = state::with_state(|s| s.bound_vertex_array);
-    log::info!(
+    log::debug!(
         "[FluorateGL] glVertexAttribPointer(index={}, size={}, type=0x{:04X}, norm={}, stride={}, ptr={:?}) bound_buf={} bound_vao={} (tid={})",
         index,
         size,
