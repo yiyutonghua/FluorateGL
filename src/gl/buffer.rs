@@ -10,6 +10,10 @@ pub extern "C" fn glGenBuffers(n: i32, buffers: *mut u32) {
             (dispatch.gen_buffers)(1, &mut gles_id);
 
             let desktop_id = state::with_state(|s| s.buffers.alloc(gles_id));
+            log::info!(
+                "[FluorateGL] glGenBuffers: GLES {} -> desktop {}",
+                gles_id, desktop_id
+            );
             *buffers.offset(i) = desktop_id;
         }
     });
@@ -22,7 +26,16 @@ pub extern "C" fn glDeleteBuffers(n: i32, buffers: *const u32) {
         for i in 0..n as isize {
             let desktop_id = *buffers.offset(i);
             if let Some(gles_id) = state::with_state(|s| s.buffers.delete(desktop_id)) {
+                log::info!(
+                    "[FluorateGL] glDeleteBuffers: desktop {} -> GLES {} (deleted)",
+                    desktop_id, gles_id
+                );
                 (dispatch.delete_buffers)(1, &gles_id);
+            } else {
+                log::info!(
+                    "[FluorateGL] glDeleteBuffers: desktop {} NOT FOUND in IdMap, ignored",
+                    desktop_id
+                );
             }
         }
     });
@@ -45,6 +58,13 @@ pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
             })
             })
         };
+
+        if buffer != 0 && gles_id != 0 {
+            log::info!(
+                "[FluorateGL] glBindBuffer(0x{:04X}): desktop {} -> GLES {}",
+                target, buffer, gles_id
+            );
+        }
 
         (dispatch.bind_buffer)(target, gles_id);
 

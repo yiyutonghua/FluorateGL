@@ -350,6 +350,32 @@ pub extern "C" fn eglGetError() -> u32 {
     dispatcher::get_error()
 }
 
+/// 检查是否为需要追踪的关键 GL 函数（用于诊断 ID 映射问题）
+fn is_key_gl_function(name: &str) -> bool {
+    matches!(
+        name,
+        "glBindBuffer"
+            | "glGenBuffers"
+            | "glDeleteBuffers"
+            | "glBindVertexArray"
+            | "glGenVertexArrays"
+            | "glDeleteVertexArrays"
+            | "glDrawArrays"
+            | "glDrawElements"
+            | "glVertexAttribPointer"
+            | "glEnableVertexAttribArray"
+            | "glUseProgram"
+            | "glBindTexture"
+            | "glGenTextures"
+            | "glDeleteTextures"
+            | "glBufferData"
+            | "glBufferSubData"
+            | "glBindFramebuffer"
+            | "glGenFramebuffers"
+            | "glDeleteFramebuffers"
+    )
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglGetProcAddress(proc_name: *const libc::c_char) -> *mut std::ffi::c_void {
@@ -357,15 +383,17 @@ pub extern "C" fn eglGetProcAddress(proc_name: *const libc::c_char) -> *mut std:
         return std::ptr::null_mut();
     }
 
+    let name_str = unsafe { std::ffi::CStr::from_ptr(proc_name) };
+    let name = name_str.to_string_lossy();
+    let is_key = is_key_gl_function(&name);
+
     // 1. 优先使用我们自己库的句柄查找，确保返回 FluorateGL 的函数指针
-    //    这在 Android 上至关重要：RTLD_DEFAULT 可能返回 libGLESv2.so 的函数指针
     if let Some(handle) = crate::get_self_handle() {
         let local = unsafe { libc::dlsym(handle, proc_name) };
         if !local.is_null() {
-            log::debug!(
-                "[FluorateGL] eglGetProcAddress({:?}) -> self handle",
-                unsafe { std::ffi::CStr::from_ptr(proc_name) }
-            );
+            if is_key {
+                log::info!("[FluorateGL] eglGetProcAddress({}) -> self handle", name);
+            }
             return local;
         }
     }
@@ -373,17 +401,15 @@ pub extern "C" fn eglGetProcAddress(proc_name: *const libc::c_char) -> *mut std:
     // 2. Fallback: RTLD_DEFAULT（全局符号表查找）
     let local = unsafe { libc::dlsym(libc::RTLD_DEFAULT, proc_name) };
     if !local.is_null() {
-        log::debug!(
-            "[FluorateGL] eglGetProcAddress({:?}) -> RTLD_DEFAULT",
-            unsafe { std::ffi::CStr::from_ptr(proc_name) }
-        );
+        if is_key {
+            log::info!("[FluorateGL] eglGetProcAddress({}) -> RTLD_DEFAULT", name);
+        }
         return local;
     }
 
     // 3. 最后回退到底层 EGL 驱动
-    log::debug!(
-        "[FluorateGL] eglGetProcAddress({:?}) -> EGL driver fallback",
-        unsafe { std::ffi::CStr::from_ptr(proc_name) }
-    );
+    if is_key {
+        log::info!("[FluorateGL] eglGetProcAddress({}) -> EGL driver", name);
+    }
     dispatcher::get_proc_address(proc_name)
 }
