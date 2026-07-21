@@ -5,4 +5,5 @@ set -e
 
 cargo build \
     --target x86_64-unknown-linux-gnu \
+    --features build-from-source \
     "$@"
