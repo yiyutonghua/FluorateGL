@@ -84,20 +84,20 @@ pub extern "C" fn fluorategl_init() -> i32 {
 
     backend::set_config(cfg);
 
-    // 加载Gles
-    if backend::init_gles().is_err() {
-        log::error!("[FluorateGL] Failed to initialize GLES");
-        return -1;
-    }
-    log::info!("[FluorateGL] GLES library loaded");
-
     // 加载EGL
     if backend::init_egl().is_err() {
         log::error!("[FluorateGL] Failed to initialize EGL");
         return -2;
     }
     log::info!("[FluorateGL] EGL library loaded");
-
+    
+    // 加载Gles
+    if backend::init_gles().is_err() {
+        log::error!("[FluorateGL] Failed to initialize GLES");
+        return -1;
+    }
+    log::info!("[FluorateGL] GLES library loaded");
+    
     // 查询并记录 GPU 信息
     // Use the dispatch table directly to avoid `with_gles_dispatch` re-entering
     // `fluorategl_init` through `ensure_initialized`.
