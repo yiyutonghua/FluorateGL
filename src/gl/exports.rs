@@ -26,7 +26,8 @@ pub(crate) fn is_unsupported_gles_cap(cap: u32) -> bool {
         0x0B20 | // GL_LINE_SMOOTH
         0x0B41 | // GL_POLYGON_SMOOTH
         0x809D | // GL_MULTISAMPLE
-        0x0B21 // GL_LINE_STIPPLE
+        0x0B21 | // GL_LINE_STIPPLE
+        0x0BC0 // GL_ALPHA_TEST (GLES 2.0+ 不支持，alpha test 在 shader 中通过 discard 实现)
     )
 }
 
