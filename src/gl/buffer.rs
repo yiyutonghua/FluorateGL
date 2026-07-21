@@ -356,9 +356,13 @@ pub extern "C" fn glTexBuffer(target: u32, internalformat: u32, buffer: u32) {
             })
         };
 
-        log::info!(
+        log::debug!(
             "[FluorateGL] glTexBuffer(target=0x{:04X}, fmt=0x{:04X}) desktop {} -> GLES {} (tid={})",
-            target, internalformat, buffer, gles_id, state::thread_id_u64()
+            target,
+            internalformat,
+            buffer,
+            gles_id,
+            state::thread_id_u64()
         );
 
         (dispatch.tex_buffer)(target, internalformat, gles_id);
@@ -394,9 +398,13 @@ pub extern "C" fn glTexBufferRange(
             })
         };
 
-        log::info!(
+        log::debug!(
             "[FluorateGL] glTexBufferRange(target=0x{:04X}, fmt=0x{:04X}) desktop {} -> GLES {} (tid={})",
-            target, internalformat, buffer, gles_id, state::thread_id_u64()
+            target,
+            internalformat,
+            buffer,
+            gles_id,
+            state::thread_id_u64()
         );
 
         (dispatch.tex_buffer_range)(target, internalformat, gles_id, offset, size);
