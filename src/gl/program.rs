@@ -40,7 +40,10 @@ pub extern "C" fn glLinkProgram(program: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
-            log::debug!("[FluorateGL] glLinkProgram({}) -> unknown desktop id, skipping", program);
+            log::debug!(
+                "[FluorateGL] glLinkProgram({}) -> unknown desktop id, skipping",
+                program
+            );
             return;
         }
         (dispatch.link_program)(gles_id);
@@ -56,11 +59,25 @@ pub extern "C" fn glLinkProgram(program: u32) {
             if len > 0 {
                 let mut buf = vec![0u8; len as usize];
                 let mut written = 0i32;
-                (dispatch.get_program_info_log)(gles_id, len, &mut written, buf.as_mut_ptr() as *mut libc::c_char);
+                (dispatch.get_program_info_log)(
+                    gles_id,
+                    len,
+                    &mut written,
+                    buf.as_mut_ptr() as *mut libc::c_char,
+                );
                 let info = String::from_utf8_lossy(&buf[..written as usize]);
-                log::error!("[FluorateGL] Program {} (GLES {}) link failed: {}", program, gles_id, info);
+                log::error!(
+                    "[FluorateGL] Program {} (GLES {}) link failed: {}",
+                    program,
+                    gles_id,
+                    info
+                );
             } else {
-                log::error!("[FluorateGL] Program {} (GLES {}) link failed (no info log)", program, gles_id);
+                log::error!(
+                    "[FluorateGL] Program {} (GLES {}) link failed (no info log)",
+                    program,
+                    gles_id
+                );
             }
         }
     });
@@ -101,7 +118,11 @@ pub extern "C" fn glGetProgramiv(program: u32, pname: u32, params: *mut i32) {
                 "[FluorateGL] Program {} (GLES {}) {} failed, cheating to GL_TRUE",
                 program,
                 gles_id,
-                if pname == GL_LINK_STATUS { "link" } else { "validate" }
+                if pname == GL_LINK_STATUS {
+                    "link"
+                } else {
+                    "validate"
+                }
             );
             *params = 1;
         }

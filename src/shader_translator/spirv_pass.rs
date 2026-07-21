@@ -1,6 +1,6 @@
 use glslang::{
-    Compiler, CompilerOptions, ShaderInput, ShaderMessage, ShaderOptions,
-    ShaderSource, ShaderStage, SourceLanguage, SpirvVersion, Target, VulkanVersion,
+    Compiler, CompilerOptions, ShaderInput, ShaderMessage, ShaderOptions, ShaderSource,
+    ShaderStage, SourceLanguage, SpirvVersion, Target, VulkanVersion,
 };
 use regex::Regex;
 use spirv_cross2::compile::glsl::GlslVersion;
@@ -271,7 +271,9 @@ fn post_process_glsl_es(src: &str) -> String {
     result = re_binding_comma.replace_all(&result, "layout(").to_string();
 
     // 2. 处理 outColorN 的 location（对齐 MobileGlues processOutColorLocations）
-    let re_out_color = Regex::new(r"(?m)^(out\s+(?:highp\s+|mediump\s+|lowp\s+)?\w+\s+outColor)(\d+)\s*;").unwrap();
+    let re_out_color =
+        Regex::new(r"(?m)^(out\s+(?:highp\s+|mediump\s+|lowp\s+)?\w+\s+outColor)(\d+)\s*;")
+            .unwrap();
     result = re_out_color
         .replace_all(&result, "layout(location=$2) $1$2;")
         .to_string();
@@ -291,7 +293,8 @@ fn ensure_precision(source: &str) -> String {
 
     if has_precision_float && has_precision_int {
         // 移除现有的 precision 声明，重新统一插入 highp
-        let re_precision = Regex::new(r"(?m)^\s*precision\s+\w+\s+(?:float|int)\s*;.*$(\n)?").unwrap();
+        let re_precision =
+            Regex::new(r"(?m)^\s*precision\s+\w+\s+(?:float|int)\s*;.*$(\n)?").unwrap();
         result = re_precision.replace_all(&result, "").to_string();
     }
 
@@ -311,7 +314,10 @@ fn ensure_precision(source: &str) -> String {
 
     // 在 #extension 之后或 #version 之后插入
     let last_ext = result.rfind("#extension");
-    if let Some(pos) = last_ext.map(|p| result[p..].find('\n').map(|n| p + n + 1)).flatten() {
+    if let Some(pos) = last_ext
+        .map(|p| result[p..].find('\n').map(|n| p + n + 1))
+        .flatten()
+    {
         result.insert_str(pos, precision_decl);
     } else if let Some(version_end) = result.find('\n') {
         result.insert_str(version_end + 1, precision_decl);
