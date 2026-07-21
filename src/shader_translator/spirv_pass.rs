@@ -80,6 +80,8 @@ fn translate_internal(source: &str, stage: u32) -> TranslationResult {
 }
 
 fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
+    // glslang 全局编译器需要先初始化，OnceLock 保证只会初始化一次
+    initialize_glslang()?;
     let compiler = Compiler::acquire()?;
     let glsl_stage = map_gl_stage(stage)?;
     let src = ShaderSource::from(source);
@@ -135,6 +137,23 @@ fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
             None
         }
     }
+}
+
+/// 初始化 glslang 全局编译器（线程安全，仅首次调用时执行初始化）
+/// 注意：不能依赖 `Compiler::acquire()` 做初始化，因为它在失败时会将 `None` 永久缓存到 OnceLock 中
+fn initialize_glslang() -> Option<()> {
+    use std::sync::OnceLock;
+    static INIT: OnceLock<bool> = OnceLock::new();
+    let ok = INIT.get_or_init(|| {
+        let result = unsafe { glslang_sys::glslang_initialize_process() != 0 };
+        if !result {
+            log::error!("[ShaderTranslator] glslang_initialize_process() failed! SPIR-V pipeline disabled.");
+        } else {
+            log::info!("[ShaderTranslator] glslang initialized successfully");
+        }
+        result
+    });
+    if *ok { Some(()) } else { None }
 }
 
 fn map_gl_stage(stage: u32) -> Option<ShaderStage> {
