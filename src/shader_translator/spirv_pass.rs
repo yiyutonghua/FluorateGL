@@ -96,10 +96,8 @@ fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
     };
     let glsl_stage = map_gl_stage(stage)?;
 
-    // 预处理 GLSL：对齐 MobileGlues 的 preprocess_glsl + get_or_add_glsl_version
-    // - 移除 #line 指令
-    // - 强制 GLSL 版本 >= 150（兼容 MobileGlues 行为）
-    let preprocessed = preprocess_glsl_source(source);
+    // 预处理 GLSL：移除 #line、强制版本 >= 150、补全 location/binding
+    let preprocessed = crate::shader_translator::preprocess::preprocess(source);
 
     let src = ShaderSource::from(preprocessed.as_str());
 
@@ -165,40 +163,7 @@ fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
     }
 }
 
-/// 对齐 MobileGlues preprocess_glsl + get_or_add_glsl_version
-/// 1. 移除 #line 指令
-/// 2. 强制 GLSL 版本 >= 150（无版本则插入 #version 150）
-fn preprocess_glsl_source(source: &str) -> String {
-    let mut result = remove_line_directives(source);
-
-    let version = extract_version(&result);
-    match version {
-        None => {
-            // 没有 version 指令，插入 #version 150
-            result.insert_str(0, "#version 150\n");
-        }
-        Some(v) => {
-            if let Ok(ver) = v.parse::<u32>() {
-                if ver < 140 {
-                    // 旧版本强制升级到 150 compatibility
-                    let re = Regex::new(r"(?m)^#version\s+\d+.*$").unwrap();
-                    result = re
-                        .replace(&result, "#version 150 compatibility")
-                        .to_string();
-                }
-            }
-        }
-    }
-
-    result
-}
-
-/// 移除 #line 指令（对齐 MobileGlues replace_line_starting_with("#line")）
-fn remove_line_directives(source: &str) -> String {
-    let re = Regex::new(r"(?m)^\s*#line\s+.*$(\n|$)?").unwrap();
-    re.replace_all(source, "").to_string()
-}
-
+/// GL stage 映射
 fn map_gl_stage(stage: u32) -> Option<ShaderStage> {
     match stage {
         GL_VERTEX_SHADER => Some(ShaderStage::Vertex),
@@ -255,20 +220,15 @@ fn stage_name(stage: u32) -> &'static str {
     }
 }
 
-fn extract_version(source: &str) -> Option<&str> {
-    source
-        .lines()
-        .find(|l| l.trim_start().starts_with("#version"))
-}
-
 fn gles_version_candidates(source: &str) -> Vec<u16> {
-    let desktop_version = extract_version(source)
-        .and_then(|line| {
-            line.split_whitespace()
-                .nth(1)
-                .and_then(|v| v.parse::<u32>().ok())
-        })
-        .unwrap_or(150);
+    let desktop_version =
+        crate::shader_translator::preprocess::extract_version(source)
+            .and_then(|line| {
+                line.split_whitespace()
+                    .nth(1)
+                    .and_then(|v| v.parse::<u32>().ok())
+            })
+            .unwrap_or(150);
     match desktop_version {
         460 | 450 | 440 | 430 | 420 | 410 | 400 | 330 => vec![320, 310, 300],
         _ => vec![310, 300],
