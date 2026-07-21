@@ -26,6 +26,7 @@ impl Config {
     pub fn from_env() -> Self {
         let backend = match env::var("FLUORATEGL_BACKEND").as_deref() {
             Ok("angle") => Backend::Angle,
+            Ok("system") => Backend::System,
             _ => Backend::System,
         };
 

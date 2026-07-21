@@ -12,7 +12,9 @@ pub extern "C" fn glGenBuffers(n: i32, buffers: *mut u32) {
             let desktop_id = state::with_state(|s| s.buffers.alloc(gles_id));
             log::info!(
                 "[FluorateGL] glGenBuffers: GLES {} -> desktop {} (tid={})",
-                gles_id, desktop_id, state::thread_id_u64()
+                gles_id,
+                desktop_id,
+                state::thread_id_u64()
             );
             *buffers.offset(i) = desktop_id;
         }
@@ -28,7 +30,9 @@ pub extern "C" fn glDeleteBuffers(n: i32, buffers: *const u32) {
             if let Some(gles_id) = state::with_state(|s| s.buffers.delete(desktop_id)) {
                 log::info!(
                     "[FluorateGL] glDeleteBuffers: desktop {} -> GLES {} (deleted, tid={})",
-                    desktop_id, gles_id, state::thread_id_u64()
+                    desktop_id,
+                    gles_id,
+                    state::thread_id_u64()
                 );
                 (dispatch.delete_buffers)(1, &gles_id);
             } else {
@@ -62,7 +66,10 @@ pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
         if buffer != 0 && gles_id != 0 {
             log::info!(
                 "[FluorateGL] glBindBuffer(0x{:04X}): desktop {} -> GLES {} (tid={})",
-                target, buffer, gles_id, state::thread_id_u64()
+                target,
+                buffer,
+                gles_id,
+                state::thread_id_u64()
             );
         }
 
