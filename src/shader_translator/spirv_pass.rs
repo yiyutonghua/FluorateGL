@@ -164,7 +164,6 @@ fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
 /// 对齐 MobileGlues preprocess_glsl + get_or_add_glsl_version
 /// 1. 移除 #line 指令
 /// 2. 强制 GLSL 版本 >= 150（无版本则插入 #version 150）
-/// 3. 注入 MG_MOBILEGLUES 宏
 fn preprocess_glsl_source(source: &str) -> String {
     let mut result = remove_line_directives(source);
 
@@ -187,9 +186,6 @@ fn preprocess_glsl_source(source: &str) -> String {
         }
     }
 
-    // 注入 MG_MOBILEGLUES 宏定义（对齐 MobileGlues inject_mg_macro_definition）
-    result = inject_mg_macros(&result);
-
     result
 }
 
@@ -197,23 +193,6 @@ fn preprocess_glsl_source(source: &str) -> String {
 fn remove_line_directives(source: &str) -> String {
     let re = Regex::new(r"(?m)^\s*#line\s+.*$(\n|$)?").unwrap();
     re.replace_all(source, "").to_string()
-}
-
-/// 注入 MobileGlues 兼容宏定义
-fn inject_mg_macros(source: &str) -> String {
-    // 在 #version 行之后插入 MG_MOBILEGLUES 宏，兼容使用此宏做条件编译的 shader
-    let re = Regex::new(r"(?m)^(#version\s+.*)$").unwrap();
-    if let Some(caps) = re.captures(source) {
-        let full_match = caps.get(0).unwrap();
-        let end = full_match.end();
-        let mut result = source[..end].to_string();
-        result.push_str("\n#define MG_MOBILEGLUES\n#define MG_MOBILEGLUES_VERSION 0200\n");
-        result.push_str(&source[end..]);
-        result
-    } else {
-        // 没有 #version 行，在开头插入
-        format!("#define MG_MOBILEGLUES\n#define MG_MOBILEGLUES_VERSION 0200\n{}", source)
-    }
 }
 
 fn map_gl_stage(stage: u32) -> Option<ShaderStage> {
