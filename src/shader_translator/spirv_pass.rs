@@ -83,7 +83,9 @@ fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
     let compiler = match Compiler::acquire() {
         Some(c) => c,
         None => {
-            log::error!("[ShaderTranslator] glslang compiler not available (glslang_initialize_process failed)");
+            log::error!(
+                "[ShaderTranslator] glslang compiler not available (glslang_initialize_process failed)"
+            );
             return None;
         }
     };
