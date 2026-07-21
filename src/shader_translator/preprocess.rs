@@ -9,8 +9,16 @@
 //! - 允许省略 layout(location) 和 layout(binding)
 //! - 要求 GLSL >= 330
 //!
-//! 预处理仍会注入 location/binding 作为安全网，确保 glslang parse 阶段成功，
-//! 即使 AUTO_MAP_LOCATIONS/AUTO_MAP_BINDINGS 在 parse 之后才生效。
+//! 重要：in/out varying 的 location 注入使用独立的 in_counter 和 out_counter。
+//! 之前的实现用单一 counter，导致 VS in(location=0) 和 VS out(location=0) 被视为
+//! 冲突，spirv-cross 重新分配 VS out 到高 location，而 FS in 保留低 location，
+//! 导致跨 stage 链接失败（output X location mismatch）。
+//! 修复：in 和 out 是独立的接口空间（SPIR-V Input/Output StorageClass），
+//! 分别从 0 计数，保证 VS out 和 FS in 的同名 varying location 一致。
+//!
+//! 仍会注入：
+//! - non-opaque uniform 的 layout(location)（OpenGL SPIR-V 模式要求，否则 parse 失败）
+//! - UBO/SSBO 的 layout(binding)（作为安全网，配合 AUTO_MAP_BINDINGS）
 
 use regex::Regex;
 
@@ -19,7 +27,7 @@ use regex::Regex;
 /// 执行顺序：
 /// 1. 移除 #line 指令
 /// 2. 强制 GLSL 版本（无版本插入 450，330-440 升级到 450）
-/// 3. 为缺少 location 的 in/out 变量自动添加 layout(location=X)
+/// 3. 为缺少 location 的 in/out 变量自动添加 layout(location=X)（in/out 独立计数）
 /// 4. 为缺少 location 的 non-opaque uniform 自动添加 layout(location=X)
 /// 5. 为缺少 binding 的 UBO/SSBO 自动添加 layout(binding=X)
 /// 6. 如果注入了 binding 且版本低于 420，升级到 420（binding 需要 GLSL 420+）
@@ -84,15 +92,22 @@ fn parse_version_number(version_line: &str) -> Option<u32> {
 
 /// 为缺少 location 的 in/out 变量自动添加 layout(location=X)
 ///
-/// OpenGL SPIR-V 模式下，in/out 变量的 location 可由 AUTO_MAP_LOCATIONS 自动分配，
-/// 但显式指定 location 可确保跨 stage 链接时 location 一致。
+/// OpenGL SPIR-V 模式下，glslang parse 阶段要求所有 in/out 变量必须有 location
+/// （AUTO_MAP_LOCATIONS 在 parse 之后才生效，来不及自动分配）。
 ///
-/// 策略：扫描所有顶层 in/out 声明（非函数参数、非 block 成员），
-/// 为缺少 location 的声明按出现顺序分配递增 location 编号。
+/// 关键：in 和 out 使用独立的 counter，分别从 0 开始。
+/// in 和 out 是不同的接口空间（SPIR-V Input/Output StorageClass），
+/// 同一个 shader 内 in(location=0) 和 out(location=0) 不冲突。
+/// 这样 VS out 和 FS in 的同名 varying 都从 0 开始分配，保证跨 stage 一致。
+///
+/// 之前用单一 counter 导致 VS in(已有 location=0) 和 VS out(注入 location=0) 被视为
+/// 冲突，spirv-cross 重新分配 VS out 到高 location，破坏跨 stage 链接。
 fn inject_missing_locations(result: &mut String) {
     let re = Regex::new(r"(?m)^(?P<indent>\s*)(?P<qualifier>in|out)\s+(?P<rest>.+?;\s*)$").unwrap();
 
-    let mut location_counter: u32 = 0;
+    // in 和 out 独立计数，分别从 0 开始（不同接口空间，不冲突）
+    let mut in_counter: u32 = 0;
+    let mut out_counter: u32 = 0;
     let mut modified = String::with_capacity(result.len());
 
     for line in result.lines() {
@@ -108,23 +123,26 @@ fn inject_missing_locations(result: &mut String) {
                 continue;
             }
 
-            // 跳过 block 成员声明（在 {} 内的 in/out）
-            // 通过检查是否为顶层声明：顶层声明不以额外缩进开头（相对函数体）
-            // 简化判断：只处理不含 { 的单行声明
+            // 跳过 block 声明（含 { 的单行）
             if rest.contains('{') {
                 modified.push_str(line);
                 modified.push('\n');
                 continue;
             }
 
-            // 注入 layout(location=N)
+            // 按 in/out 选择独立 counter
+            let counter = if qualifier == "in" {
+                &mut in_counter
+            } else {
+                &mut out_counter
+            };
             let new_line = format!(
                 "{}layout(location={}) {} {}",
-                indent, location_counter, qualifier, rest
+                indent, counter, qualifier, rest
             );
             modified.push_str(&new_line);
             modified.push('\n');
-            location_counter += 1;
+            *counter += 1;
         } else {
             modified.push_str(line);
             modified.push('\n');
@@ -362,23 +380,46 @@ mod tests {
     }
 
     #[test]
-    fn test_inject_locations() {
+    fn test_inject_locations_independent_counters() {
+        // in 和 out 应使用独立 counter，分别从 0 开始
         let mut result =
             "#version 450\nin vec4 color;\nout vec4 fragColor;\nvoid main() {}\n".to_string();
         inject_missing_locations(&mut result);
+        // in 从 0 开始
         assert!(result.contains("layout(location=0) in vec4 color;"));
-        assert!(result.contains("layout(location=1) out vec4 fragColor;"));
+        // out 也从 0 开始（独立计数，不与 in 冲突）
+        assert!(result.contains("layout(location=0) out vec4 fragColor;"));
     }
 
     #[test]
-    fn test_inject_locations_skip_existing() {
+    fn test_inject_locations_skip_existing_independent() {
+        // 已有 location 的声明跳过，但 in/out counter 独立推进
         let mut result =
             "#version 450\nlayout(location=5) in vec4 color;\nout vec4 fragColor;\n".to_string();
         inject_missing_locations(&mut result);
-        // 已有 location=5 的不变
+        // 已有 location=5 的 in 不变
         assert!(result.contains("layout(location=5) in vec4 color;"));
-        // 缺少 location 的自动分配 location=0
+        // out 缺少 location，从 0 开始（独立于 in 的已有 location）
         assert!(result.contains("layout(location=0) out vec4 fragColor;"));
+    }
+
+    #[test]
+    fn test_inject_locations_vs_in_no_conflict() {
+        // 模拟 MC 场景：VS in 已有 location，VS out 无 location
+        // 修复前（单一 counter）：out 被注入 location=0，与 in(location=0) 冲突
+        // 修复后（独立 counter）：out 被注入 location=0，与 in(location=0) 不冲突（不同接口空间）
+        let mut result = "#version 450\n\
+            layout(location=0) in vec3 Position;\n\
+            layout(location=1) in vec4 Color;\n\
+            out vec4 vertexColor;\n\
+            void main() { gl_Position = vec4(Position, 1.0); vertexColor = Color; }\n"
+            .to_string();
+        inject_missing_locations(&mut result);
+        // in 保持已有 location
+        assert!(result.contains("layout(location=0) in vec3 Position;"));
+        assert!(result.contains("layout(location=1) in vec4 Color;"));
+        // out 从 0 开始（独立 counter，与 in 不冲突）
+        assert!(result.contains("layout(location=0) out vec4 vertexColor;"));
     }
 
     #[test]
@@ -462,14 +503,16 @@ mod tests {
 
     #[test]
     fn test_preprocess_full_pipeline() {
-        let input = "#version 330\nlayout(std140) uniform MyBlock {\n    mat4 data;\n};\nin vec4 color;\nout vec4 fragColor;\nvoid main() {\n    fragColor = color;\n}\n";
+        let input = "#version 330\nlayout(std140) uniform MyBlock {\n    mat4 data;\n};\nin vec4 color;\nout vec4 fragColor;\nuniform mat4 MVP;\nvoid main() {\n    fragColor = color;\n}\n";
         let result = preprocess(input);
         // 版本应升级到 450
         assert!(result.contains("#version 450 core"));
         // UBO 应有 binding
         assert!(result.contains("layout(std140, binding=0) uniform MyBlock"));
-        // in/out 应有 location
+        // non-opaque uniform 应有 location
+        assert!(result.contains("layout(location=0) uniform mat4 MVP;"));
+        // in/out 应有 location，且 in/out 独立计数（都从 0 开始）
         assert!(result.contains("layout(location=0) in vec4 color;"));
-        assert!(result.contains("layout(location=1) out vec4 fragColor;"));
+        assert!(result.contains("layout(location=0) out vec4 fragColor;"));
     }
 }

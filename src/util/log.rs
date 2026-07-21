@@ -23,9 +23,13 @@ pub fn init(cfg: &Config) {
         fn log(&self, record: &log::Record) {
             if self.enabled(record.metadata()) {
                 use std::io::Write;
-                let _ = std::io::stderr()
+                // 持锁覆盖 write_all + flush，避免多线程下 shader 源码 dump
+                // 与单行日志交错的缓冲区串写问题（LineWriter 缓冲残留被其他线程触发写出）。
+                let stderr = std::io::stderr();
+                let mut handle = stderr.lock();
+                let _ = handle
                     .write_all(format!("[{}] {}\n", record.level(), record.args()).as_bytes());
-                let _ = std::io::stderr().flush();
+                let _ = handle.flush();
             }
         }
 

@@ -188,11 +188,12 @@ fn preprocess_injects_location_for_out_variables() {
 
 #[test]
 fn preprocess_injects_incrementing_locations_for_in_and_out() {
-    // in 和 out 共享 location 计数器
+    // in 和 out 使用独立的 location 计数器，分别从 0 开始
+    // （不同接口空间，保证 VS out 和 FS in 跨 stage 一致）
     let src = "#version 330\nin vec4 color;\nout vec4 fragColor;\nvoid main() {}\n";
     let result = preprocess::preprocess(src);
     assert!(result.contains("layout(location=0) in vec4 color;"));
-    assert!(result.contains("layout(location=1) out vec4 fragColor;"));
+    assert!(result.contains("layout(location=0) out vec4 fragColor;"));
 }
 
 #[test]
@@ -328,10 +329,10 @@ fn preprocess_full_minecraft_style_vertex_shader() {
     assert!(result.starts_with("#version 450 core"));
     // UBO 有 binding
     assert!(result.contains("layout(std140, binding=0) uniform DynamicTransforms"));
-    // in/out 有 location
+    // in/out 有 location，in/out 独立计数（都从 0 开始）
     assert!(result.contains("layout(location=0) in vec3 Position;"));
     assert!(result.contains("layout(location=1) in vec4 Color;"));
-    assert!(result.contains("layout(location=2) out vec4 vertexColor;"));
+    assert!(result.contains("layout(location=0) out vec4 vertexColor;"));
 }
 
 #[test]
@@ -341,7 +342,7 @@ fn preprocess_full_minecraft_style_fragment_shader() {
     assert!(result.starts_with("#version 450 core"));
     assert!(result.contains("layout(std140, binding=0) uniform DynamicTransforms"));
     assert!(result.contains("layout(location=0) in vec4 vertexColor;"));
-    assert!(result.contains("layout(location=1) out vec4 fragColor;"));
+    assert!(result.contains("layout(location=0) out vec4 fragColor;"));
 }
 
 #[test]
