@@ -11,6 +11,10 @@ name = "fluorategl"
 name = "glslang_suite"
 path = "tests/glsl/glslang_suite.rs"
 
+[[example]]
+name = "translate_test"
+path = "tests/glsl/translate_test.rs"
+
 [dependencies]
 bytemuck = { version = "1", default-features = false }
 ctor = "1.0.9"
