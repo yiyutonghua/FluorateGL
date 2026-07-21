@@ -369,12 +369,7 @@ pub extern "C" fn glVertexAttribI4uiv(index: u32, v: *const u32) {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glBindVertexBuffer(
-    bindingindex: u32,
-    buffer: u32,
-    offset: isize,
-    stride: i32,
-) {
+pub extern "C" fn glBindVertexBuffer(bindingindex: u32, buffer: u32, offset: isize, stride: i32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.bind_vertex_buffer as *const ()) {
             log::warn!("[FluorateGL] glBindVertexBuffer: stub, ignored");
@@ -395,9 +390,15 @@ pub extern "C" fn glBindVertexBuffer(
             })
         };
 
-        log::info!(
+        log::debug!(
             "[FluorateGL] glBindVertexBuffer(binding={}, buf={}, offset={}, stride={}) desktop {} -> GLES {} (tid={})",
-            bindingindex, buffer, offset, stride, buffer, gles_id, state::thread_id_u64()
+            bindingindex,
+            buffer,
+            offset,
+            stride,
+            buffer,
+            gles_id,
+            state::thread_id_u64()
         );
 
         (dispatch.bind_vertex_buffer)(bindingindex, gles_id, offset, stride);
