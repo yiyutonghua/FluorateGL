@@ -361,3 +361,92 @@ pub extern "C" fn glVertexAttribI4uiv(index: u32, v: *const u32) {
         (dispatch.vertex_attrib_i_4uiv)(index, v);
     });
 }
+
+// === ARB_vertex_attrib_binding / GLES 3.1 DSA API ===
+// MC 使用这套 API 替代 glVertexAttribPointer 来设置 VAO 属性。
+// glBindVertexBuffer 是其中唯一传递 buffer ID 的函数，需要做 ID 翻译。
+// 其余函数直接透传。
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glBindVertexBuffer(
+    bindingindex: u32,
+    buffer: u32,
+    offset: isize,
+    stride: i32,
+) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        if is_stub(dispatch, dispatch.bind_vertex_buffer as *const ()) {
+            log::warn!("[FluorateGL] glBindVertexBuffer: stub, ignored");
+            return;
+        }
+
+        let gles_id = if buffer == 0 {
+            0
+        } else {
+            state::with_state(|s| {
+                s.buffers.get_gles(buffer).unwrap_or_else(|| {
+                    log::warn!(
+                        "[FluorateGL] glBindVertexBuffer(binding={}, buffer={}): desktop ID not found in IdMap, unbinding",
+                        bindingindex, buffer
+                    );
+                    0
+                })
+            })
+        };
+
+        log::info!(
+            "[FluorateGL] glBindVertexBuffer(binding={}, buf={}, offset={}, stride={}) desktop {} -> GLES {} (tid={})",
+            bindingindex, buffer, offset, stride, buffer, gles_id, state::thread_id_u64()
+        );
+
+        (dispatch.bind_vertex_buffer)(bindingindex, gles_id, offset, stride);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribFormat(
+    attribindex: u32,
+    size: i32,
+    type_: u32,
+    normalized: u8,
+    relativeoffset: u32,
+) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        if is_stub(dispatch, dispatch.vertex_attrib_format as *const ()) {
+            log::warn!("[FluorateGL] glVertexAttribFormat: stub, ignored");
+            return;
+        }
+        (dispatch.vertex_attrib_format)(attribindex, size, type_, normalized, relativeoffset);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribIFormat(
+    attribindex: u32,
+    size: i32,
+    type_: u32,
+    relativeoffset: u32,
+) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        if is_stub(dispatch, dispatch.vertex_attrib_i_format as *const ()) {
+            log::warn!("[FluorateGL] glVertexAttribIFormat: stub, ignored");
+            return;
+        }
+        (dispatch.vertex_attrib_i_format)(attribindex, size, type_, relativeoffset);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribBinding(attribindex: u32, bindingindex: u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        if is_stub(dispatch, dispatch.vertex_attrib_binding as *const ()) {
+            log::warn!("[FluorateGL] glVertexAttribBinding: stub, ignored");
+            return;
+        }
+        (dispatch.vertex_attrib_binding)(attribindex, bindingindex);
+    });
+}

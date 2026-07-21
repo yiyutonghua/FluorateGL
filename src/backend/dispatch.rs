@@ -84,6 +84,12 @@ pub struct GlesDispatch {
     pub vertex_attrib_i_3uiv: unsafe extern "C" fn(u32, *const u32),
     pub vertex_attrib_i_4uiv: unsafe extern "C" fn(u32, *const u32),
 
+    // B类：VAO/Draw 高级（ARB_vertex_attrib_binding / GLES 3.1）
+    pub bind_vertex_buffer: unsafe extern "C" fn(u32, u32, isize, i32),
+    pub vertex_attrib_format: unsafe extern "C" fn(u32, i32, u32, u8, u32),
+    pub vertex_attrib_i_format: unsafe extern "C" fn(u32, i32, u32, u32),
+    pub vertex_attrib_binding: unsafe extern "C" fn(u32, u32),
+
     // B类：VAO/Draw 高级
     pub vertex_attrib_divisor: unsafe extern "C" fn(u32, u32),
     pub draw_arrays_instanced: unsafe extern "C" fn(u32, i32, i32, i32),
@@ -445,6 +451,12 @@ impl GlesDispatch {
             },
             draw_range_elements: load_opt!("glDrawRangeElements"),
             primitive_restart_index: load_opt!("glPrimitiveRestartIndex"),
+
+            // ARB_vertex_attrib_binding / GLES 3.1
+            bind_vertex_buffer: load_opt!("glBindVertexBuffer"),
+            vertex_attrib_format: load_opt!("glVertexAttribFormat"),
+            vertex_attrib_i_format: load_opt!("glVertexAttribIFormat"),
+            vertex_attrib_binding: load_opt!("glVertexAttribBinding"),
 
             create_shader: unsafe { std::mem::transmute(load!("glCreateShader")) },
             delete_shader: unsafe { std::mem::transmute(load!("glDeleteShader")) },

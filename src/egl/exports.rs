@@ -373,6 +373,11 @@ fn is_key_gl_function(name: &str) -> bool {
             | "glBindFramebuffer"
             | "glGenFramebuffers"
             | "glDeleteFramebuffers"
+            // ARB_vertex_attrib_binding / GLES 3.1 DSA
+            | "glBindVertexBuffer"
+            | "glVertexAttribFormat"
+            | "glVertexAttribIFormat"
+            | "glVertexAttribBinding"
     )
 }
 
