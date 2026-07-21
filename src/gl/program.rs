@@ -5,6 +5,7 @@ use libc::c_char;
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glCreateProgram() -> u32 {
+    log::debug!("[FluorateGL] glCreateProgram()");
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = (dispatch.create_program)();
         state::with_state(|s| s.programs.alloc(gles_id))
@@ -24,6 +25,7 @@ pub extern "C" fn glDeleteProgram(program: u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glAttachShader(program: u32, shader: u32) {
+    log::debug!("[FluorateGL] glAttachShader({}, {})", program, shader);
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_program = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
         let gles_shader = state::with_state(|s| s.shaders.get_gles(shader).unwrap_or(0));
@@ -37,6 +39,7 @@ pub extern "C" fn glAttachShader(program: u32, shader: u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glLinkProgram(program: u32) {
+    log::debug!("[FluorateGL] glLinkProgram({})", program);
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {

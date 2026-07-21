@@ -46,6 +46,11 @@ fn translate_internal(source: &str, stage: u32) -> TranslationResult {
     let spv = match compile_to_spirv(source, stage) {
         Some(s) => s,
         None => {
+            log::warn!(
+                "[ShaderTranslator] glslang SPIR-V compile failed for stage {} (0x{:04X})",
+                stage_name,
+                stage
+            );
             return TranslationResult::Failed;
         }
     };
@@ -94,7 +99,6 @@ fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
     // 预处理 GLSL：对齐 MobileGlues 的 preprocess_glsl + get_or_add_glsl_version
     // - 移除 #line 指令
     // - 强制 GLSL 版本 >= 150（兼容 MobileGlues 行为）
-    // - 注入 MobileGlues 宏定义
     let preprocessed = preprocess_glsl_source(source);
 
     let src = ShaderSource::from(preprocessed.as_str());
@@ -219,6 +223,20 @@ fn spirv_to_gles(spv: &[u32], version: u16) -> Result<String, SpirvCrossError> {
         _ => GlslVersion::Glsl300Es,
     };
 
+    // spirv-cross2 默认 es_default_float_precision_highp = false（mediump），
+    // MC shader 需要 highp 避免精度不足
+    options.es_default_float_precision_highp = true;
+    options.es_default_int_precision_highp = true;
+
+    // GLES 坐标系 Y 轴翻转（对齐 MobileGlues）
+    options.common.flip_vertex_y = true;
+
+    // Vulkan [0,w] 深度范围 → OpenGL [-w,w] 深度范围（对齐 MobileGlues）
+    options.common.fixup_clipspace = true;
+
+    // 不输出 #line 指令（我们在后处理中统一清理）
+    options.common.emit_line_directives = false;
+
     let artifact: CompiledArtifact<Glsl> = compiler.compile(&options)?;
     let src = artifact.to_string();
 
@@ -262,13 +280,27 @@ fn post_process_glsl_es(src: &str) -> String {
     let mut result = src.to_string();
 
     // 1. 移除所有 layout(binding = X)（对齐 MobileGlues removeLayoutBinding）
-    //    MobileGlues 不分类型，全部移除
+    //    MobileGlues 不分类型，全部移除。需要处理以下形式：
+    //    - layout(binding = X)                            → 移除整个 layout(...)
+    //    - layout(binding = X, std140)                    → layout(std140)
+    //    - layout(std140, binding = X)                    → layout(std140)
+    //    - layout(std140, binding = X, column_major)      → layout(std140, column_major)
+    //    - layout(push_constant, binding = X)             → layout(push_constant)
+    //    策略：先处理 binding=X 在中间/末尾的情况，再处理 binding=X 是唯一项的情况
     let re_binding = Regex::new(r"(?i)layout\s*\(\s*binding\s*=\s*\d+\s*\)\s*").unwrap();
+    let re_binding_leading = Regex::new(r"(?i)layout\s*\(\s*binding\s*=\s*\d+\s*,\s*").unwrap();
+    let re_binding_middle = Regex::new(r"(?i),\s*binding\s*=\s*\d+").unwrap();
+
+    // 先处理 binding 在中间的情况: layout(..., binding=X, ...) → layout(..., ...)
+    result = re_binding_middle.replace_all(&result, "").to_string();
+    // 再处理 binding 在开头的情况: layout(binding=X, ...) → layout(...)
+    result = re_binding_leading.replace_all(&result, "layout(").to_string();
+    // 最后处理 binding 是唯一项的情况: layout(binding=X) → 移除
     result = re_binding.replace_all(&result, "").to_string();
 
-    // 处理 layout(binding=X, ...) 逗号形式
-    let re_binding_comma = Regex::new(r"(?i)layout\s*\(\s*binding\s*=\s*\d+\s*,").unwrap();
-    result = re_binding_comma.replace_all(&result, "layout(").to_string();
+    // 清理可能残留的空 layout 括号
+    let re_empty_layout = Regex::new(r"(?i)layout\s*\(\s*\)\s*").unwrap();
+    result = re_empty_layout.replace_all(&result, "").to_string();
 
     // 2. 处理 outColorN 的 location（对齐 MobileGlues processOutColorLocations）
     let re_out_color =
@@ -285,32 +317,16 @@ fn post_process_glsl_es(src: &str) -> String {
 }
 
 /// 确保 precision highp float/int 声明存在（对齐 MobileGlues forceSupporterOutput）
+/// 始终强制使用 highp，移除所有已有 precision 声明后统一插入
 fn ensure_precision(source: &str) -> String {
-    let has_precision_float = source.contains("precision ") && source.contains("float;");
-    let has_precision_int = source.contains("precision ") && source.contains("int;");
-
     let mut result = source.to_string();
 
-    if has_precision_float && has_precision_int {
-        // 移除现有的 precision 声明，重新统一插入 highp
-        let re_precision =
-            Regex::new(r"(?m)^\s*precision\s+\w+\s+(?:float|int)\s*;.*$(\n)?").unwrap();
-        result = re_precision.replace_all(&result, "").to_string();
-    }
+    // 移除所有已有的 precision 声明（注释中的不受影响，因为 #version 之后不会有注释行）
+    let re_precision =
+        Regex::new(r"(?m)^\s*precision\s+\w+\s+(?:float|int)\s*;.*$(\n)?").unwrap();
+    result = re_precision.replace_all(&result, "").to_string();
 
-    let precision_decl = if has_precision_float && has_precision_int {
-        // 两者都已存在，统一用 highp
-        "precision highp float;\nprecision highp int;\n"
-    } else if has_precision_float {
-        // 只有 float，补充 int
-        "precision highp int;\n"
-    } else if has_precision_int {
-        // 只有 int，补充 float
-        "precision highp float;\n"
-    } else {
-        // 都没有，全部插入
-        "precision highp float;\nprecision highp int;\n"
-    };
+    let precision_decl = "precision highp float;\nprecision highp int;\n";
 
     // 在 #extension 之后或 #version 之后插入
     let last_ext = result.rfind("#extension");

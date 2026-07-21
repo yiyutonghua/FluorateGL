@@ -146,6 +146,7 @@ const GL_SHADER_SOURCE_LENGTH: u32 = 0x8B88;
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glCompileShader(shader: u32) {
+    log::debug!("[FluorateGL] glCompileShader({})", shader);
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.shaders.get_gles(shader).unwrap_or(0));
         if gles_id == 0 {

@@ -381,6 +381,20 @@ fn is_key_gl_function(name: &str) -> bool {
             // GL_EXT_texture_buffer / GLES 3.2
             | "glTexBuffer"
             | "glTexBufferRange"
+            // Shader / Program 管理（用于追踪拦截状态）
+            | "glCreateShader"
+            | "glCompileShader"
+            | "glDeleteShader"
+            | "glShaderSource"
+            | "glGetShaderiv"
+            | "glGetShaderInfoLog"
+            | "glCreateProgram"
+            | "glLinkProgram"
+            | "glDeleteProgram"
+            | "glAttachShader"
+            | "glDetachShader"
+            | "glGetProgramiv"
+            | "glGetProgramInfoLog"
     )
 }
 
