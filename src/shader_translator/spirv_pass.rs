@@ -239,11 +239,7 @@ fn post_process_glsl_es(src: &str) -> String {
         })
         .to_string();
 
-    // 3. 移除 in/out 变量的 location，解决 VS/FS 链接时的 Input Output Mismatch
-    let re_io = Regex::new(r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*\)\s*(in|out)\b").unwrap();
-    result = re_io.replace_all(&result, "$1").to_string();
-
-    // 4. 移除非 opaque 普通 uniform 上的 layout 限定符
+    // 3. 移除非 opaque 普通 uniform 上的 layout 限定符
     let re_uniform = Regex::new(
         r"(?i)layout\s*\(\s*(?:location\s*=\s*\d+\s*,?\s*|binding\s*=\s*\d+\s*,?\s*)+\)\s*(uniform\s+[^;{]+;)",
     )
