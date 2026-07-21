@@ -77,6 +77,12 @@ pub extern "C" fn glVertexAttribPointer(
     stride: i32,
     pointer: *const std::ffi::c_void,
 ) {
+    let bound_buffer = state::with_state(|s| s.bound_buffer);
+    let bound_vao = state::with_state(|s| s.bound_vertex_array);
+    log::info!(
+        "[FluorateGL] glVertexAttribPointer(index={}, size={}, type=0x{:04X}, norm={}, stride={}, ptr={:?}) bound_buf={} bound_vao={} (tid={})",
+        index, size, type_, normalized, stride, pointer, bound_buffer, bound_vao, state::thread_id_u64()
+    );
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.vertex_attrib_pointer)(index, size, type_, normalized, stride, pointer);
     });

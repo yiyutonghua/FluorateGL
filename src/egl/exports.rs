@@ -396,9 +396,15 @@ pub extern "C" fn eglGetProcAddress(proc_name: *const libc::c_char) -> *mut std:
             }
             return local;
         }
+    } else if is_key {
+        log::warn!(
+            "[FluorateGL] eglGetProcAddress({}) self_handle is None, falling back to RTLD_DEFAULT (may return wrong function pointer!)",
+            name
+        );
     }
 
     // 2. Fallback: RTLD_DEFAULT（全局符号表查找）
+    // 注意：如果 LD_PRELOAD 未生效或 get_self_handle 失败，此处可能返回 GLES 驱动的函数指针
     let local = unsafe { libc::dlsym(libc::RTLD_DEFAULT, proc_name) };
     if !local.is_null() {
         if is_key {

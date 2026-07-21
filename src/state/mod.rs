@@ -73,7 +73,7 @@ where
 }
 
 /// 获取当前线程 ID（用于诊断日志）
-fn thread_id_u64() -> u64 {
+pub fn thread_id_u64() -> u64 {
     #[cfg(target_os = "linux")]
     unsafe {
         libc::gettid() as u64

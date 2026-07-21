@@ -167,6 +167,12 @@ pub extern "C" fn glPixelStorei(pname: u32, param: i32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glDrawArrays(mode: u32, first: i32, count: i32) {
+    let bound_vao = state::with_state(|s| s.bound_vertex_array);
+    let bound_buf = state::with_state(|s| s.bound_buffer);
+    log::info!(
+        "[FluorateGL] glDrawArrays(mode=0x{:04X}, first={}, count={}) bound_vao={} bound_buf={} (tid={})",
+        mode, first, count, bound_vao, bound_buf, state::thread_id_u64()
+    );
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.draw_arrays)(mode, first, count);
     });
@@ -180,6 +186,12 @@ pub extern "C" fn glDrawElements(
     type_: u32,
     indices: *const std::ffi::c_void,
 ) {
+    let bound_vao = state::with_state(|s| s.bound_vertex_array);
+    let bound_buf = state::with_state(|s| s.bound_buffer);
+    log::info!(
+        "[FluorateGL] glDrawElements(mode=0x{:04X}, count={}, type=0x{:04X}, indices={:?}) bound_vao={} bound_buf={} (tid={})",
+        mode, count, type_, indices, bound_vao, bound_buf, state::thread_id_u64()
+    );
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.draw_elements)(mode, count, type_, indices);
     });
