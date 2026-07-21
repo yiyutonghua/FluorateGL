@@ -18,7 +18,6 @@ glslang = "0.8.1"
 libc = "0.2.186"
 log = "0.4.33"
 regex = "1"
-shaderc = { version = "0.10.1", features = ["build-from-source"] }
 spirv-cross2 = { version = "0.7.1", default-features = false, features = ["glsl","cpp"] }
 
 [profile.release]

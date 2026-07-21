@@ -280,7 +280,24 @@ pub extern "C" fn glGetString(name: u32) -> *const c_char {
         // GL_EXTENSIONS
         get_fake_extensions_string()
     } else {
-        backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.get_string)(name) })
+        let raw = backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.get_string)(name) });
+        // ANGLE 等后端可能在上下文未完全初始化时返回 null，兜底返回 "Unknown"
+        // 避免 GpuDevice.getRenderer() → NullPointerException
+        if raw.is_null() {
+            match name {
+                0x1F01 => {
+                    static UNKNOWN_RENDERER: &[u8] = b"Unknown\0";
+                    UNKNOWN_RENDERER.as_ptr() as *const c_char
+                }
+                0x1F00 => {
+                    static UNKNOWN_VENDOR: &[u8] = b"Unknown\0";
+                    UNKNOWN_VENDOR.as_ptr() as *const c_char
+                }
+                _ => raw,
+            }
+        } else {
+            raw
+        }
     };
     log::debug!("[FluorateGL] glGetString(0x{:04X}) -> {:?}", name, result);
     result

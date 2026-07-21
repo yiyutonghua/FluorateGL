@@ -1,8 +1,12 @@
+use glslang::{
+    Compiler, CompilerOptions, ShaderInput, ShaderMessage, ShaderSource, ShaderStage, SourceLanguage,
+    SpirvVersion, Target, VulkanVersion,
+};
 use regex::Regex;
 use spirv_cross2::compile::glsl::GlslVersion;
 use spirv_cross2::compile::{CompilableTarget, CompiledArtifact};
 use spirv_cross2::targets::Glsl;
-use spirv_cross2::{Compiler, Module, SpirvCrossError};
+use spirv_cross2::{Compiler as SpvCompiler, Module, SpirvCrossError};
 
 const GL_VERTEX_SHADER: u32 = 0x8B31;
 const GL_FRAGMENT_SHADER: u32 = 0x8B30;
@@ -42,7 +46,6 @@ fn translate_internal(source: &str, stage: u32) -> TranslationResult {
     let spv = match compile_to_spirv(source, stage) {
         Some(s) => s,
         None => {
-            // 这里不需要再 log 了，compile_to_spirv 内部已经打印了详细错误
             return TranslationResult::Failed;
         }
     };
@@ -77,35 +80,78 @@ fn translate_internal(source: &str, stage: u32) -> TranslationResult {
 }
 
 fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
-    let compiler = shaderc::Compiler::new().ok()?;
-    let mut options = shaderc::CompileOptions::new().ok()?;
+    let compiler = Compiler::acquire()?;
+    let glsl_stage = map_gl_stage(stage)?;
+    let src = ShaderSource::from(source);
 
-    options.set_target_env(
-        shaderc::TargetEnv::OpenGL,
-        shaderc::EnvVersion::OpenGL4_5 as u32,
-    );
-    options.set_source_language(shaderc::SourceLanguage::GLSL);
+    let options = CompilerOptions {
+        source_language: SourceLanguage::GLSL,
+        target: Target::Vulkan {
+            version: VulkanVersion::Vulkan1_0,
+            spirv_version: SpirvVersion::SPIRV1_0,
+        },
+        version_profile: None,
+        messages: ShaderMessage::SUPPRESS_WARNINGS,
+    };
 
-    options.set_optimization_level(shaderc::OptimizationLevel::Zero);
-    options.set_auto_map_locations(true);
-    options.set_auto_bind_uniforms(true);
-    options.set_suppress_warnings();
+    let input = match ShaderInput::new(
+        &src,
+        glsl_stage,
+        &options,
+        None::<&[(&str, Option<&str>)]>,
+        None,
+    ) {
+        Ok(input) => input,
+        Err(e) => {
+            log::error!(
+                "[ShaderTranslator] glslang parse failed for stage 0x{:04X}: {:?}",
+                stage,
+                e
+            );
+            return None;
+        }
+    };
 
-    let kind = shader_kind(stage);
-    let file_name = format!("shader_{:04X}.glsl", kind as u32);
+    let shader = match compiler.create_shader(input) {
+        Ok(shader) => shader,
+        Err(e) => {
+            log::error!(
+                "[ShaderTranslator] glslang shader creation failed for stage 0x{:04X}: {:?}",
+                stage,
+                e
+            );
+            return None;
+        }
+    };
 
-    compiler
-        .compile_into_spirv(source, kind, &file_name, "main", Some(&options))
-        .map_err(|e| {
-            log::error!("[ShaderTranslator] shaderc compile failed: {}", e);
-        })
-        .ok()
-        .map(|a| a.as_binary().to_vec())
+    match shader.compile() {
+        Ok(spv) => Some(spv),
+        Err(e) => {
+            log::error!(
+                "[ShaderTranslator] glslang SPIR-V compile failed for stage 0x{:04X}: {:?}",
+                stage,
+                e
+            );
+            None
+        }
+    }
+}
+
+fn map_gl_stage(stage: u32) -> Option<ShaderStage> {
+    match stage {
+        GL_VERTEX_SHADER => Some(ShaderStage::Vertex),
+        GL_FRAGMENT_SHADER => Some(ShaderStage::Fragment),
+        GL_GEOMETRY_SHADER => Some(ShaderStage::Geometry),
+        GL_TESS_CONTROL_SHADER => Some(ShaderStage::TesselationControl),
+        GL_TESS_EVALUATION_SHADER => Some(ShaderStage::TesselationEvaluation),
+        GL_COMPUTE_SHADER => Some(ShaderStage::Compute),
+        _ => None,
+    }
 }
 
 fn spirv_to_gles(spv: &[u32], version: u16) -> Result<String, SpirvCrossError> {
     let module = Module::from_words(spv);
-    let compiler = Compiler::<Glsl>::new(module)?;
+    let compiler = SpvCompiler::<Glsl>::new(module)?;
     let mut options = Glsl::options();
 
     options.version = match version {
@@ -118,20 +164,7 @@ fn spirv_to_gles(spv: &[u32], version: u16) -> Result<String, SpirvCrossError> {
     let artifact: CompiledArtifact<Glsl> = compiler.compile(&options)?;
     let src = artifact.to_string();
 
-    // ✅ 核心修复：调用后处理函数，解决 Link 阶段的所有冲突
     Ok(post_process_glsl_es(&src))
-}
-
-fn shader_kind(stage: u32) -> shaderc::ShaderKind {
-    match stage {
-        GL_VERTEX_SHADER => shaderc::ShaderKind::Vertex,
-        GL_FRAGMENT_SHADER => shaderc::ShaderKind::Fragment,
-        GL_COMPUTE_SHADER => shaderc::ShaderKind::Compute,
-        GL_GEOMETRY_SHADER => shaderc::ShaderKind::Geometry,
-        GL_TESS_CONTROL_SHADER => shaderc::ShaderKind::TessControl,
-        GL_TESS_EVALUATION_SHADER => shaderc::ShaderKind::TessEvaluation,
-        _ => shaderc::ShaderKind::InferFromSource,
-    }
 }
 
 fn stage_name(stage: u32) -> &'static str {
@@ -198,17 +231,11 @@ fn post_process_glsl_es(src: &str) -> String {
         })
         .to_string();
 
-    // ✅ 3. 核心修复：移除 in/out 变量的 location，解决 VS/FS 链接时的 Input Output Mismatch
-    // 匹配: layout(location = 0) in vec4 texCoord0; -> in vec4 texCoord0;
+    // 3. 移除 in/out 变量的 location，解决 VS/FS 链接时的 Input Output Mismatch
     let re_io = Regex::new(r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*\)\s*(in|out)\b").unwrap();
     result = re_io.replace_all(&result, "$1").to_string();
 
-    // ✅ 4. 修复：移除非 opaque 普通 uniform（如 mat4/vec3/float）上的 layout 限定符。
-    // spirv-cross 会给所有 uniform 加 layout(location=.., binding=..)，但 GLES 只允许
-    // 在 UBO / storage block / opaque 变量上使用 binding，否则报：
-    //   "the binding qualifier only applies to uniform blocks, storage blocks, opaque variables..."
-    // 仅匹配以 `;` 结尾且不含 `{` 的普通 uniform 声明（UBO block 以 `{` 开头，自然排除）。
-    // 注：Rust regex crate 不支持 lookahead，故用 `[^;{]+` 显式限定。
+    // 4. 移除非 opaque 普通 uniform 上的 layout 限定符
     let re_uniform = Regex::new(
         r"(?i)layout\s*\(\s*(?:location\s*=\s*\d+\s*,?\s*|binding\s*=\s*\d+\s*,?\s*)+\)\s*(uniform\s+[^;{]+;)",
     )

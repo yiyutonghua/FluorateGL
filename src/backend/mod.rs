@@ -60,6 +60,7 @@ where
     if FIRST_CALL.swap(false, Ordering::Relaxed) {
         log::info!("[FluorateGL] === 首次 GL 调用，游戏渲染管线已启动 ===");
         suppress_debug_noise();
+        log_gpu_info();
     }
 
     //ensure_initialized();
@@ -68,6 +69,34 @@ where
         STUB.get_or_init(dispatch::GlesDispatch::all_stub)
     });
     f(dispatch)
+}
+
+/// 在首次 GL 调用时（EGL 上下文已创建）查询并记录 GPU 信息。
+/// 不能在 `fluorategl_init()` 中查询，因为那时 EGL 上下文尚未创建。
+fn log_gpu_info() {
+    use libc::c_char;
+    unsafe fn c_str_to_string(ptr: *const c_char) -> String {
+        if ptr.is_null() {
+            return "(null)".to_string();
+        }
+        unsafe {
+            std::ffi::CStr::from_ptr(ptr as *const _)
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
+
+    if let Some(dispatch) = GLES_DISPATCH.get() {
+        unsafe {
+            let version = (dispatch.get_string)(0x1F02); // GL_VERSION
+            let renderer = (dispatch.get_string)(0x1F01); // GL_RENDERER
+            let vendor = (dispatch.get_string)(0x1F00); // GL_VENDOR
+
+            log::info!("[FluorateGL] GLES version: {}", c_str_to_string(version));
+            log::info!("[FluorateGL] GPU: {}", c_str_to_string(renderer));
+            log::info!("[FluorateGL] Vendor: {}", c_str_to_string(vendor));
+        }
+    }
 }
 
 /// 屏蔽 GLES 驱动的 PERFORMANCE / OTHER 类型 Debug 消息，
