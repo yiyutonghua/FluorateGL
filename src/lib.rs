@@ -89,7 +89,7 @@ pub extern "C" fn fluorategl_init() -> i32 {
         return -2;
     }
     log::info!("[FluorateGL] EGL library loaded");
-    
+
     // 加载Gles
     if backend::init_gles().is_err() {
         log::error!("[FluorateGL] Failed to initialize GLES");
