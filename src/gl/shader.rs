@@ -229,6 +229,16 @@ pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
             return;
         }
         (dispatch.get_shader_iv)(gles_id, pname, params);
+
+        // 对齐 MobileGlues: 编译失败时强制返回 GL_TRUE（欺骗 MC）
+        if pname == GL_COMPILE_STATUS && *params == 0 {
+            log::warn!(
+                "[FluorateGL] Shader {} (GLES {}) compile failed, cheating to GL_TRUE",
+                shader,
+                gles_id
+            );
+            *params = 1;
+        }
     });
 }
 

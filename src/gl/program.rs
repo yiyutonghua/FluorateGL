@@ -92,6 +92,19 @@ pub extern "C" fn glGetProgramiv(program: u32, pname: u32, params: *mut i32) {
             return;
         }
         (dispatch.get_program_iv)(gles_id, pname, params);
+
+        // 对齐 MobileGlues: 链接/验证失败时强制返回 GL_TRUE（欺骗 MC）
+        const GL_LINK_STATUS: u32 = 0x8B82;
+        const GL_VALIDATE_STATUS: u32 = 0x8B8B;
+        if (pname == GL_LINK_STATUS || pname == GL_VALIDATE_STATUS) && *params == 0 {
+            log::warn!(
+                "[FluorateGL] Program {} (GLES {}) {} failed, cheating to GL_TRUE",
+                program,
+                gles_id,
+                if pname == GL_LINK_STATUS { "link" } else { "validate" }
+            );
+            *params = 1;
+        }
     });
 }
 

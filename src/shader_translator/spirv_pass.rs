@@ -1,6 +1,6 @@
 use glslang::{
-    Compiler, CompilerOptions, OpenGlVersion, ShaderInput, ShaderMessage, ShaderSource,
-    ShaderStage, SourceLanguage, SpirvVersion, Target,
+    Compiler, CompilerOptions, ShaderInput, ShaderMessage, ShaderOptions,
+    ShaderSource, ShaderStage, SourceLanguage, SpirvVersion, Target, VulkanVersion,
 };
 use regex::Regex;
 use spirv_cross2::compile::glsl::GlslVersion;
@@ -90,13 +90,22 @@ fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
         }
     };
     let glsl_stage = map_gl_stage(stage)?;
-    let src = ShaderSource::from(source);
 
+    // 预处理 GLSL：对齐 MobileGlues 的 preprocess_glsl + get_or_add_glsl_version
+    // - 移除 #line 指令
+    // - 强制 GLSL 版本 >= 150（兼容 MobileGlues 行为）
+    // - 注入 MobileGlues 宏定义
+    let preprocessed = preprocess_glsl_source(source);
+
+    let src = ShaderSource::from(preprocessed.as_str());
+
+    // 对齐 MobileGlues: Target::Vulkan（EShClientVulkan 输入）
+    // 使用 Vulkan 目标解析 GLSL 更宽松（要求 GLSL >= 140 而非 330）
     let options = CompilerOptions {
         source_language: SourceLanguage::GLSL,
-        target: Target::OpenGL {
-            version: OpenGlVersion::OpenGL4_5,
-            spirv_version: Some(SpirvVersion::SPIRV1_0),
+        target: Target::Vulkan {
+            version: VulkanVersion::Vulkan1_0,
+            spirv_version: SpirvVersion::SPIRV1_5,
         },
         version_profile: None,
         messages: ShaderMessage::SUPPRESS_WARNINGS,
@@ -120,7 +129,7 @@ fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
         }
     };
 
-    let shader = match compiler.create_shader(input) {
+    let mut shader = match compiler.create_shader(input) {
         Ok(shader) => shader,
         Err(e) => {
             log::error!(
@@ -132,6 +141,13 @@ fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
         }
     };
 
+    // 对齐 MobileGlues: 开启 AutoMapBindings + AutoMapLocations + VulkanRulesRelaxed
+    shader.options(
+        ShaderOptions::AUTO_MAP_BINDINGS
+            | ShaderOptions::AUTO_MAP_LOCATIONS
+            | ShaderOptions::VULKAN_RULES_RELAXED,
+    );
+
     match shader.compile() {
         Ok(spv) => Some(spv),
         Err(e) => {
@@ -142,6 +158,61 @@ fn compile_to_spirv(source: &str, stage: u32) -> Option<Vec<u32>> {
             );
             None
         }
+    }
+}
+
+/// 对齐 MobileGlues preprocess_glsl + get_or_add_glsl_version
+/// 1. 移除 #line 指令
+/// 2. 强制 GLSL 版本 >= 150（无版本则插入 #version 150）
+/// 3. 注入 MG_MOBILEGLUES 宏
+fn preprocess_glsl_source(source: &str) -> String {
+    let mut result = remove_line_directives(source);
+
+    let version = extract_version(&result);
+    match version {
+        None => {
+            // 没有 version 指令，插入 #version 150
+            result.insert_str(0, "#version 150\n");
+        }
+        Some(v) => {
+            if let Ok(ver) = v.parse::<u32>() {
+                if ver < 140 {
+                    // 旧版本强制升级到 150 compatibility
+                    let re = Regex::new(r"(?m)^#version\s+\d+.*$").unwrap();
+                    result = re
+                        .replace(&result, "#version 150 compatibility")
+                        .to_string();
+                }
+            }
+        }
+    }
+
+    // 注入 MG_MOBILEGLUES 宏定义（对齐 MobileGlues inject_mg_macro_definition）
+    result = inject_mg_macros(&result);
+
+    result
+}
+
+/// 移除 #line 指令（对齐 MobileGlues replace_line_starting_with("#line")）
+fn remove_line_directives(source: &str) -> String {
+    let re = Regex::new(r"(?m)^\s*#line\s+.*$(\n|$)?").unwrap();
+    re.replace_all(source, "").to_string()
+}
+
+/// 注入 MobileGlues 兼容宏定义
+fn inject_mg_macros(source: &str) -> String {
+    // 在 #version 行之后插入 MG_MOBILEGLUES 宏，兼容使用此宏做条件编译的 shader
+    let re = Regex::new(r"(?m)^(#version\s+.*)$").unwrap();
+    if let Some(caps) = re.captures(source) {
+        let full_match = caps.get(0).unwrap();
+        let end = full_match.end();
+        let mut result = source[..end].to_string();
+        result.push_str("\n#define MG_MOBILEGLUES\n#define MG_MOBILEGLUES_VERSION 0200\n");
+        result.push_str(&source[end..]);
+        result
+    } else {
+        // 没有 #version 行，在开头插入
+        format!("#define MG_MOBILEGLUES\n#define MG_MOBILEGLUES_VERSION 0200\n{}", source)
     }
 }
 
@@ -207,44 +278,67 @@ fn gles_version_candidates(source: &str) -> Vec<u16> {
     }
 }
 
-/// 后处理 GLSL ES 代码，移除会导致链接冲突的硬编码 layout 修饰符
+/// 后处理 GLSL ES 代码，对齐 MobileGlues 的 removeLayoutBinding + processOutColorLocations + forceSupporterOutput
 fn post_process_glsl_es(src: &str) -> String {
     let mut result = src.to_string();
 
-    // 1. 移除 Sampler 和 Image 的 layout
-    let re_sampler = Regex::new(
-        r"(?i)layout\s*\([^)]*\)\s*(uniform\s+(?:highp\s+|mediump\s+|lowp\s+)?(?:sampler|image))",
-    )
-    .unwrap();
-    result = re_sampler.replace_all(&result, "$1").to_string();
+    // 1. 移除所有 layout(binding = X)（对齐 MobileGlues removeLayoutBinding）
+    //    MobileGlues 不分类型，全部移除
+    let re_binding = Regex::new(r"(?i)layout\s*\(\s*binding\s*=\s*\d+\s*\)\s*").unwrap();
+    result = re_binding.replace_all(&result, "").to_string();
 
-    // 2. 移除 Uniform Block (UBO) 的 binding = X
-    let re_ubo = Regex::new(r"(?i)layout\s*\(([^)]*)\)\s*(uniform\s+[A-Za-z0-9_]+\s*\{)").unwrap();
-    let re_binding = Regex::new(r"(?i),?\s*binding\s*=\s*\d+\s*,?").unwrap();
-    let re_multi_comma = Regex::new(r",\s*,").unwrap();
+    // 处理 layout(binding=X, ...) 逗号形式
+    let re_binding_comma = Regex::new(r"(?i)layout\s*\(\s*binding\s*=\s*\d+\s*,").unwrap();
+    result = re_binding_comma.replace_all(&result, "layout(").to_string();
 
-    result = re_ubo
-        .replace_all(&result, |caps: &regex::Captures| {
-            let mut params = caps[1].to_string();
-            params = re_binding.replace_all(&params, "").to_string();
-            params = params
-                .trim_matches(|c: char| c == ',' || c.is_whitespace())
-                .to_string();
-            params = re_multi_comma.replace_all(&params, ",").to_string();
-            if params.is_empty() {
-                format!("{}", &caps[2])
-            } else {
-                format!("layout({}) {}", params, &caps[2])
-            }
-        })
+    // 2. 处理 outColorN 的 location（对齐 MobileGlues processOutColorLocations）
+    let re_out_color = Regex::new(r"(?m)^(out\s+(?:highp\s+|mediump\s+|lowp\s+)?\w+\s+outColor)(\d+)\s*;").unwrap();
+    result = re_out_color
+        .replace_all(&result, "layout(location=$2) $1$2;")
         .to_string();
 
-    // 3. 移除非 opaque 普通 uniform 上的 layout 限定符
-    let re_uniform = Regex::new(
-        r"(?i)layout\s*\(\s*(?:location\s*=\s*\d+\s*,?\s*|binding\s*=\s*\d+\s*,?\s*)+\)\s*(uniform\s+[^;{]+;)",
-    )
-    .unwrap();
-    result = re_uniform.replace_all(&result, "$1").to_string();
+    // 3. 确保 precision 声明（对齐 MobileGlues forceSupporterOutput）
+    result = ensure_precision(&result);
+
+    result
+}
+
+/// 确保 precision highp float/int 声明存在（对齐 MobileGlues forceSupporterOutput）
+fn ensure_precision(source: &str) -> String {
+    let has_precision_float = source.contains("precision ") && source.contains("float;");
+    let has_precision_int = source.contains("precision ") && source.contains("int;");
+
+    let mut result = source.to_string();
+
+    if has_precision_float && has_precision_int {
+        // 移除现有的 precision 声明，重新统一插入 highp
+        let re_precision = Regex::new(r"(?m)^\s*precision\s+\w+\s+(?:float|int)\s*;.*$(\n)?").unwrap();
+        result = re_precision.replace_all(&result, "").to_string();
+    }
+
+    let precision_decl = if has_precision_float && has_precision_int {
+        // 两者都已存在，统一用 highp
+        "precision highp float;\nprecision highp int;\n"
+    } else if has_precision_float {
+        // 只有 float，补充 int
+        "precision highp int;\n"
+    } else if has_precision_int {
+        // 只有 int，补充 float
+        "precision highp float;\n"
+    } else {
+        // 都没有，全部插入
+        "precision highp float;\nprecision highp int;\n"
+    };
+
+    // 在 #extension 之后或 #version 之后插入
+    let last_ext = result.rfind("#extension");
+    if let Some(pos) = last_ext.map(|p| result[p..].find('\n').map(|n| p + n + 1)).flatten() {
+        result.insert_str(pos, precision_decl);
+    } else if let Some(version_end) = result.find('\n') {
+        result.insert_str(version_end + 1, precision_decl);
+    } else {
+        result.insert_str(0, precision_decl);
+    }
 
     result
 }
