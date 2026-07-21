@@ -15,6 +15,7 @@ path = "tests/glsl/glslang_suite.rs"
 bytemuck = { version = "1", default-features = false }
 ctor = "1.0.9"
 glslang = "0.8.1"
+glslang-sys = "0.8.1"
 libc = "0.2.186"
 log = "0.4.33"
 regex = "1"

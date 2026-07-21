@@ -9,6 +9,7 @@ dependencies = [
  "bytemuck",
  "ctor",
  "glslang",
+ "glslang-sys",
  "libc",
  "log",
  "regex",
