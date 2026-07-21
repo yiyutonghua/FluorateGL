@@ -30,3 +30,7 @@ lto = true
 strip = true
 codegen-units = 8
 
+
+[[example]]
+name = "test_preprocess"
+path = "tests/glsl/test_preprocess.rs"
