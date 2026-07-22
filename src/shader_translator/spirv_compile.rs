@@ -44,7 +44,17 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
             return None;
         }
     };
-    let glsl_stage = map_gl_stage(stage)?;
+    let glsl_stage = match map_gl_stage(stage) {
+        Some(s) => s,
+        None => {
+            log::error!(
+                "[ShaderTranslator] map_gl_stage returned None for stage 0x{:04X}; source (first 500 chars):\n{}",
+                stage,
+                source.chars().take(500).collect::<String>()
+            );
+            return None;
+        }
+    };
 
     // 预处理 GLSL：移除 #line、强制版本 >= 150、补全 location/binding
     let preprocessed = crate::shader_translator::preprocess::preprocess(source);
@@ -74,9 +84,10 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
         Ok(input) => input,
         Err(e) => {
             log::error!(
-                "[ShaderTranslator] glslang parse failed for stage 0x{:04X}: {:?}",
+                "[ShaderTranslator] glslang parse failed for stage 0x{:04X}: {:?}; source (first 500 chars):\n{}",
                 stage,
-                e
+                e,
+                source.chars().take(500).collect::<String>()
             );
             return None;
         }
@@ -86,9 +97,10 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
         Ok(shader) => shader,
         Err(e) => {
             log::error!(
-                "[ShaderTranslator] glslang shader creation failed for stage 0x{:04X}: {:?}",
+                "[ShaderTranslator] glslang shader creation failed for stage 0x{:04X}: {:?}; source (first 500 chars):\n{}",
                 stage,
-                e
+                e,
+                source.chars().take(500).collect::<String>()
             );
             return None;
         }
@@ -105,9 +117,10 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
         Ok(spv) => Some(spv),
         Err(e) => {
             log::error!(
-                "[ShaderTranslator] glslang SPIR-V compile failed for stage 0x{:04X}: {:?}",
+                "[ShaderTranslator] glslang SPIR-V compile failed for stage 0x{:04X}: {:?}; source (first 500 chars):\n{}",
                 stage,
-                e
+                e,
+                source.chars().take(500).collect::<String>()
             );
             None
         }

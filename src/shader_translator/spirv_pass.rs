@@ -50,9 +50,10 @@ fn translate_internal(source: &str, stage: u32) -> TranslationResult {
         Some(s) => s,
         None => {
             log::warn!(
-                "[ShaderTranslator] glslang SPIR-V compile failed for stage {} (0x{:04X})",
+                "[ShaderTranslator] glslang SPIR-V compile failed for stage {} (0x{:04X}); source (first 500 chars):\n{}",
                 stage_name,
-                stage
+                stage,
+                source.chars().take(500).collect::<String>()
             );
             return TranslationResult::Failed;
         }
