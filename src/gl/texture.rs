@@ -44,6 +44,13 @@ const GL_STENCIL_INDEX16: u32 = 0x8D49;
 const GL_COMPRESSED_RGBA: u32 = 0x84EE;
 const GL_COMPRESSED_RGB: u32 = 0x84ED;
 
+// 像素数据类型常量（用于深度格式归一化）
+const GL_UNSIGNED_SHORT: u32 = 0x1403;
+const GL_UNSIGNED_INT: u32 = 0x1405;
+const GL_FLOAT: u32 = 0x1406;
+// 桌面 GL 专属纹理参数 pname，GLES 不支持
+const GL_TEXTURE_LOD_BIAS: u32 = 0x8501;
+
 /// Convert a desktop OpenGL internal format to the closest GLES-compatible
 /// internal format.
 fn normalize_internal_format(internalformat: u32) -> u32 {
@@ -74,6 +81,40 @@ fn normalize_internal_format(internalformat: u32) -> u32 {
 
         // 5. 其他情况（已经是 Sized Format）原样返回
         _ => internalformat,
+    }
+}
+
+/// 判断 pname 是否为 GLES 不支持的桌面 GL 纹理参数
+///
+/// 这些 pname 透传给 GLES 会产生 GL_INVALID_ENUM。MC 旧版（1.21.4 及更早）会调用
+/// GL_TEXTURE_LOD_BIAS 设置纹理 LOD 偏移（桌面 GL 固定功能），GLES 无此 pname，
+/// LOD 偏移在 GLES 中由 shader 处理。拦截并忽略，避免驱动报错污染错误队列。
+fn is_unsupported_tex_parameter(pname: u32) -> bool {
+    matches!(pname, GL_TEXTURE_LOD_BIAS)
+}
+
+/// 归一化深度/深度模板内部格式，根据像素 type 选择正确的 sized format
+///
+/// GLES 对深度纹理的 internalformat 与 type 组合有严格要求：
+/// - GL_FLOAT(0x1406) 必须配 GL_DEPTH_COMPONENT32F(0x8CAC)
+/// - GL_UNSIGNED_INT(0x1405) 配 GL_DEPTH_COMPONENT24(0x81A6)
+/// - GL_UNSIGNED_SHORT(0x1403) 配 GL_DEPTH_COMPONENT16(0x81A5)
+///
+/// 之前 normalize_internal_format 把 GL_DEPTH_COMPONENT 一律映射到 DEPTH_COMPONENT24，
+/// 当 MC 传 type=GL_FLOAT 时（depth renderbuffer 纹理），GLES 报
+/// "pixel buffer format is not compatible with level format"。
+/// 此函数仅在 internalformat 为深度类格式时根据 type 精确选择，其余情况回退到
+/// normalize_internal_format。
+fn normalize_depth_internal_format(internalformat: u32, type_: u32) -> u32 {
+    match internalformat {
+        GL_DEPTH_COMPONENT => match type_ {
+            GL_FLOAT => GL_DEPTH_COMPONENT32F,
+            GL_UNSIGNED_INT => GL_DEPTH_COMPONENT24,
+            GL_UNSIGNED_SHORT => GL_DEPTH_COMPONENT16,
+            _ => GL_DEPTH_COMPONENT24,
+        },
+        // 已是 sized 深度格式或非深度格式：交给通用归一化
+        _ => normalize_internal_format(internalformat),
     }
 }
 
@@ -171,7 +212,7 @@ pub extern "C" fn glTexImage2D(
     type_: u32,
     pixels: *const std::ffi::c_void,
 ) {
-    let normalized = normalize_internal_format(internalformat as u32) as i32;
+    let normalized = normalize_depth_internal_format(internalformat as u32, type_) as i32;
     log::debug!(
         "[FluorateGL] glTexImage2D(target=0x{:04X}, level={}, internalformat=0x{:04X}, {}x{}, format=0x{:04X}, type=0x{:04X}, pixels={:?})",
         target,
@@ -226,6 +267,13 @@ pub extern "C" fn glTexParameteri(target: u32, pname: u32, param: i32) {
         pname,
         param
     );
+    if is_unsupported_tex_parameter(pname) {
+        log::debug!(
+            "[FluorateGL] glTexParameteri pname 0x{:04X} ignored (unsupported in GLES)",
+            pname
+        );
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.tex_parameter_i)(target, pname, param);
     });
@@ -245,7 +293,7 @@ pub extern "C" fn glTexImage3D(
     type_: u32,
     pixels: *const std::ffi::c_void,
 ) {
-    let normalized = normalize_internal_format(internalformat as u32) as i32;
+    let normalized = normalize_depth_internal_format(internalformat as u32, type_) as i32;
     if normalized != internalformat {
         log::debug!(
             "glTexImage3D: normalized internalformat 0x{:04X} -> 0x{:04X}",
@@ -344,6 +392,13 @@ pub extern "C" fn glTexParameterf(target: u32, pname: u32, param: f32) {
         pname,
         param
     );
+    if is_unsupported_tex_parameter(pname) {
+        log::debug!(
+            "[FluorateGL] glTexParameterf pname 0x{:04X} ignored (unsupported in GLES)",
+            pname
+        );
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.tex_parameter_f)(target, pname, param);
     });
@@ -352,6 +407,13 @@ pub extern "C" fn glTexParameterf(target: u32, pname: u32, param: f32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glTexParameterfv(target: u32, pname: u32, params: *const f32) {
+    if is_unsupported_tex_parameter(pname) {
+        log::debug!(
+            "[FluorateGL] glTexParameterfv pname 0x{:04X} ignored (unsupported in GLES)",
+            pname
+        );
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.tex_parameter_fv)(target, pname, params);
     });
@@ -360,6 +422,13 @@ pub extern "C" fn glTexParameterfv(target: u32, pname: u32, params: *const f32) 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glTexParameteriv(target: u32, pname: u32, params: *const i32) {
+    if is_unsupported_tex_parameter(pname) {
+        log::debug!(
+            "[FluorateGL] glTexParameteriv pname 0x{:04X} ignored (unsupported in GLES)",
+            pname
+        );
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.tex_parameter_iv)(target, pname, params);
     });
