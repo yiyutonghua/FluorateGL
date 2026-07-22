@@ -30,15 +30,20 @@ use regex::Regex;
 /// 3. 为缺少 location 的 in/out 变量自动添加 layout(location=X)（in/out 独立计数）
 /// 4. 为缺少 location 的 non-opaque uniform 自动添加 layout(location=X)
 /// 5. 为缺少 binding 的 UBO/SSBO 自动添加 layout(binding=X)
-/// 6. 如果注入了 binding 且版本低于 420，升级到 420（binding 需要 GLSL 420+）
+/// 6. 如果注入了 binding 或 uniform location，且版本低于 420，升级到 420
+///    （layout(binding) 和 non-opaque uniform 的 layout(location) 都需要 GLSL 420+）
 pub fn preprocess(source: &str) -> String {
     let mut result = remove_line_directives(source);
     force_glsl_version(&mut result);
     inject_missing_locations(&mut result);
-    inject_missing_uniform_locations(&mut result);
+    // 注入 uniform location 后需要版本保障：GLSL 330 core 不支持
+    // non-opaque uniform 的 layout(location)，需要 420+（GL_ARB_shading_language_420pack）。
+    // 之前只在注入 binding 时升级版本，导致无 UBO 但有独立 uniform 的 shader
+    // （如 MC rendertype_solid）停留在 330 core，glslang parse 失败。
+    let injected_location = inject_missing_uniform_locations(&mut result);
     let injected_binding = inject_missing_bindings(&mut result);
-    if injected_binding {
-        ensure_binding_version(&mut result);
+    if injected_binding || injected_location {
+        ensure_layout_version(&mut result);
     }
     result
 }
@@ -242,7 +247,10 @@ fn parse_array_size(rest: &str) -> u32 {
 ///
 /// 策略：扫描独立的 `uniform <type> <name>;` 声明（非 block、非 opaque），
 /// 为缺少 location 的声明按出现顺序分配递增 location 编号。
-fn inject_missing_uniform_locations(result: &mut String) {
+///
+/// 返回 true 表示至少注入了一个 location（调用方需确保 GLSL 版本 >= 420，
+/// 因为 non-opaque uniform 的 layout(location) 需要 GLSL 420+）。
+fn inject_missing_uniform_locations(result: &mut String) -> bool {
     // 匹配: uniform <type> <name>[<array>];
     // Rust regex crate 不支持 lookahead，opaque 类型在代码中过滤
     let re =
@@ -265,6 +273,7 @@ fn inject_missing_uniform_locations(result: &mut String) {
     ];
 
     let mut location_counter: u32 = 0;
+    let mut injected = false;
     let mut modified = String::with_capacity(result.len());
 
     for line in result.lines() {
@@ -304,6 +313,7 @@ fn inject_missing_uniform_locations(result: &mut String) {
             modified.push('\n');
             // 数组声明占多个 location
             location_counter += parse_array_size(rest);
+            injected = true;
         } else {
             modified.push_str(line);
             modified.push('\n');
@@ -316,6 +326,7 @@ fn inject_missing_uniform_locations(result: &mut String) {
     }
 
     *result = modified;
+    injected
 }
 
 /// 为缺少 binding 的 UBO/SSBO 自动添加 layout(binding=X)
@@ -422,13 +433,17 @@ fn inject_missing_bindings(result: &mut String) -> bool {
 
 /// 如果 GLSL 版本低于 420，升级到 420
 ///
-/// `layout(binding=X)` 需要 GLSL 420+，否则 glslang 会报：
-/// "binding : not supported for this version or the enabled extensions"
+/// 此函数同时覆盖两种 layout 限定符的版本要求：
+/// - `layout(binding=X)`：UBO/SSBO 的 binding 需要 GLSL 420+，否则 glslang 报：
+///   "binding : not supported for this version or the enabled extensions"
+/// - `layout(location=X)` for non-opaque uniform：独立 uniform 的 location 需要
+///   GLSL 420+（GL_ARB_shading_language_420pack），否则 glslang 报：
+///   "location qualifier on uniform or buffer : not supported for this version"
 ///
-/// 注意：ES 版本（300 es/310 es/320 es）已支持 layout(binding)，无需升级。
-/// 之前不检查 is_es，导致 `#version 320 es` 被错误替换为 `#version 420`（桌面），
-/// 破坏 ES 语法。
-fn ensure_binding_version(result: &mut String) {
+/// 注意：ES 版本（300 es/310 es/320 es）已支持 layout(binding) 和 layout(location)，
+/// 无需升级。之前不检查 is_es，导致 `#version 320 es` 被错误替换为
+/// `#version 420`（桌面），破坏 ES 语法。
+fn ensure_layout_version(result: &mut String) {
     let need_upgrade = extract_version(result).and_then(|v| {
         let is_es = is_es_version(v);
         if is_es {
@@ -597,16 +612,16 @@ mod tests {
     }
 
     #[test]
-    fn test_ensure_binding_version_upgrade() {
+    fn test_ensure_layout_version_upgrade() {
         let mut result = "#version 330\nvoid main() {}".to_string();
-        ensure_binding_version(&mut result);
+        ensure_layout_version(&mut result);
         assert!(result.starts_with("#version 420"));
     }
 
     #[test]
-    fn test_ensure_binding_version_ok() {
+    fn test_ensure_layout_version_ok() {
         let mut result = "#version 450\nvoid main() {}".to_string();
-        ensure_binding_version(&mut result);
+        ensure_layout_version(&mut result);
         assert!(result.starts_with("#version 450"));
     }
 
@@ -623,5 +638,42 @@ mod tests {
         // in/out 应有 location，且 in/out 独立计数（都从 0 开始）
         assert!(result.contains("layout(location=0) in vec4 color;"));
         assert!(result.contains("layout(location=0) out vec4 fragColor;"));
+    }
+
+    /// 回归测试：无 UBO 但有独立 uniform 的 shader（如 MC rendertype_solid）
+    /// 之前此场景版本停留在 330 core，glslang 因 uniform layout(location) 不支持而 parse 失败。
+    /// 修复后：注入 uniform location 时也触发版本升级到 420 core。
+    #[test]
+    fn test_preprocess_uniform_location_without_ubo_upgrades_version() {
+        // MC 1.21.x 风格 shader：#version 150 + 独立 uniform，无 UBO
+        let input = "#version 150\n\
+            uniform mat4 ModelViewMat;\n\
+            uniform sampler2D Sampler0;\n\
+            in vec3 Position;\n\
+            in vec2 UV0;\n\
+            in ivec2 UV2;\n\
+            out vec4 vertexColor;\n\
+            void main() {\n\
+                gl_Position = ModelViewMat * vec4(Position, 1.0);\n\
+            }\n";
+        let result = preprocess(input);
+        // #version 150 先升级到 330 core，注入 uniform location 后再升级到 420 core
+        assert!(
+            result.contains("#version 420 core"),
+            "expected #version 420 core for uniform location support, got: {}",
+            result
+        );
+        // non-opaque uniform 应有 location
+        assert!(result.contains("layout(location=0) uniform mat4 ModelViewMat;"));
+        // sampler 是 opaque，不应被注入 location
+        for line in result.lines() {
+            if line.contains("uniform sampler2D") {
+                assert!(
+                    !line.contains("layout(location="),
+                    "sampler 不应有 location: {}",
+                    line
+                );
+            }
+        }
     }
 }
