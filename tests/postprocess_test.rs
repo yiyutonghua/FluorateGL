@@ -226,11 +226,13 @@ fn postprocess_handles_input_without_version() {
 }
 
 #[test]
-fn postprocess_preserves_layout_location_on_in() {
-    // layout(location=X) in 不应被移除（只移除 binding）
+fn postprocess_strips_layout_location_on_in() {
+    // layout(location=X) in 的 location 应被移除（让 GLES linker 按名匹配）
     let src = "#version 320 es\nlayout(location = 0) in vec2 texCoord;\nvoid main() {}\n";
     let result = postprocess::post_process(src);
-    assert!(result.contains("layout(location = 0) in vec2 texCoord;"));
+    // location 被移除，变量声明保留
+    assert!(!result.contains("layout(location = 0) in"));
+    assert!(result.contains("in vec2 texCoord;"));
 }
 
 #[test]
