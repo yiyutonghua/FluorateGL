@@ -1,25 +1,24 @@
 //! GLSL → SPIR-V 编译模块
 //!
 //! 使用 glslang crate 将桌面 GLSL 编译为 SPIR-V 字节码。
-//! 对齐 MobileGlues 的 glslang 配置：
-//! - client = OpenGL（EShClientOpenGL + EShTargetOpenGL_450）
-//! - target_language = SPIR-V 1.5（EShTargetSpv + EShTargetSpv_1_5）
+//! 本分支（glslang-targetvk）实验性使用 Vulkan target：
+//! - target = Vulkan 1.2 + SPIR-V 1.5
 //! - ShaderOptions: AUTO_MAP_BINDINGS | AUTO_MAP_LOCATIONS | VULKAN_RULES_RELAXED
 //!
-//! 注意：MobileGlues 的 C++ API 通过 setEnvInput(EShClientVulkan) + setEnvClient(EShClientOpenGL)
-//! 实现"Vulkan 输入 + OpenGL 客户端"的混合模式。Rust crate 的 glslang_input_t 只有一个
-//! client 字段，但 setEnvClient 会覆盖 setEnvInput 设置的 client，所以最终效果等价于
-//! 纯 OpenGL 客户端 + SPIR-V 目标。这里使用 Target::OpenGL { spirv_version: Some(...) }。
+//! 背景：glslang 0.8.1 的 Program::compile 硬编码了 VULKAN_RULES | SPV_RULES，
+//! 即使 target 是 OpenGL，compile 阶段也按 Vulkan 规则校验。使用 Target::Vulkan
+//! 使 client/target 标记与实际校验行为一致，避免 OpenGL target 下 parse 阶段
+//! 与 compile 阶段规则不一致的问题。
 //!
-//! 相比 Target::Vulkan，OpenGL SPIR-V 模式更宽松：
-//! - 允许独立 non-opaque uniform（无需包装进 UBO block）
-//! - 允许省略 layout(location)（由 AUTO_MAP_LOCATIONS 自动分配）
-//! - 允许省略 layout(binding)（由 AUTO_MAP_BINDINGS 自动分配）
-//! - 要求 GLSL >= 330（Vulkan 仅要求 >= 140）
+//! Vulkan target 要求：
+//! - GLSL >= 140（preprocess 已升级到 >= 330，满足）
+//! - 所有 in/out 有 location（preprocess 已注入，满足）
+//! - 所有 UBO/SSBO 有 binding（preprocess 已注入，满足）
+//! - 独立 non-opaque uniform 需包装进 UBO（VULKAN_RULES_RELAXED 可能放宽，待验证）
 
 use glslang::{
-    Compiler, CompilerOptions, OpenGlVersion, ShaderInput, ShaderMessage, ShaderOptions,
-    ShaderSource, ShaderStage, SourceLanguage, SpirvVersion, Target,
+    Compiler, CompilerOptions, ShaderInput, ShaderMessage, ShaderOptions,
+    ShaderSource, ShaderStage, SourceLanguage, SpirvVersion, Target, VulkanVersion,
 };
 
 // GL shader stage 常量
@@ -61,14 +60,14 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
 
     let src = ShaderSource::from(preprocessed.as_str());
 
-    // 对齐 MobileGlues: OpenGL 客户端 + SPIR-V 1.5 目标
-    // EShClientOpenGL + EShTargetOpenGL_450 + EShTargetSpv + EShTargetSpv_1_5
-    // 相比 Vulkan 目标，OpenGL SPIR-V 允许独立 uniform、省略 location/binding
+    // 本分支实验性配置：Vulkan target + SPIR-V 1.5
+    // EShClientVulkan + EShTargetVulkan_1_2 + EShTargetSpv + EShTargetSpv_1_5
+    // glslang Program::compile 硬编码 VULKAN_RULES，用 Vulkan target 使标记一致
     let options = CompilerOptions {
         source_language: SourceLanguage::GLSL,
-        target: Target::OpenGL {
-            version: OpenGlVersion::OpenGL4_5,
-            spirv_version: Some(SpirvVersion::SPIRV1_5),
+        target: Target::Vulkan {
+            version: VulkanVersion::Vulkan1_2,
+            spirv_version: SpirvVersion::SPIRV1_5,
         },
         version_profile: None,
         messages: ShaderMessage::SUPPRESS_WARNINGS,
