@@ -45,31 +45,45 @@ fn translate_internal(source: &str, stage: u32) -> TranslationResult {
         stage
     );
 
+    let total_start = std::time::Instant::now();
+
     // 步骤 1+2：预处理 + GLSL → SPIR-V
+    let compile_start = std::time::Instant::now();
     let spv = match spirv_compile::compile(source, stage) {
         Some(s) => s,
         None => {
             log::warn!(
-                "[ShaderTranslator] glslang SPIR-V compile failed for stage {} (0x{:04X}); source (first 500 chars):\n{}",
+                "[ShaderTranslator] glslang SPIR-V compile failed for stage {} (0x{:04X}), took {:?}; source (first 500 chars):\n{}",
                 stage_name,
                 stage,
+                compile_start.elapsed(),
                 source.chars().take(500).collect::<String>()
             );
             return TranslationResult::Failed;
         }
     };
+    log::debug!(
+        "[ShaderTranslator] glslang SPIR-V compile done: stage={}, took {:?} ({} words)",
+        stage_name,
+        compile_start.elapsed(),
+        spv.len()
+    );
 
     // 步骤 3：SPIR-V 中间处理 Pass（当前为直通，预留扩展点）
     let spv = spirv_pass(&spv);
 
     // 步骤 4+5：SPIR-V → GLSL ES + 后处理
+    let cross_start = std::time::Instant::now();
     for gles_version in gles_compile::gles_version_candidates(source) {
         match gles_compile::compile(&spv, gles_version) {
             Ok(src) => {
                 log::debug!(
-                    "[ShaderTranslator] SPIR-V translate success: stage={}, version=ES{}",
+                    "[ShaderTranslator] SPIR-V translate success: stage={}, version=ES{}, glslang={:?}, spirv-cross={:?}, total={:?}",
                     stage_name,
-                    gles_version
+                    gles_version,
+                    compile_start.elapsed(),
+                    cross_start.elapsed(),
+                    total_start.elapsed()
                 );
                 log::debug!("[ShaderTranslator] translated GLSL ES:\n{}", src);
                 return TranslationResult::Translated(src);
@@ -86,8 +100,9 @@ fn translate_internal(source: &str, stage: u32) -> TranslationResult {
     }
 
     log::warn!(
-        "[ShaderTranslator] all GLES versions failed for shader stage {}",
-        stage_name
+        "[ShaderTranslator] all GLES versions failed for shader stage {}, total took {:?}",
+        stage_name,
+        total_start.elapsed()
     );
     TranslationResult::Failed
 }

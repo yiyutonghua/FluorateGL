@@ -82,15 +82,17 @@ pub extern "C" fn glShaderSource(
         }
 
         use crate::shader_translator::spirv_pass::TranslationResult;
+        let translate_start = std::time::Instant::now();
         let (upload_source, translated) = match crate::shader_translator::spirv_pass::translate(
             &source, stage,
         ) {
             TranslationResult::Translated(translated) => {
                 log::debug!(
-                    "[ShaderTranslator] shader {} stage 0x{:04X} translated via SPIR-V ({} chars)",
+                    "[ShaderTranslator] shader {} stage 0x{:04X} translated via SPIR-V ({} chars, took {:?})",
                     shader,
                     stage,
-                    translated.len()
+                    translated.len(),
+                    translate_start.elapsed()
                 );
                 (translated, true)
             }
@@ -105,9 +107,10 @@ pub extern "C" fn glShaderSource(
             }
             TranslationResult::Failed => {
                 log::warn!(
-                    "[ShaderTranslator] SPIR-V pipeline failed for shader {}; passing original source ({} chars)",
+                    "[ShaderTranslator] SPIR-V pipeline failed for shader {}; passing original source ({} chars, took {:?})",
                     shader,
-                    source.len()
+                    source.len(),
+                    translate_start.elapsed()
                 );
                 // ✅ 修复：使用 clone，避免 source 被 move
                 (source.clone(), false)
