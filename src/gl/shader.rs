@@ -25,6 +25,7 @@ pub extern "C" fn glDeleteShader(shader: u32) {
             s.shader_types.remove(&shader);
             s.shader_sources.remove(&shader);
             s.shader_original_sources.remove(&shader);
+            s.shader_translated_sources.remove(&shader);
         });
         if let Some(gles_id) = state::with_state(|s| s.shaders.delete(shader)) {
             (dispatch.delete_shader)(gles_id);
@@ -120,8 +121,11 @@ pub extern "C" fn glShaderSource(
         state::with_state(|s| {
             if translated {
                 s.shader_sources.insert(shader, upload_source.clone());
+                s.shader_translated_sources
+                    .insert(shader, upload_source.clone());
             } else {
                 s.shader_sources.remove(&shader);
+                s.shader_translated_sources.remove(&shader);
             }
             // ✅ 修复：将真正的原始源码 source 移入 original_sources
             s.shader_original_sources.insert(shader, source);
@@ -237,10 +241,37 @@ pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
         // fail-fast: 真实返回 compile 状态，不欺骗为 GL_TRUE。
         // 保留 error 级诊断日志，让失败有迹可循，便于定位 SPIR-V 翻译根因。
         if pname == GL_COMPILE_STATUS && *params == 0 {
+            // 主动获取 GLES 编译错误信息，便于诊断翻译后源码的编译问题
+            let mut info_buf = [0i8; 4096];
+            let mut info_len: i32 = 0;
+            (dispatch.get_shader_info_log)(
+                gles_id,
+                info_buf.len() as i32,
+                &mut info_len,
+                info_buf.as_mut_ptr(),
+            );
+            let info_str = if info_len > 0 {
+                let bytes: Vec<u8> = info_buf[..info_len as usize]
+                    .iter()
+                    .map(|&b| b as u8)
+                    .collect();
+                String::from_utf8_lossy(&bytes).to_string()
+            } else {
+                "(empty)".to_string()
+            };
+            // 输出翻译后源码前 500 字符，便于定位编译错误位置
+            let translated_preview: String = state::with_state(|s| {
+                s.shader_translated_sources
+                    .get(&shader)
+                    .map(|src| src.chars().take(500).collect::<String>())
+                    .unwrap_or_default()
+            });
             log::error!(
-                "[FluorateGL] Shader {} (GLES {}) compile failed (fail-fast, returning GL_FALSE)",
+                "[FluorateGL] Shader {} (GLES {}) compile failed (fail-fast, returning GL_FALSE)\n  GLES info log: {}\n  Translated source (first 500 chars):\n{}",
                 shader,
-                gles_id
+                gles_id,
+                info_str,
+                translated_preview
             );
         }
     });
