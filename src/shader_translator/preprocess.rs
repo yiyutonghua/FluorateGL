@@ -17,17 +17,11 @@ use regex::Regex;
 
 /// GLSL 预处理主入口
 ///
-/// 执行顺序：
-/// 1. 移除 #line 指令
-/// 2. 规范化 GLSL 版本（无版本插入 450，< 140 升级到 140，移除 compatibility profile）
-/// 3. 为缺少 location 的 in/out 变量自动添加 layout(location=X)（in/out 独立计数）
-/// 4. 为缺少 binding 的 UBO/SSBO 自动添加 layout(binding=X)
+/// 本分支（glslang-targetvk）简化预处理：仅移除 #line 指令。
+/// GLSL 源码直接交给 glslang 编译，location/binding 由 ShaderOptions
+/// 的 AUTO_MAP_LOCATIONS / AUTO_MAP_BINDINGS 自动分配。
 pub fn preprocess(source: &str) -> String {
-    let mut result = remove_line_directives(source);
-    force_glsl_version(&mut result);
-    inject_missing_locations(&mut result);
-    inject_missing_bindings(&mut result);
-    result
+    remove_line_directives(source)
 }
 
 /// 提取 GLSL 源码中的 #version 行
@@ -432,18 +426,20 @@ mod tests {
 
     #[test]
     fn test_preprocess_full_pipeline() {
+        // 简化后 preprocess 仅移除 #line，不做 location/binding 注入或版本升级
         let input = "#version 330\nlayout(std140) uniform MyBlock {\n    mat4 data;\n};\nin vec4 color;\nout vec4 fragColor;\nuniform mat4 MVP;\nvoid main() {\n    fragColor = color;\n}\n";
         let result = preprocess(input);
-        // Vulkan target 接受 330，版本保持（仅规范化为 core）
-        assert!(result.contains("#version 330 core"));
-        // UBO 应有 binding
-        assert!(result.contains("layout(std140, binding=0) uniform MyBlock"));
-        // in/out 应有 location，且 in/out 独立计数（都从 0 开始）
-        assert!(result.contains("layout(location=0) in vec4 color;"));
-        assert!(result.contains("layout(location=0) out vec4 fragColor;"));
+        // 版本保持原样（不再规范化为 core）
+        assert!(result.contains("#version 330"));
+        // 不再注入 location/binding
+        assert!(!result.contains("layout(location=0) in vec4 color;"));
+        assert!(!result.contains("binding=0"));
+        // 源码结构保留
+        assert!(result.contains("uniform MyBlock"));
+        assert!(result.contains("in vec4 color;"));
     }
 
-    /// Vulkan target 下 #version 150 保持不变（glslang 接受 >= 140）
+    /// preprocess 仅移除 #line，#version 150 原样保留
     #[test]
     fn test_preprocess_keeps_version_150() {
         let input = "#version 150\n\
@@ -454,14 +450,13 @@ mod tests {
                 gl_Position = ModelViewMat * vec4(Position, 1.0);\n\
             }\n";
         let result = preprocess(input);
-        // 版本保持 150（Vulkan 接受），仅规范化为 core
+        // 版本原样保留（不再规范化为 core）
         assert!(
-            result.contains("#version 150 core"),
-            "expected #version 150 core, got: {}",
+            result.contains("#version 150"),
+            "expected #version 150 unchanged, got: {}",
             result
         );
-        // in/out 应有 location
-        assert!(result.contains("layout(location=0) in vec3 Position;"));
-        assert!(result.contains("layout(location=0) out vec4 vertexColor;"));
+        // 不再注入 location
+        assert!(!result.contains("layout(location="));
     }
 }
