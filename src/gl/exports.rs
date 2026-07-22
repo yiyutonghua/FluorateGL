@@ -270,14 +270,13 @@ fn get_fake_extensions_string() -> *const c_char {
 pub extern "C" fn glGetString(name: u32) -> *const c_char {
     let result = if name == 0x1F02 {
         // GL_VERSION
-        // MC 1.21.9+ 运行时要求 OpenGL 3.3+，1.21.11 最低配置要求 OpenGL 4.4。
-        // 报告 4.6.0 以满足 MC 的 GL 版本检查，避免 leash 等 pipeline 加载失败。
-        // GLSL ES 3.2（翻译目标）功能集 ≈ 桌面 GL 4.5，报告 4.6 合理。
-        static VERSION: &[u8] = b"4.6.0 FluorateGL\0";
+        // 报告 3.2.0：MC 所有版本（含最新 1.21.x）完全支持 OpenGL 3.2.0。
+        // GLSL ES 3.2（翻译目标）功能集覆盖 3.2 需求，报告 3.2 避免触发高版本特性检查。
+        static VERSION: &[u8] = b"3.2.0 FluorateGL\0";
         VERSION.as_ptr() as *const c_char
     } else if name == 0x8B8C {
         // GL_SHADING_LANGUAGE_VERSION
-        static GLSL: &[u8] = b"4.60\0";
+        static GLSL: &[u8] = b"1.50\0";
         GLSL.as_ptr() as *const c_char
     } else if name == 0x1F03 {
         // GL_EXTENSIONS
@@ -435,12 +434,12 @@ pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
             unsafe { *data = FAKE_EXTENSIONS.len() as i32 };
         }
         0x821B => {
-            // GL_MAJOR_VERSION（MC 1.21.9+ 要求 3.3+，报告 4.6 满足要求）
-            unsafe { *data = 4 };
+            // GL_MAJOR_VERSION（报告 3，与 GL_VERSION "3.2.0" 一致）
+            unsafe { *data = 3 };
         }
         0x821C => {
             // GL_MINOR_VERSION
-            unsafe { *data = 6 };
+            unsafe { *data = 2 };
         }
         0x9126 => {
             // GL_CONTEXT_PROFILE_MASK

@@ -60,8 +60,10 @@ fn translate_legacy_150_vertex_upgrades_and_translates() {
 fn translate_invalid_source_does_not_panic() {
     let src = "#version 330 core\nthis is not valid glsl\n";
     let result = translate(src, GL_VERTEX_SHADER);
+    // translate() 永不返回 Failed：无效 GLSL 会回退到 string_pass 字符串级翻译，
+    // 返回 Translated（即使输出可能无法被 GLES 编译，也优于透传桌面 GLSL 导致崩溃）。
     assert!(
-        matches!(result, TranslationResult::Failed),
+        matches!(result, TranslationResult::Translated(_) | TranslationResult::PassThrough),
         "got {:?}",
         result
     );

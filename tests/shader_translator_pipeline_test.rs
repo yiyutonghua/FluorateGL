@@ -272,37 +272,44 @@ fn translate_output_preserves_texture_call() {
     }
 }
 
-// ============ 非法输入优雅失败 ============
+// ============ 非法输入优雅失败（回退到 string_pass） ============
 
 #[test]
-fn translate_invalid_glsl_returns_failed() {
+fn translate_invalid_glsl_falls_back_to_string_pass() {
     let src = "#version 330 core\nthis is not valid glsl\n";
     let result = translate(src, GL_VERTEX_SHADER);
+    // translate() 永不返回 Failed：无效 GLSL 回退到 string_pass
     assert!(
-        matches!(result, TranslationResult::Failed),
-        "expected Failed for invalid GLSL, got {:?}",
+        matches!(result, TranslationResult::Translated(_) | TranslationResult::PassThrough),
+        "expected Translated/PassThrough for invalid GLSL, got {:?}",
         result
     );
 }
 
 #[test]
-fn translate_syntax_error_returns_failed() {
+fn translate_syntax_error_falls_back_to_string_pass() {
     let src = "#version 330 core\nvoid main() {\n    // 缺少闭括号\n";
     let result = translate(src, GL_FRAGMENT_SHADER);
-    assert!(matches!(result, TranslationResult::Failed));
+    assert!(
+        matches!(result, TranslationResult::Translated(_) | TranslationResult::PassThrough)
+    );
 }
 
 #[test]
-fn translate_empty_source_returns_failed() {
+fn translate_empty_source_falls_back_to_string_pass() {
     let result = translate("", GL_VERTEX_SHADER);
-    assert!(matches!(result, TranslationResult::Failed));
+    assert!(
+        matches!(result, TranslationResult::Translated(_) | TranslationResult::PassThrough)
+    );
 }
 
 #[test]
-fn translate_undefined_function_returns_failed() {
+fn translate_undefined_function_falls_back_to_string_pass() {
     let src = "#version 330 core\nvoid main() {\n    undefinedFunction();\n}\n";
     let result = translate(src, GL_FRAGMENT_SHADER);
-    assert!(matches!(result, TranslationResult::Failed));
+    assert!(
+        matches!(result, TranslationResult::Translated(_) | TranslationResult::PassThrough)
+    );
 }
 
 // ============ legacy 版本拒绝 ============
@@ -334,17 +341,21 @@ fn translate_legacy_150_upgrades_and_translates() {
 // ============ 无效 stage ============
 
 #[test]
-fn translate_invalid_stage_returns_failed() {
+fn translate_invalid_stage_falls_back_to_string_pass() {
     let src = "#version 330 core\nvoid main() {}\n";
     let result = translate(src, 0x0000);
-    assert!(matches!(result, TranslationResult::Failed));
+    assert!(
+        matches!(result, TranslationResult::Translated(_) | TranslationResult::PassThrough)
+    );
 }
 
 #[test]
-fn translate_undefined_stage_returns_failed() {
+fn translate_undefined_stage_falls_back_to_string_pass() {
     let src = "#version 330 core\nvoid main() {}\n";
     let result = translate(src, 0x8B32); // 未定义的 stage 常量
-    assert!(matches!(result, TranslationResult::Failed));
+    assert!(
+        matches!(result, TranslationResult::Translated(_) | TranslationResult::PassThrough)
+    );
 }
 
 // ============ panic 安全 ============

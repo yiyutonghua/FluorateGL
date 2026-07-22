@@ -21,15 +21,29 @@ pub enum TranslationResult {
 /// 翻译入口：将桌面 GLSL 翻译为 GLSL ES
 ///
 /// 使用 catch_unwind 防止 panic 导致宿主进程崩溃。
+///
+/// **不变式**：此函数永不返回 `TranslationResult::Failed`。
+/// 无论 translate_internal 返回 Failed（glslang 失败、空 SPIR-V、magic 校验失败）
+/// 还是 panic（catch_unwind 捕获），都统一回退到 string_pass 字符串级翻译。
+/// 这避免了 shader.rs 的 Failed 分支透传桌面 GLSL 给 GLES 导致崩溃。
 pub fn translate(source: &str, stage: u32) -> TranslationResult {
     match std::panic::catch_unwind(|| translate_internal(source, stage)) {
-        Ok(result) => result,
-        Err(_) => {
-            log::error!(
-                "[ShaderTranslator] SPIR-V translation panicked for stage 0x{:04X}; skipping",
+        Ok(TranslationResult::Translated(s)) => TranslationResult::Translated(s),
+        Ok(TranslationResult::PassThrough) => TranslationResult::PassThrough,
+        Ok(TranslationResult::Failed) | Err(_) => {
+            // 统一兜底：无论 SPIR-V 管线失败还是 panic，都走 string_pass
+            log::warn!(
+                "[ShaderTranslator] SPIR-V pipeline failed/panicked for stage 0x{:04X}, falling back to string_pass",
                 stage
             );
-            TranslationResult::Failed
+            log::logger().flush();
+            let fallback = string_pass::translate(source, stage);
+            log::info!(
+                "[ShaderTranslator] string_pass fallback produced {} chars for stage 0x{:04X}",
+                fallback.len(),
+                stage
+            );
+            TranslationResult::Translated(fallback)
         }
     }
 }
