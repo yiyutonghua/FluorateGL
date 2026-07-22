@@ -63,9 +63,10 @@ fn remove_line_directives(source: &str) -> String {
 ///   桌面 GLSL 100-150 使用旧语法（attribute/varying/gl_FragColor），
 ///   升级到 330 core 后 glslang 可能仍因旧语法拒绝，但部分已用 in/out 的 shader 能通过。
 /// - #version < 330 且 ES 版本 → 保持不变（GLSL ES 语法与桌面不兼容，升级无意义）
-/// - #version 330-440 → 升级到 450（layout(location) for uniform 需要 420+，
-///   layout(binding) 需要 420+，统一升级到 450 避免版本碎片化）
-/// - #version >= 450 → 保持不变
+/// - #version 330-460 且非 ES → 升级到 450 core
+///   （含 compatibility profile：glslang 在 OpenGL SPIR-V 模式拒绝 Compatibility，
+///   统一替换为 450 core 去除 compatibility）
+/// - ES 版本 → 保持不变
 fn force_glsl_version(result: &mut String) {
     let version = extract_version(result);
     match version {
@@ -75,7 +76,9 @@ fn force_glsl_version(result: &mut String) {
         Some(v) => {
             if let Some(ver) = parse_version_number(v) {
                 let is_es = v.to_lowercase().contains("es");
-                if ver >= 330 && ver < 450 {
+                if ver >= 330 && ver <= 460 && !is_es {
+                    // 330-460 桌面版本统一升级到 450 core
+                    // 含 compatibility profile 的也会被替换为 core（glslang 拒绝 Compatibility）
                     let re = Regex::new(r"(?m)^#version\s+\d+.*$").unwrap();
                     *result = re.replace(result, "#version 450 core").to_string();
                 } else if ver < 330 && !is_es {
@@ -84,8 +87,7 @@ fn force_glsl_version(result: &mut String) {
                     let re = Regex::new(r"(?m)^#version\s+\d+.*$").unwrap();
                     *result = re.replace(result, "#version 330 core").to_string();
                 }
-                // ES 版本 < 330: 保持不变
-                // ver >= 450: 保持不变
+                // ES 版本: 保持不变
             }
         }
     }
@@ -104,15 +106,20 @@ fn parse_version_number(version_line: &str) -> Option<u32> {
 /// OpenGL SPIR-V 模式下，glslang parse 阶段要求所有 in/out 变量必须有 location
 /// （AUTO_MAP_LOCATIONS 在 parse 之后才生效，来不及自动分配）。
 ///
-/// 关键：in 和 out 使用独立的 counter，分别从 0 开始。
-/// in 和 out 是不同的接口空间（SPIR-V Input/Output StorageClass），
-/// 同一个 shader 内 in(location=0) 和 out(location=0) 不冲突。
-/// 这样 VS out 和 FS in 的同名 varying 都从 0 开始分配，保证跨 stage 一致。
-///
-/// 之前用单一 counter 导致 VS in(已有 location=0) 和 VS out(注入 location=0) 被视为
-/// 冲突，spirv-cross 重新分配 VS out 到高 location，破坏跨 stage 链接。
+/// 关键修复：
+/// 1. in 和 out 使用独立的 counter，分别从 0 开始（不同接口空间，不冲突）
+/// 2. 正则匹配插值修饰符（flat/smooth/noperspective/centroid/patch/invariant），
+///    避免漏注入 `flat in vec3 normal;` 等常见声明
+/// 3. 已有 layout(location=N) 的声明会推进 counter 到 N+1（而非跳过不推进），
+///    避免后续注入的 location 与已有值冲突
+/// 4. 数组声明 `in vec4 arr[N];` 按 N 推进 counter（占 N 个 location）
 fn inject_missing_locations(result: &mut String) {
-    let re = Regex::new(r"(?m)^(?P<indent>\s*)(?P<qualifier>in|out)\s+(?P<rest>.+?;\s*)$").unwrap();
+    // 匹配带可选前导 layout 和插值修饰符的 in/out 声明
+    // 情况1: [layout(...)] [修饰符] in/out type name[;];
+    // 情况2: [修饰符] in/out type name;
+    let re = Regex::new(
+        r"(?m)^(?P<indent>\s*)(?:layout\s*\(\s*(?P<layout_qual>[^)]*)\s*\)\s*)?(?P<prefix>(?:(?:flat|smooth|noperspective|centroid|patch|precise|invariant)\s+)*)(?P<qualifier>in|out)\s+(?P<rest>.+?;\s*)$"
+    ).unwrap();
 
     // in 和 out 独立计数，分别从 0 开始（不同接口空间，不冲突）
     let mut in_counter: u32 = 0;
@@ -122,15 +129,10 @@ fn inject_missing_locations(result: &mut String) {
     for line in result.lines() {
         if let Some(caps) = re.captures(line) {
             let indent = caps.name("indent").map(|m| m.as_str()).unwrap_or("");
+            let layout_qual = caps.name("layout_qual").map(|m| m.as_str()).unwrap_or("");
+            let prefix = caps.name("prefix").map(|m| m.as_str()).unwrap_or("");
             let qualifier = caps.name("qualifier").map(|m| m.as_str()).unwrap_or("");
             let rest = caps.name("rest").map(|m| m.as_str()).unwrap_or("");
-
-            // 跳过已有 layout(location=...) 的声明
-            if rest.contains("layout(") && rest.contains("location") {
-                modified.push_str(line);
-                modified.push('\n');
-                continue;
-            }
 
             // 跳过 block 声明（含 { 的单行）
             if rest.contains('{') {
@@ -145,13 +147,28 @@ fn inject_missing_locations(result: &mut String) {
             } else {
                 &mut out_counter
             };
+
+            // 检查是否已有 location
+            if layout_qual.contains("location") {
+                // 已有 location：解析值并推进 counter 到 max(counter, location + array_size)
+                if let Some(loc) = parse_layout_location(layout_qual) {
+                    let array_size = parse_array_size(rest);
+                    *counter = (*counter).max(loc + array_size);
+                }
+                modified.push_str(line);
+                modified.push('\n');
+                continue;
+            }
+
+            // 注入 layout(location=N)，保留前导修饰符
             let new_line = format!(
-                "{}layout(location={}) {} {}",
-                indent, counter, qualifier, rest
+                "{}layout(location={}) {}{} {}",
+                indent, counter, prefix, qualifier, rest
             );
             modified.push_str(&new_line);
             modified.push('\n');
-            *counter += 1;
+            // 数组声明占多个 location
+            *counter += parse_array_size(rest);
         } else {
             modified.push_str(line);
             modified.push('\n');
@@ -164,6 +181,28 @@ fn inject_missing_locations(result: &mut String) {
     }
 
     *result = modified;
+}
+
+/// 从 layout 限定符字符串中解析 location 值
+/// 输入如 "std140, location=3" 或 "location = 5" → 返回 3 或 5
+fn parse_layout_location(layout_qual: &str) -> Option<u32> {
+    let re = Regex::new(r"location\s*=\s*(\d+)").unwrap();
+    re.captures(layout_qual)
+        .and_then(|c| c[1].parse::<u32>().ok())
+}
+
+/// 解析变量声明中的数组大小（用于计算 location 占用数）
+/// 输入如 "vec4 colors[4];" → 返回 4，"vec4 color;" → 返回 1
+fn parse_array_size(rest: &str) -> u32 {
+    if let Some(bracket_start) = rest.find('[') {
+        if let Some(bracket_end) = rest[bracket_start..].find(']') {
+            let size_str = &rest[bracket_start + 1..bracket_start + bracket_end];
+            if let Ok(size) = size_str.trim().parse::<u32>() {
+                return size.max(1);
+            }
+        }
+    }
+    1
 }
 
 /// 为缺少 location 的 non-opaque uniform 变量自动添加 layout(location=X)
@@ -184,7 +223,20 @@ fn inject_missing_uniform_locations(result: &mut String) {
         Regex::new(r"(?m)^(?P<indent>\s*)uniform\s+(?P<type>\w+)\s+(?P<rest>.+?;\s*)$").unwrap();
 
     // opaque 类型前缀：这些类型由 AUTO_MAP_BINDINGS 处理，不需要 layout(location)
-    const OPAQUE_PREFIXES: &[&str] = &["sampler", "texture", "image", "atomic_uint", "subpass"];
+    // 包含整数/无符号变体：isampler/usampler/itexture/utexture/iimage/uimage
+    const OPAQUE_PREFIXES: &[&str] = &[
+        "sampler",
+        "isampler",
+        "usampler",
+        "texture",
+        "itexture",
+        "utexture",
+        "image",
+        "iimage",
+        "uimage",
+        "atomic_uint",
+        "subpass",
+    ];
 
     let mut location_counter: u32 = 0;
     let mut modified = String::with_capacity(result.len());
@@ -223,7 +275,8 @@ fn inject_missing_uniform_locations(result: &mut String) {
             );
             modified.push_str(&new_line);
             modified.push('\n');
-            location_counter += 1;
+            // 数组声明占多个 location
+            location_counter += parse_array_size(rest);
         } else {
             modified.push_str(line);
             modified.push('\n');
@@ -332,18 +385,26 @@ fn inject_missing_bindings(result: &mut String) -> bool {
 ///
 /// `layout(binding=X)` 需要 GLSL 420+，否则 glslang 会报：
 /// "binding : not supported for this version or the enabled extensions"
+///
+/// 注意：ES 版本（300 es/310 es/320 es）已支持 layout(binding)，无需升级。
+/// 之前不检查 is_es，导致 `#version 320 es` 被错误替换为 `#version 420`（桌面），
+/// 破坏 ES 语法。
 fn ensure_binding_version(result: &mut String) {
-    let need_upgrade = extract_version(result)
-        .and_then(parse_version_number)
-        .map(|v| v < 420)
-        .unwrap_or(true);
+    let need_upgrade = extract_version(result).and_then(|v| {
+        let is_es = v.to_lowercase().contains("es");
+        if is_es {
+            // ES 310+ 已支持 layout(binding)，无需升级
+            return None;
+        }
+        parse_version_number(v).map(|ver| ver < 420)
+    });
 
-    if !need_upgrade {
+    if !need_upgrade.unwrap_or(false) {
         return;
     }
 
     let re = Regex::new(r"(?m)^#version\s+\d+.*$").unwrap();
-    *result = re.replace(result, "#version 420").to_string();
+    *result = re.replace(result, "#version 420 core").to_string();
 }
 
 #[cfg(test)]

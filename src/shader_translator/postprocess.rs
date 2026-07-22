@@ -2,7 +2,7 @@
 //!
 //! 对齐 MobileGlues 的后处理逻辑：
 //! - stripVaryingLocations：移除 in/out varying 的 layout(location=N)
-//! - removeLayoutBinding：移除所有 layout(binding=X)
+//! - removeLayoutBinding：移除非 image 的 layout(binding=X)
 //! - processOutColorLocations：为 outColorN 添加 layout(location=N)
 //! - forceSupporterOutput：确保 precision highp float/int 声明
 
@@ -12,7 +12,7 @@ use regex::Regex;
 ///
 /// 执行顺序：
 /// 0. 移除 in/out varying 的 layout(location=N)（解决跨 stage mismatch）
-/// 1. 移除所有 layout(binding=X)
+/// 1. 移除非 image 的 layout(binding=X)（image 的 binding 不能移除）
 /// 2. 修复 atomic counter binding（offset → binding，GLES 要求 binding）
 /// 3. 注入 image format 限定符（GLES 要求 image 必须有 format 和 binding）
 /// 4. 处理 outColorN 的 location
@@ -31,30 +31,38 @@ pub fn post_process(src: &str) -> String {
     //    outColorN 的 location 由后续 processOutColorLocations 重新添加。
     result = strip_varying_locations(&result);
 
-    // 1. 移除所有 layout(binding = X)（对齐 MobileGlues removeLayoutBinding）
-    //    MobileGlues 不分类型，全部移除。需要处理以下形式：
-    //    - layout(binding = X)                            → 移除整个 layout(...)
-    //    - layout(binding = X, std140)                    → layout(std140)
-    //    - layout(std140, binding = X)                    → layout(std140)
-    //    - layout(std140, binding = X, column_major)      → layout(std140, column_major)
-    //    - layout(push_constant, binding = X)             → layout(push_constant)
-    //    策略：先处理 binding=X 在中间/末尾的情况，再处理 binding=X 是唯一项的情况
+    // 1. 移除非 image 的 layout(binding=X)（对齐 MobileGlues removeLayoutBinding）
+    //    注意：image 的 binding 不能移除！image 必须通过 layout(binding=N) 与
+    //    glBindImageTexture(unit,...) 的 unit 对应。移除后 image 无法正确绑定。
+    //    MC 的 sampler/UBO binding 可以移除（MC 通过 glUniform1i/glBindBufferBase 设置）。
+    //    策略：按行处理，跳过 image 声明行，对其余行移除 binding。
+    let re_is_image = Regex::new(r"(?i)\bimage\w*\s+\w+\s*;").unwrap();
     let re_binding = Regex::new(r"(?i)layout\s*\(\s*binding\s*=\s*\d+\s*\)\s*").unwrap();
     let re_binding_leading = Regex::new(r"(?i)layout\s*\(\s*binding\s*=\s*\d+\s*,\s*").unwrap();
     let re_binding_middle = Regex::new(r"(?i),\s*binding\s*=\s*\d+").unwrap();
-
-    // 先处理 binding 在中间的情况: layout(..., binding=X, ...) → layout(..., ...)
-    result = re_binding_middle.replace_all(&result, "").to_string();
-    // 再处理 binding 在开头的情况: layout(binding=X, ...) → layout(...)
-    result = re_binding_leading
-        .replace_all(&result, "layout(")
-        .to_string();
-    // 最后处理 binding 是唯一项的情况: layout(binding=X) → 移除
-    result = re_binding.replace_all(&result, "").to_string();
-
-    // 清理可能残留的空 layout 括号
     let re_empty_layout = Regex::new(r"(?i)layout\s*\(\s*\)\s*").unwrap();
-    result = re_empty_layout.replace_all(&result, "").to_string();
+
+    result = result
+        .lines()
+        .map(|line| {
+            // 跳过 image 声明行（保留 image 的 binding）
+            if re_is_image.is_match(line) {
+                return line.to_string();
+            }
+            // 非 image 行：移除 binding
+            let l = re_binding_middle.replace_all(line, "");
+            let l = re_binding_leading.replace_all(&l, "layout(");
+            let l = re_binding.replace_all(&l, "");
+            let l = re_empty_layout.replace_all(&l, "");
+            l.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // 如果原文件以换行结尾，保留它
+    if src.ends_with('\n') && !result.ends_with('\n') {
+        result.push('\n');
+    }
 
     // 2. 修复 atomic counter binding
     //    spirv-cross 输出 `layout(offset = N) uniform atomic_uint`，
@@ -63,17 +71,25 @@ pub fn post_process(src: &str) -> String {
     result = fix_atomic_counter_binding(&result);
 
     // 3. 注入 image format 限定符
-    //    spirv-cross 翻译 image 时可能丢失 format 限定符，
     //    GLES 要求 image uniform 必须同时有 binding 和 format。
+    //    - 无 layout 前缀的 image：注入 binding + format
+    //    - 有 layout(binding=N) 但无 format 的 image：补充 format
     //    writeonly image 默认 r32f，可读写 image 默认 r32ui。
     result = inject_image_format(&result);
 
     // 4. 处理 outColorN 的 location（对齐 MobileGlues processOutColorLocations）
-    let re_out_color =
-        Regex::new(r"(?m)^(out\s+(?:highp\s+|mediump\s+|lowp\s+)?\w+\s+outColor)(\d+)\s*;")
-            .unwrap();
+    //    正则容忍前导插值修饰符（flat/smooth/noperspective 等）
+    let re_out_color = Regex::new(
+        r"(?m)^(?P<prefix>(?:(?:flat|smooth|noperspective|centroid|invariant)\s+)*)out\s+(?P<type>(?:highp\s+|mediump\s+|lowp\s+)?\w+)\s+outColor(?P<num>\d+)\s*;",
+    )
+    .unwrap();
     result = re_out_color
-        .replace_all(&result, "layout(location=$2) $1$2;")
+        .replace_all(&result, |caps: &regex::Captures| {
+            let prefix = caps.name("prefix").map(|m| m.as_str()).unwrap_or("");
+            let typ = caps.name("type").map(|m| m.as_str()).unwrap_or("");
+            let num = caps.name("num").map(|m| m.as_str()).unwrap_or("0");
+            format!("layout(location={}) {}out {} outColor{};", num, prefix, typ, num)
+        })
         .to_string();
 
     // 5. 确保 precision 声明（对齐 MobileGlues forceSupporterOutput）
@@ -84,31 +100,45 @@ pub fn post_process(src: &str) -> String {
 
 /// 移除 in/out varying 声明前的 layout(location=N)
 ///
-/// spirv-cross 输出的格式通常为 `layout(location = N) in/out <type> <name>;`，
-/// location 是唯一限定符。处理三种情况：
-/// - `layout(location = N) in/out` → `in/out`（location 唯一限定符）
-/// - `layout(location = N, X) in/out` → `layout(X) in/out`（location 在开头）
-/// - `layout(X, location = N) in/out` → `layout(X) in/out`（location 在末尾）
+/// spirv-cross 输出的格式可能为：
+/// - `layout(location = N) in/out <type> <name>;`
+/// - `layout(location = N) flat out <type> <name>;`（带插值修饰符）
+/// - `layout(location = N, X) in/out <type> <name>;`
+/// - `layout(X, location = N) in/out <type> <name>;`
 ///
-/// 不影响 uniform 的 layout(location)（正则要求 in/out 跟在 layout 后）。
+/// 关键修复：正则在 `)` 和 `in/out` 之间允许插值修饰符
+/// （flat/smooth/noperspective/centroid/patch/invariant），
+/// 否则 `flat out` 等声明的 location 不会被移除，导致跨 stage mismatch。
 fn strip_varying_locations(src: &str) -> String {
-    // 情况1: layout(location = N) in/out → in/out（location 唯一限定符）
-    let re_loc_only =
-        Regex::new(r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*\)\s+(in|out)\b").unwrap();
-    let result = re_loc_only.replace_all(src, "$1").to_string();
+    // 插值修饰符前缀（可重复，如 invariant flat out）
+    let interp = r"(?:(?:flat|smooth|noperspective|centroid|patch|invariant)\s+)*";
 
-    // 情况2: layout(location = N, X) in/out → layout(X) in/out
-    let re_loc_leading =
-        Regex::new(r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*,\s*([^)]*)\)\s+(in|out)\b").unwrap();
+    // 情况1: layout(location = N) [修饰符] in/out → [修饰符] in/out
+    let re_loc_only = Regex::new(&format!(
+        r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*\)\s*({})(in|out)\b",
+        interp
+    ))
+    .unwrap();
+    let result = re_loc_only.replace_all(src, "$1$2").to_string();
+
+    // 情况2: layout(location = N, X) [修饰符] in/out → layout(X) [修饰符] in/out
+    let re_loc_leading = Regex::new(&format!(
+        r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*,\s*([^)]*)\)\s*({})(in|out)\b",
+        interp
+    ))
+    .unwrap();
     let result = re_loc_leading
-        .replace_all(&result, "layout($1) $2")
+        .replace_all(&result, "layout($1) $2$3")
         .to_string();
 
-    // 情况3: layout(X, location = N) in/out → layout(X) in/out
-    let re_loc_trailing =
-        Regex::new(r"(?i)layout\s*\(\s*([^)]*?),\s*location\s*=\s*\d+\s*\)\s+(in|out)\b").unwrap();
+    // 情况3: layout(X, location = N) [修饰符] in/out → layout(X) [修饰符] in/out
+    let re_loc_trailing = Regex::new(&format!(
+        r"(?i)layout\s*\(\s*([^)]*?),\s*location\s*=\s*\d+\s*\)\s*({})(in|out)\b",
+        interp
+    ))
+    .unwrap();
     re_loc_trailing
-        .replace_all(&result, "layout($1) $2")
+        .replace_all(&result, "layout($1) $2$3")
         .to_string()
 }
 
@@ -144,30 +174,27 @@ fn fix_atomic_counter_binding(src: &str) -> String {
 /// 为缺少 format/binding 的 image uniform 注入 layout 限定符
 ///
 /// GLES 要求 image uniform 必须同时有 binding 和 format 限定符。
-/// spirv-cross 翻译后可能丢失 format，步骤1 的 binding 移除也去掉了 binding。
+/// 修复：
+/// - 无 layout 前缀的 image：注入 binding（从 0 递增）+ format
+/// - 有 layout(binding=N) 但无 format 的 image：补充 format（保留原 binding）
+/// - 有 layout(format) 但无 binding 的 image：补充 binding（保留原 format）
 ///
-/// 处理逻辑：
-/// - 匹配无 `layout(` 前缀的 `uniform [writeonly|readonly] [precision] image* name;`
-/// - writeonly image 默认 r32f（只写，format 影响小）
-/// - 非 writeonly image 默认 r32ui（可读写，uint 格式最通用）
-/// - binding 从 0 递增分配
+/// writeonly image 默认 r32f，可读写 image 默认 r32ui。
 fn inject_image_format(src: &str) -> String {
-    // 匹配行首（可选缩进）后直接是 uniform ... image... 的声明（无 layout 前缀）
-    // 不匹配已有 layout( 的行（那些已有 format 或 binding）
-    let re_image = Regex::new(
+    // 情况1：无 layout 前缀的裸 image 声明 → 注入 binding + format
+    let re_bare_image = Regex::new(
         r"(?m)^(?P<indent>\s*)uniform\s+(?P<quals>(?:writeonly\s+|readonly\s+)?(?:highp\s+|mediump\s+|lowp\s+)?)(?P<type>image\w+)\s+(?P<name>\w+)\s*;",
     )
     .unwrap();
 
     let mut binding: u32 = 0;
-    re_image
+    let result = re_bare_image
         .replace_all(src, |caps: &regex::Captures| {
             let indent = caps.name("indent").map(|m| m.as_str()).unwrap_or("");
             let quals = caps.name("quals").map(|m| m.as_str()).unwrap_or("");
             let img_type = caps.name("type").map(|m| m.as_str()).unwrap_or("");
             let name = caps.name("name").map(|m| m.as_str()).unwrap_or("");
 
-            // writeonly image 用 r32f，可读写 image 用 r32ui
             let format = if quals.contains("writeonly") {
                 "r32f"
             } else {
@@ -175,7 +202,55 @@ fn inject_image_format(src: &str) -> String {
             };
             let b = binding;
             binding += 1;
-            // 注意：替换后必须保留 uniform 限定符（GLES 要求 image 必须是 uniform）
+            format!(
+                "{}layout(binding = {}, {}) uniform {}{} {};",
+                indent, b, format, quals, img_type, name
+            )
+        })
+        .to_string();
+
+    // 情况2：有 layout(binding=N) 但无 format 的 image → 补充 format
+    let re_bound_no_format = Regex::new(
+        r"(?m)^(?P<indent>\s*)layout\s*\(\s*binding\s*=\s*(?P<binding>\d+)\s*\)\s*(?P<quals>(?:writeonly\s+|readonly\s+)?(?:highp\s+|mediump\s+|lowp\s+)?)(?P<type>image\w+)\s+(?P<name>\w+)\s*;",
+    )
+    .unwrap();
+
+    let result = re_bound_no_format
+        .replace_all(&result, |caps: &regex::Captures| {
+            let indent = caps.name("indent").map(|m| m.as_str()).unwrap_or("");
+            let b = caps.name("binding").map(|m| m.as_str()).unwrap_or("0");
+            let quals = caps.name("quals").map(|m| m.as_str()).unwrap_or("");
+            let img_type = caps.name("type").map(|m| m.as_str()).unwrap_or("");
+            let name = caps.name("name").map(|m| m.as_str()).unwrap_or("");
+
+            let format = if quals.contains("writeonly") {
+                "r32f"
+            } else {
+                "r32ui"
+            };
+            format!(
+                "{}layout(binding = {}, {}) uniform {}{} {};",
+                indent, b, format, quals, img_type, name
+            )
+        })
+        .to_string();
+
+    // 情况3：有 layout(format) 但无 binding 的 image → 补充 binding
+    let re_format_no_binding = Regex::new(
+        r"(?m)^(?P<indent>\s*)layout\s*\(\s*(?P<format>\w+)\s*\)\s*(?P<quals>(?:writeonly\s+|readonly\s+)?(?:highp\s+|mediump\s+|lowp\s+)?)(?P<type>image\w+)\s+(?P<name>\w+)\s*;",
+    )
+    .unwrap();
+
+    re_format_no_binding
+        .replace_all(&result, |caps: &regex::Captures| {
+            let indent = caps.name("indent").map(|m| m.as_str()).unwrap_or("");
+            let format = caps.name("format").map(|m| m.as_str()).unwrap_or("r32ui");
+            let quals = caps.name("quals").map(|m| m.as_str()).unwrap_or("");
+            let img_type = caps.name("type").map(|m| m.as_str()).unwrap_or("");
+            let name = caps.name("name").map(|m| m.as_str()).unwrap_or("");
+
+            let b = binding;
+            binding += 1;
             format!(
                 "{}layout(binding = {}, {}) uniform {}{} {};",
                 indent, b, format, quals, img_type, name
@@ -189,7 +264,7 @@ fn inject_image_format(src: &str) -> String {
 fn ensure_precision(source: &str) -> String {
     let mut result = source.to_string();
 
-    // 移除所有已有的 precision 声明（注释中的不受影响，因为 #version 之后不会有注释行）
+    // 移除所有已有的 precision 声明
     let re_precision = Regex::new(r"(?m)^\s*precision\s+\w+\s+(?:float|int)\s*;.*$(\n)?").unwrap();
     result = re_precision.replace_all(&result, "").to_string();
 
@@ -230,6 +305,21 @@ mod tests {
     }
 
     #[test]
+    fn test_strip_varying_location_flat_out() {
+        // 带插值修饰符的 out 声明（MC 光照/法线传递常用）
+        let input = "layout(location = 2) flat out highp vec3 vNormal;";
+        let result = strip_varying_locations(input);
+        assert_eq!(result, "flat out highp vec3 vNormal;");
+    }
+
+    #[test]
+    fn test_strip_varying_location_smooth_in() {
+        let input = "layout(location = 0) smooth in vec4 color;";
+        let result = strip_varying_locations(input);
+        assert_eq!(result, "smooth in vec4 color;");
+    }
+
+    #[test]
     fn test_strip_varying_location_preserves_uniform() {
         // uniform 的 layout(location) 不应被移除
         let input = "layout(location = 0) uniform mat4 MVP;";
@@ -240,10 +330,10 @@ mod tests {
     #[test]
     fn test_strip_varying_location_multiple() {
         let input =
-            "layout(location = 0) in vec3 Position;\nlayout(location = 1) out vec4 vertexColor;\n";
+            "layout(location = 0) in vec3 Position;\nlayout(location = 1) flat out vec4 vertexColor;\n";
         let result = strip_varying_locations(input);
         assert!(result.contains("in vec3 Position;"));
-        assert!(result.contains("out vec4 vertexColor;"));
+        assert!(result.contains("flat out vec4 vertexColor;"));
         assert!(!result.contains("layout(location"));
     }
 
@@ -280,11 +370,27 @@ mod tests {
     }
 
     #[test]
+    fn test_image_binding_preserved() {
+        // image 的 binding 不应被移除
+        let input = "layout(binding = 0, rgba32f) uniform writeonly highp image2D img;";
+        let result = post_process(input);
+        assert!(result.contains("binding = 0"), "image binding should be preserved, got: {}", result);
+    }
+
+    #[test]
     fn test_out_color_location() {
         // outColorN 的 location 在 strip 之后由 processOutColorLocations 重新添加
         let input = "out vec4 outColor0;";
         let result = post_process(input);
         assert!(result.contains("layout(location=0) out vec4 outColor0;"));
+    }
+
+    #[test]
+    fn test_out_color_flat_location() {
+        // 带插值修饰符的 outColor（如 flat out ivec4 outColor1）
+        let input = "flat out ivec4 outColor1;";
+        let result = post_process(input);
+        assert!(result.contains("layout(location=1) flat out ivec4 outColor1;"));
     }
 
     #[test]
