@@ -13,8 +13,10 @@ use regex::Regex;
 /// 执行顺序：
 /// 0. 移除 in/out varying 的 layout(location=N)（解决跨 stage mismatch）
 /// 1. 移除所有 layout(binding=X)
-/// 2. 处理 outColorN 的 location
-/// 3. 确保 precision highp float/int 声明
+/// 2. 修复 atomic counter binding（offset → binding，GLES 要求 binding）
+/// 3. 注入 image format 限定符（GLES 要求 image 必须有 format 和 binding）
+/// 4. 处理 outColorN 的 location
+/// 5. 确保 precision highp float/int 声明
 pub fn post_process(src: &str) -> String {
     let mut result = src.to_string();
 
@@ -54,7 +56,19 @@ pub fn post_process(src: &str) -> String {
     let re_empty_layout = Regex::new(r"(?i)layout\s*\(\s*\)\s*").unwrap();
     result = re_empty_layout.replace_all(&result, "").to_string();
 
-    // 2. 处理 outColorN 的 location（对齐 MobileGlues processOutColorLocations）
+    // 2. 修复 atomic counter binding
+    //    spirv-cross 输出 `layout(offset = N) uniform atomic_uint`，
+    //    但 GLES 要求 atomic counter 必须用 `layout(binding = N)` 指定绑定点。
+    //    步骤1 的 binding 移除不影响 offset 限定符，这里单独修复。
+    result = fix_atomic_counter_binding(&result);
+
+    // 3. 注入 image format 限定符
+    //    spirv-cross 翻译 image 时可能丢失 format 限定符，
+    //    GLES 要求 image uniform 必须同时有 binding 和 format。
+    //    writeonly image 默认 r32f，可读写 image 默认 r32ui。
+    result = inject_image_format(&result);
+
+    // 4. 处理 outColorN 的 location（对齐 MobileGlues processOutColorLocations）
     let re_out_color =
         Regex::new(r"(?m)^(out\s+(?:highp\s+|mediump\s+|lowp\s+)?\w+\s+outColor)(\d+)\s*;")
             .unwrap();
@@ -62,7 +76,7 @@ pub fn post_process(src: &str) -> String {
         .replace_all(&result, "layout(location=$2) $1$2;")
         .to_string();
 
-    // 3. 确保 precision 声明（对齐 MobileGlues forceSupporterOutput）
+    // 5. 确保 precision 声明（对齐 MobileGlues forceSupporterOutput）
     result = ensure_precision(&result);
 
     result
@@ -95,6 +109,78 @@ fn strip_varying_locations(src: &str) -> String {
         Regex::new(r"(?i)layout\s*\(\s*([^)]*?),\s*location\s*=\s*\d+\s*\)\s+(in|out)\b").unwrap();
     re_loc_trailing
         .replace_all(&result, "layout($1) $2")
+        .to_string()
+}
+
+/// 修复 atomic counter 的 binding 限定符
+///
+/// spirv-cross 翻译桌面 GLSL 的 atomic_uint 时，输出 `layout(offset = N) uniform atomic_uint`，
+/// 但 GLES 要求 atomic counter 用 `layout(binding = N)` 指定绑定点（offset 无效）。
+///
+/// 处理两种形式：
+/// - `layout(offset = N) uniform atomic_uint` → `layout(binding = N) uniform atomic_uint`
+/// - `layout(offset = N, X) uniform atomic_uint` → `layout(binding = N, X) uniform atomic_uint`
+fn fix_atomic_counter_binding(src: &str) -> String {
+    // offset 是唯一限定符: layout(offset = N) → layout(binding = N)
+    let re_offset_only =
+        Regex::new(r"(?i)layout\s*\(\s*offset\s*=\s*(\d+)\s*\)\s*(uniform\s+atomic_uint)").unwrap();
+    let result = re_offset_only
+        .replace_all(src, "layout(binding = $1) $2")
+        .to_string();
+
+    // offset 在开头: layout(offset = N, X) → layout(binding = N, X)
+    let re_offset_leading = Regex::new(r"(?i)layout\s*\(\s*offset\s*=\s*(\d+)\s*,\s*").unwrap();
+    let result = re_offset_leading
+        .replace_all(&result, "layout(binding = $1, ")
+        .to_string();
+
+    // offset 在中间/末尾: layout(X, offset = N) → layout(X, binding = N)
+    let re_offset_middle = Regex::new(r"(?i),\s*offset\s*=\s*(\d+)").unwrap();
+    re_offset_middle
+        .replace_all(&result, ", binding = $1")
+        .to_string()
+}
+
+/// 为缺少 format/binding 的 image uniform 注入 layout 限定符
+///
+/// GLES 要求 image uniform 必须同时有 binding 和 format 限定符。
+/// spirv-cross 翻译后可能丢失 format，步骤1 的 binding 移除也去掉了 binding。
+///
+/// 处理逻辑：
+/// - 匹配无 `layout(` 前缀的 `uniform [writeonly|readonly] [precision] image* name;`
+/// - writeonly image 默认 r32f（只写，format 影响小）
+/// - 非 writeonly image 默认 r32ui（可读写，uint 格式最通用）
+/// - binding 从 0 递增分配
+fn inject_image_format(src: &str) -> String {
+    // 匹配行首（可选缩进）后直接是 uniform ... image... 的声明（无 layout 前缀）
+    // 不匹配已有 layout( 的行（那些已有 format 或 binding）
+    let re_image = Regex::new(
+        r"(?m)^(?P<indent>\s*)uniform\s+(?P<quals>(?:writeonly\s+|readonly\s+)?(?:highp\s+|mediump\s+|lowp\s+)?)(?P<type>image\w+)\s+(?P<name>\w+)\s*;",
+    )
+    .unwrap();
+
+    let mut binding: u32 = 0;
+    re_image
+        .replace_all(src, |caps: &regex::Captures| {
+            let indent = caps.name("indent").map(|m| m.as_str()).unwrap_or("");
+            let quals = caps.name("quals").map(|m| m.as_str()).unwrap_or("");
+            let img_type = caps.name("type").map(|m| m.as_str()).unwrap_or("");
+            let name = caps.name("name").map(|m| m.as_str()).unwrap_or("");
+
+            // writeonly image 用 r32f，可读写 image 用 r32ui
+            let format = if quals.contains("writeonly") {
+                "r32f"
+            } else {
+                "r32ui"
+            };
+            let b = binding;
+            binding += 1;
+            // 注意：替换后必须保留 uniform 限定符（GLES 要求 image 必须是 uniform）
+            format!(
+                "{}layout(binding = {}, {}) uniform {}{} {};",
+                indent, b, format, quals, img_type, name
+            )
+        })
         .to_string()
 }
 

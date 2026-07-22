@@ -45,13 +45,13 @@ fn translate_fragment_with_sampler_succeeds() {
 }
 
 #[test]
-fn translate_legacy_150_vertex_fails_gracefully() {
-    // shaderc 要求 SPIR-V 输入至少 330，150 应返回 Failed 而非 panic。
+fn translate_legacy_150_vertex_upgrades_and_translates() {
+    // preprocess 将 150 升级到 330 core，简单 shader 应翻译成功
     let src = "#version 150 core\nvoid main() {}\n";
     let result = translate(src, GL_VERTEX_SHADER);
     assert!(
-        matches!(result, TranslationResult::Failed),
-        "expected Failed for legacy #version 150, got {:?}",
+        matches!(result, TranslationResult::Translated(_)),
+        "expected Translated for upgraded #version 150, got {:?}",
         result
     );
 }

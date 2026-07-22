@@ -308,23 +308,25 @@ fn translate_undefined_function_returns_failed() {
 // ============ legacy 版本拒绝 ============
 
 #[test]
-fn translate_legacy_120_returns_failed() {
+fn translate_legacy_120_upgrades_and_translates() {
+    // preprocess 将 120 升级到 330 core，简单 shader 应翻译成功
     let src = "#version 120\nvoid main() {}\n";
     let result = translate(src, GL_VERTEX_SHADER);
     assert!(
-        matches!(result, TranslationResult::Failed),
-        "expected Failed for legacy #version 120, got {:?}",
+        matches!(result, TranslationResult::Translated(_)),
+        "expected Translated for upgraded #version 120, got {:?}",
         result
     );
 }
 
 #[test]
-fn translate_legacy_150_returns_failed() {
+fn translate_legacy_150_upgrades_and_translates() {
+    // preprocess 将 150 升级到 330 core，简单 shader 应翻译成功
     let src = "#version 150 core\nvoid main() {}\n";
     let result = translate(src, GL_VERTEX_SHADER);
     assert!(
-        matches!(result, TranslationResult::Failed),
-        "expected Failed for legacy #version 150, got {:?}",
+        matches!(result, TranslationResult::Translated(_)),
+        "expected Translated for upgraded #version 150, got {:?}",
         result
     );
 }

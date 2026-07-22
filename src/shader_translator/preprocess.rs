@@ -59,7 +59,10 @@ fn remove_line_directives(source: &str) -> String {
 /// 确保 GLSL 版本满足 OpenGL SPIR-V 要求并支持 layout 限定符
 ///
 /// - 无 #version → 插入 #version 450 core
-/// - #version < 330 → 保持不变（glslang 会拒绝，OpenGL SPIR-V 要求 330+）
+/// - #version < 330 且非 ES 版本 → 升级到 330 core
+///   桌面 GLSL 100-150 使用旧语法（attribute/varying/gl_FragColor），
+///   升级到 330 core 后 glslang 可能仍因旧语法拒绝，但部分已用 in/out 的 shader 能通过。
+/// - #version < 330 且 ES 版本 → 保持不变（GLSL ES 语法与桌面不兼容，升级无意义）
 /// - #version 330-440 → 升级到 450（layout(location) for uniform 需要 420+，
 ///   layout(binding) 需要 420+，统一升级到 450 避免版本碎片化）
 /// - #version >= 450 → 保持不变
@@ -71,11 +74,17 @@ fn force_glsl_version(result: &mut String) {
         }
         Some(v) => {
             if let Some(ver) = parse_version_number(v) {
+                let is_es = v.to_lowercase().contains("es");
                 if ver >= 330 && ver < 450 {
                     let re = Regex::new(r"(?m)^#version\s+\d+.*$").unwrap();
                     *result = re.replace(result, "#version 450 core").to_string();
+                } else if ver < 330 && !is_es {
+                    // 桌面 GLSL 旧版本升级到 330 core（OpenGL SPIR-V 最低要求）
+                    // ES 版本保持不变（语法不兼容，升级无意义）
+                    let re = Regex::new(r"(?m)^#version\s+\d+.*$").unwrap();
+                    *result = re.replace(result, "#version 330 core").to_string();
                 }
-                // ver < 330: 保持不变，glslang 会拒绝
+                // ES 版本 < 330: 保持不变
                 // ver >= 450: 保持不变
             }
         }
@@ -357,10 +366,10 @@ mod tests {
 
     #[test]
     fn test_force_glsl_version_keep_low() {
-        // #version < 330 保持不变（glslang 会拒绝）
+        // 桌面 GLSL < 330 升级到 330 core（OpenGL SPIR-V 最低要求）
         let mut result = "#version 120\nvoid main() {}".to_string();
         force_glsl_version(&mut result);
-        assert!(result.starts_with("#version 120"));
+        assert!(result.starts_with("#version 330 core"));
     }
 
     #[test]

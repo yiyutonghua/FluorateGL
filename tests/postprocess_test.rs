@@ -244,3 +244,71 @@ fn postprocess_preserves_layout_std140_on_ubo() {
     assert!(result.contains("layout(std140)"));
     assert!(!result.contains("binding"));
 }
+
+// ============ atomic counter binding 修复 ============
+
+#[test]
+fn postprocess_fixes_atomic_counter_offset_to_binding() {
+    // spirv-cross 输出 layout(offset = N)，GLES 要求 layout(binding = N)
+    let src = "#version 320 es\nlayout(offset = 0) uniform atomic_uint counter;\nvoid main() {}\n";
+    let result = postprocess::post_process(src);
+    assert!(
+        result.contains("layout(binding = 0) uniform atomic_uint"),
+        "expected binding, got: {}",
+        result
+    );
+    assert!(!result.contains("offset"));
+}
+
+#[test]
+fn postprocess_fixes_atomic_counter_offset_with_other_qualifier() {
+    // layout(offset = N, X) → layout(binding = N, X)
+    let src = "#version 320 es\nlayout(offset = 2, std140) uniform atomic_uint counter;\nvoid main() {}\n";
+    let result = postprocess::post_process(src);
+    assert!(result.contains("binding = 2"));
+    assert!(!result.contains("offset"));
+}
+
+// ============ image format 注入 ============
+
+#[test]
+fn postprocess_injects_format_for_writeonly_image() {
+    let src = "#version 320 es\nuniform writeonly highp image2D dest1;\nvoid main() {}\n";
+    let result = postprocess::post_process(src);
+    assert!(
+        result.contains("layout(binding = 0, r32f) uniform writeonly highp image2D dest1;"),
+        "expected layout with uniform and r32f, got: {}",
+        result
+    );
+}
+
+#[test]
+fn postprocess_injects_format_for_readable_image() {
+    // 非 writeonly image 默认 r32ui
+    let src = "#version 320 es\nuniform highp image2D dest1;\nvoid main() {}\n";
+    let result = postprocess::post_process(src);
+    assert!(
+        result.contains("layout(binding = 0, r32ui) uniform highp image2D dest1;"),
+        "expected layout with uniform and r32ui, got: {}",
+        result
+    );
+}
+
+#[test]
+fn postprocess_injects_incremental_binding_for_multiple_images() {
+    let src = "#version 320 es\nuniform writeonly highp image2D a;\nuniform writeonly highp image2D b;\nvoid main() {}\n";
+    let result = postprocess::post_process(src);
+    assert!(result.contains("binding = 0, r32f) uniform writeonly highp image2D a;"));
+    assert!(result.contains("binding = 1, r32f) uniform writeonly highp image2D b;"));
+}
+
+#[test]
+fn postprocess_skips_image_with_existing_layout() {
+    // 已有 layout( 的 image 不应被重复注入
+    let src =
+        "#version 320 es\nlayout(r32f) uniform writeonly highp image2D dest1;\nvoid main() {}\n";
+    let result = postprocess::post_process(src);
+    // 原有 layout(r32f) 保留，不额外注入
+    assert!(result.contains("layout(r32f)"));
+    assert!(!result.contains("binding = 0, r32f) writeonly"));
+}

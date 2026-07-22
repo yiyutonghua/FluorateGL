@@ -100,24 +100,47 @@ fn preprocess_keeps_460_unchanged() {
 }
 
 #[test]
-fn preprocess_keeps_low_version_unchanged() {
-    // #version < 330 保持不变（由 glslang 自然拒绝）
+fn preprocess_upgrades_low_desktop_version_to_330() {
+    // 桌面 GLSL < 330 升级到 330 core（OpenGL SPIR-V 最低要求）
     let src = "#version 120\nvoid main() {}\n";
     let result = preprocess::preprocess(src);
     assert!(
-        result.starts_with("#version 120"),
-        "expected 120 unchanged, got: {}",
+        result.starts_with("#version 330 core"),
+        "expected upgrade to 330 core, got: {}",
         result
     );
 }
 
 #[test]
-fn preprocess_keeps_150_unchanged() {
+fn preprocess_upgrades_150_to_330() {
     let src = "#version 150 core\nvoid main() {}\n";
     let result = preprocess::preprocess(src);
     assert!(
-        result.starts_with("#version 150 core"),
-        "expected 150 unchanged, got: {}",
+        result.starts_with("#version 330 core"),
+        "expected upgrade to 330 core, got: {}",
+        result
+    );
+}
+
+#[test]
+fn preprocess_keeps_es_version_unchanged() {
+    // GLSL ES 版本（含 es 后缀）保持不变，语法与桌面 GLSL 不兼容
+    let src = "#version 300 es\nvoid main() {}\n";
+    let result = preprocess::preprocess(src);
+    assert!(
+        result.starts_with("#version 300 es"),
+        "expected 300 es unchanged, got: {}",
+        result
+    );
+}
+
+#[test]
+fn preprocess_keeps_310_es_unchanged() {
+    let src = "#version 310 es\nvoid main() {}\n";
+    let result = preprocess::preprocess(src);
+    assert!(
+        result.starts_with("#version 310 es"),
+        "expected 310 es unchanged, got: {}",
         result
     );
 }

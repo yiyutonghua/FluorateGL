@@ -273,19 +273,19 @@ fn compile_undefined_function_returns_none() {
 // ============ compile: 版本兼容性 ============
 
 #[test]
-fn compile_legacy_120_returns_none() {
-    // #version 120 < 330，OpenGL SPIR-V 要求 330+，glslang 应拒绝
+fn compile_legacy_120_upgraded_and_succeeds() {
+    // #version 120 经 preprocess 升级到 330 core，应编译成功
     let src = "#version 120\nvoid main() {}\n";
     let result = spirv_compile::compile(src, spirv_compile::GL_VERTEX_SHADER);
-    assert!(result.is_none(), "expected None for legacy #version 120");
+    assert!(result.is_some(), "expected Some for upgraded #version 120");
 }
 
 #[test]
-fn compile_legacy_150_returns_none() {
-    // #version 150 < 330，glslang 应拒绝
+fn compile_legacy_150_upgraded_and_succeeds() {
+    // #version 150 经 preprocess 升级到 330 core，应编译成功
     let src = "#version 150 core\nvoid main() {}\n";
     let result = spirv_compile::compile(src, spirv_compile::GL_VERTEX_SHADER);
-    assert!(result.is_none(), "expected None for legacy #version 150");
+    assert!(result.is_some(), "expected Some for upgraded #version 150");
 }
 
 #[test]
