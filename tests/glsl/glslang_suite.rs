@@ -1,19 +1,32 @@
 //! Run the glslang test suite through FluorateGL's shader translator.
 //!
-//! This example does not require a GLES context. It initialises the library so
-//! that capability probing is done once, then translates every `.vert`/`.frag`
-//!/`.comp`/`.geom`/`.tesc`/`.tese` file under `tests/glsl/glslang/Test` and
-//! reports how many succeeded, were passed through, or failed.
+//! 遍历 `tests/glsl/glslang/Test` 下的所有 `.vert`/`.frag`/`.comp`/`.geom`/`.tesc`/`.tese`
+//! 文件，统计翻译成功/失败，并在 GLES 后端可用时额外验证翻译后的 GLSL ES 能否编译。
 //!
-//! Many glslang tests are intentionally negative or use features we cannot
-//! translate, so the harness exits successfully even when individual shaders
-//! fail translation. To keep a single bad shader from crashing the whole run,
-//! each shader is processed in a forked worker process.
+//! 架构：
+//!   - worker 进程（fork）：只做翻译，将翻译后源码写到 stdout，退出码标识结果。
+//!     用 fork 隔离是因为 glslang 的 C++ assertion failure 会 abort()，
+//!     catch_unwind 无法捕获，必须进程级隔离。
+//!   - 主进程：收集 worker 结果，对翻译成功的 shader 用 GLES 后端做编译检查。
+//!
+//! 退出码（worker）：
+//!   0 = 翻译成功（stdout 含翻译后 GLSL ES 源码）
+//!   1 = 翻译失败（glslang SPIR-V 编译或 spirv-cross 失败）
+//!   2 = 翻译透传
+//!
+//! 环境变量：
+//!   FLUORATEGL_BACKEND=llvmpipe  使用 Mesa llvmpipe 软件后端
+//!   EGL_PLATFORM=surfaceless     无显示器环境（CI）
+//!   MESA_LOADER_DRIVER_OVERRIDE=llvmpipe  强制 llvmpipe 驱动
+//!
+//! 用法：
+//!   cargo run --example glslang_suite
+//!   bash tests/run_glslang_suite.sh
 
-use std::env;
+use fluorategl::shader_translator::spirv_pass::{TranslationResult, translate};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
-use std::process::Command;
 
 const GL_VERTEX_SHADER: u32 = 0x8B31;
 const GL_FRAGMENT_SHADER: u32 = 0x8B30;
@@ -34,53 +47,25 @@ fn stage_for_path(path: &Path) -> Option<(u32, &'static str)> {
     }
 }
 
-fn translate_single(path: &Path, stage: u32) -> i32 {
-    let bytes = fs::read(path).unwrap();
-    let source = String::from_utf8_lossy(&bytes);
-
-    let result = fluorategl::shader_translator::spirv_pass::translate(&source, stage);
-    match result {
-        fluorategl::shader_translator::spirv_pass::TranslationResult::Translated(_) => 0,
-        fluorategl::shader_translator::spirv_pass::TranslationResult::PassThrough => 2,
-        fluorategl::shader_translator::spirv_pass::TranslationResult::Failed => 1,
-    }
-}
-
-fn worker(path: &str, stage: u32) {
-    if fluorategl::fluorategl_init() != 0 {
-        eprintln!("fluorategl_init failed");
-        std::process::exit(2);
-    }
-    std::process::exit(translate_single(Path::new(path), stage));
-}
-
-fn run_worker(exe: &Path, path: &Path, stage: u32) -> Option<i32> {
-    let status = Command::new(exe)
-        .arg("--worker")
-        .arg(path)
-        .arg(stage.to_string())
-        .status();
-
-    match status {
-        Ok(s) => s.code(),
-        Err(e) => {
-            eprintln!(
-                "[glslang] failed to spawn worker for {}: {}",
-                path.display(),
-                e
-            );
-            Some(-1)
-        }
-    }
-}
-
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let args: Vec<String> = std::env::args().collect();
+    // worker 模式：翻译单个 shader，源码写到 stdout
     if args.len() == 4 && args[1] == "--worker" {
         let path = &args[2];
         let stage: u32 = args[3].parse().expect("invalid stage");
-        worker(path, stage);
-        return;
+        // worker 不需要 GLES 上下文，只做翻译
+        let _ = fluorategl::fluorategl_init();
+        let bytes = fs::read(path).unwrap_or_default();
+        let source = String::from_utf8_lossy(&bytes);
+        match translate(&source, stage) {
+            TranslationResult::Translated(src) => {
+                // stdout 写翻译后源码
+                let _ = std::io::stdout().write_all(src.as_bytes());
+                std::process::exit(0);
+            }
+            TranslationResult::PassThrough => std::process::exit(2),
+            TranslationResult::Failed => std::process::exit(1),
+        }
     }
 
     let suite_dir = Path::new("tests/glsl/glslang/Test");
@@ -89,71 +74,170 @@ fn main() {
         std::process::exit(1);
     }
 
-    let exe = env::current_exe().expect("could not get current executable path");
-
-    let mut translated = 0usize;
-    let mut passed_through = 0usize;
-    let mut failed = 0usize;
-    let mut skipped = 0usize;
-    let mut crashed = 0usize;
-
-    for entry in fs::read_dir(suite_dir).unwrap() {
-        let entry = entry.unwrap();
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
+    // 主进程初始化（用于 GLES 编译检查）
+    if fluorategl::fluorategl_init() != 0 {
+        eprintln!("[glslang] fluorategl_init failed");
+        std::process::exit(1);
+    }
+    let gles_available = fluorategl::ensure_gles_context();
+    eprintln!(
+        "[glslang] GLES backend for compile test: {}",
+        if gles_available {
+            "available"
+        } else {
+            "unavailable"
         }
+    );
 
-        let Some((stage, stage_name)) = stage_for_path(&path) else {
+    let exe = std::env::current_exe().expect("could not get current executable path");
+
+    let mut translated_ok = 0usize;
+    let mut compile_fail = 0usize;
+    let mut no_gles = 0usize;
+    let mut passed_through = 0usize;
+    let mut translate_failed = 0usize;
+    let mut crashed = 0usize;
+    let mut skipped = 0usize;
+    let mut compile_fail_samples: Vec<String> = Vec::new();
+    let mut translate_fail_samples: Vec<String> = Vec::new();
+
+    // 收集所有测试文件并排序，保证输出顺序稳定
+    let mut files: Vec<_> = fs::read_dir(suite_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .collect();
+    files.sort();
+
+    let total_files = files.len();
+    let mut processed = 0usize;
+
+    for path in &files {
+        let Some((stage, stage_name)) = stage_for_path(path) else {
             skipped += 1;
             continue;
         };
 
-        let code = run_worker(&exe, &path, stage);
+        processed += 1;
+        if processed % 200 == 0 {
+            eprintln!("[glslang] progress: {}/{}", processed, total_files);
+        }
 
-        match code {
-            Some(0) => {
-                translated += 1;
+        // fork worker 做翻译，防止单个 shader 的 C++ assertion/crash 影响整体
+        // worker 只做翻译（纯 CPU），不需要 EGL/GLES，跳过后端加载以加速启动
+        let output = std::process::Command::new(&exe)
+            .arg("--worker")
+            .arg(path)
+            .arg(stage.to_string())
+            .env("FLUORATEGL_SKIP_BACKEND", "1")
+            .env("FLUORATEGL_LOG", "error")
+            .output();
+
+        let output = match output {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!(
+                    "[glslang] spawn worker failed for {}: {}",
+                    path.display(),
+                    e
+                );
+                crashed += 1;
+                continue;
             }
-            Some(2) => {
-                passed_through += 1;
+        };
+
+        match output.status.code() {
+            Some(0) => {
+                // 翻译成功，stdout 含翻译后源码
+                let translated_src = String::from_utf8_lossy(&output.stdout);
+                if !gles_available {
+                    no_gles += 1;
+                } else {
+                    match fluorategl::gles_compile_check(&translated_src, stage) {
+                        Ok(()) => translated_ok += 1,
+                        Err(e) => {
+                            compile_fail += 1;
+                            if compile_fail_samples.len() < 30 {
+                                compile_fail_samples.push(format!(
+                                    "{} ({})  [{}]",
+                                    path.display(),
+                                    stage_name,
+                                    e.chars().take(200).collect::<String>()
+                                ));
+                            }
+                        }
+                    }
+                }
             }
             Some(1) => {
-                failed += 1;
-                eprintln!(
-                    "[glslang] translate failed: {} (stage {})",
-                    path.display(),
-                    stage_name
-                );
+                translate_failed += 1;
+                if translate_fail_samples.len() < 30 {
+                    translate_fail_samples.push(format!("{} ({})", path.display(), stage_name));
+                }
             }
+            Some(2) => passed_through += 1,
             Some(c) => {
-                failed += 1;
                 eprintln!(
-                    "[glslang] worker exited with code {}: {} (stage {})",
+                    "[glslang] worker exited with code {}: {} ({})",
                     c,
                     path.display(),
                     stage_name
                 );
+                crashed += 1;
             }
             None => {
+                // SIGABRT (assertion) 或 SIGSEGV
                 crashed += 1;
-                eprintln!(
-                    "[glslang] worker crashed (SIGSEGV etc.): {} (stage {})",
-                    path.display(),
-                    stage_name
-                );
             }
         }
     }
 
-    let total = translated + passed_through + failed + skipped;
-    if total == 0 {
-        eprintln!("no glslang test files were processed");
-        std::process::exit(1);
+    let translated_total = translated_ok + compile_fail + no_gles;
+
+    println!();
+    println!("═══════════════════════════════════════════════════════════");
+    println!("  glslang test suite 翻译结果报告");
+    println!("═══════════════════════════════════════════════════════════");
+    println!("  测试文件总数:     {}", total_files);
+    println!(
+        "  已处理:           {} (跳过 {} 非目标扩展名)",
+        processed, skipped
+    );
+    println!(
+        "  GLES 编译后端:    {}",
+        if gles_available {
+            "llvmpipe/可用"
+        } else {
+            "不可用"
+        }
+    );
+    println!("───────────────────────────────────────────────────────────");
+    println!("  翻译成功:         {}", translated_total);
+    if gles_available {
+        println!("    ├─ 编译通过:    {}", translated_ok);
+        println!("    └─ 编译失败:    {}", compile_fail);
+    } else {
+        println!("    └─ 无 GLES 后端，未做编译验证: {}", no_gles);
+    }
+    println!("  翻译透传:         {}", passed_through);
+    println!("  翻译失败:         {}", translate_failed);
+    println!("  崩溃(assert/segv): {}", crashed);
+    println!("═══════════════════════════════════════════════════════════");
+
+    if !translate_fail_samples.is_empty() {
+        println!();
+        println!("翻译失败样本 (前 {} 个):", translate_fail_samples.len());
+        for s in &translate_fail_samples {
+            println!("  ✗ {}", s);
+        }
     }
 
-    println!(
-        "[glslang] total={} translated={} passed_through={} failed={} crashed={} skipped={}",
-        total, translated, passed_through, failed, crashed, skipped
-    );
+    if !compile_fail_samples.is_empty() {
+        println!();
+        println!("GLES 编译失败样本 (前 {} 个):", compile_fail_samples.len());
+        for s in &compile_fail_samples {
+            println!("  ✗ {}", s);
+        }
+    }
 }

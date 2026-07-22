@@ -156,3 +156,15 @@ where
     });
     f(dispatch)
 }
+
+/// 返回已加载的 GLES dispatch 引用（若 EGL/GLES 库加载失败则返回 None）。
+/// 用于离线编译测试等需要直接访问 GLES 的场景。
+pub fn gles_dispatch() -> Option<&'static dispatch::GlesDispatch> {
+    GLES_DISPATCH.get()
+}
+
+/// 返回已加载的 EGL dispatch 引用（若 EGL 库加载失败则返回 None）。
+/// 用于离线编译测试等需要直接访问 EGL 的场景。
+pub fn egl_dispatch() -> Option<&'static crate::egl_sys::dispatch::EglDispatch> {
+    EGL_DISPATCH.get()
+}
