@@ -10,12 +10,14 @@ pub extern "C" fn glCreateShader(shader_type: u32) -> u32 {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = (dispatch.create_shader)(shader_type);
         if gles_id == 0 {
-            // GLES 返回 0 通常表示当前线程无 EGL 上下文（如异步加载线程）
+            // GLES 返回 0 表示当前线程无 EGL 上下文（如异步加载线程）。
+            // 直接返回 0，不分配 desktop_id，避免后续操作映射到无效的 gles_id=0。
             log::warn!(
                 "[FluorateGL] glCreateShader(0x{:04X}) -> GLES returned 0 (no context on tid={})",
                 shader_type,
                 state::thread_id_u64()
             );
+            return 0;
         }
         let desktop_id = state::with_state(|s| s.shaders.alloc(gles_id));
         state::with_state(|s| {
@@ -184,7 +186,9 @@ pub extern "C" fn glCompileShader(shader: u32) {
                     &mut written,
                     buf.as_mut_ptr() as *mut c_char,
                 );
-                let info = String::from_utf8_lossy(&buf[..written.max(0) as usize]);
+                // 防御 Adreno 驱动 bug：written 可能 > len，截断避免越界
+                let safe_written = (written.max(0) as usize).min(buf.len());
+                let info = String::from_utf8_lossy(&buf[..safe_written]);
                 log::error!(
                     "[FluorateGL] Shader {} (GLES {}) compile failed: {}",
                     shader,
@@ -267,7 +271,9 @@ pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
                 info_buf.as_mut_ptr() as *mut _,
             );
             let info_str = if info_len > 0 {
-                String::from_utf8_lossy(&info_buf[..info_len as usize]).to_string()
+                // 防御 Adreno 驱动 bug：info_len 可能 > 4096，截断避免越界
+                let safe_len = (info_len as usize).min(info_buf.len());
+                String::from_utf8_lossy(&info_buf[..safe_len]).to_string()
             } else {
                 "(empty)".to_string()
             };

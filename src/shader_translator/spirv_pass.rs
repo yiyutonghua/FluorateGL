@@ -50,7 +50,18 @@ fn translate_internal(source: &str, stage: u32) -> TranslationResult {
     // 步骤 1+2：预处理 + GLSL → SPIR-V
     let compile_start = std::time::Instant::now();
     let spv = match spirv_compile::compile(source, stage) {
-        Some(s) => s,
+        Some(s) if !s.is_empty() => s,
+        Some(_) => {
+            // glslang 返回空 SPIR-V：喂给 spirv-cross 会触发 native segfault（空指针解引用）
+            log::error!(
+                "[ShaderTranslator] glslang returned EMPTY SPIR-V for stage {} (0x{:04X}), took {:?}; source (first 500 chars):\n{}",
+                stage_name,
+                stage,
+                compile_start.elapsed(),
+                source.chars().take(500).collect::<String>()
+            );
+            return TranslationResult::Failed;
+        }
         None => {
             log::warn!(
                 "[ShaderTranslator] glslang SPIR-V compile failed for stage {} (0x{:04X}), took {:?}; source (first 500 chars):\n{}",
@@ -62,6 +73,18 @@ fn translate_internal(source: &str, stage: u32) -> TranslationResult {
             return TranslationResult::Failed;
         }
     };
+    // 验证 SPIR-V magic number，防止损坏的字节码喂给 spirv-cross 触发 native 崩溃
+    const SPIRV_MAGIC: u32 = 0x07230203;
+    if spv[0] != SPIRV_MAGIC {
+        log::error!(
+            "[ShaderTranslator] invalid SPIR-V magic number 0x{:08X} (expected 0x{:08X}) for stage {} (0x{:04X})",
+            spv[0],
+            SPIRV_MAGIC,
+            stage_name,
+            stage
+        );
+        return TranslationResult::Failed;
+    }
     log::debug!(
         "[ShaderTranslator] glslang SPIR-V compile done: stage={}, took {:?} ({} words)",
         stage_name,

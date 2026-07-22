@@ -113,15 +113,34 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
             | ShaderOptions::VULKAN_RULES_RELAXED,
     );
 
+    // glslang compile 是 FFI 调用（C++ 代码），native 崩溃（segfault/SIGABRT）
+    // 无法被 catch_unwind 捕获。此处用 info 级日志 + flush 标记进入/退出，
+    // 若崩溃后日志只有 "ENTERING" 无 "EXITED"，则确认崩溃在 glslang 内部。
+    log::info!(
+        "[ShaderTranslator] ENTERING glslang compile for stage 0x{:04X} (source {} chars, preprocessed {} chars)",
+        stage,
+        source.len(),
+        preprocessed.len()
+    );
+    log::logger().flush();
     match shader.compile() {
-        Ok(spv) => Some(spv),
+        Ok(spv) => {
+            log::info!(
+                "[ShaderTranslator] EXITED glslang compile OK for stage 0x{:04X} (SPIR-V {} words)",
+                stage,
+                spv.len()
+            );
+            log::logger().flush();
+            Some(spv)
+        }
         Err(e) => {
             log::error!(
-                "[ShaderTranslator] glslang SPIR-V compile failed for stage 0x{:04X}: {:?}; source (first 500 chars):\n{}",
+                "[ShaderTranslator] EXITED glslang compile FAILED for stage 0x{:04X}: {:?}; source (first 500 chars):\n{}",
                 stage,
                 e,
                 source.chars().take(500).collect::<String>()
             );
+            log::logger().flush();
             None
         }
     }

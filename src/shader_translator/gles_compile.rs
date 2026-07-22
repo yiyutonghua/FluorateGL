@@ -21,6 +21,17 @@ use crate::shader_translator::preprocess;
 /// 流程：SPIR-V → spirv-cross 编译 → 后处理（移除 binding、处理 outColor、precision）
 /// 失败时返回 Err 并携带错误信息。
 pub fn compile(spv: &[u32], version: u16) -> Result<String, SpirvCrossError> {
+    // 空 SPIR-V 防护：Module::from_words(&[]) + SpvCompiler::new 会触发 native segfault
+    if spv.is_empty() {
+        log::error!(
+            "[ShaderTranslator] spirv-cross received EMPTY SPIR-V for ES{}",
+            version
+        );
+        return Err(SpirvCrossError::InvalidSpirv(
+            "empty SPIR-V module".to_string(),
+        ));
+    }
+
     let module = Module::from_words(spv);
     let compiler = SpvCompiler::<Glsl>::new(module)?;
     let mut options = Glsl::options();
@@ -50,7 +61,21 @@ pub fn compile(spv: &[u32], version: u16) -> Result<String, SpirvCrossError> {
     // 不输出 #line 指令（我们在后处理中统一清理）
     options.common.emit_line_directives = false;
 
+    // spirv-cross compile 是 FFI 调用（C++ 代码），native 崩溃无法被 catch_unwind 捕获。
+    // info 级日志 + flush 标记进入/退出，精确定位是否 spirv-cross 崩溃。
+    log::info!(
+        "[ShaderTranslator] ENTERING spirv-cross compile for ES{} (SPIR-V {} words)",
+        version,
+        spv.len()
+    );
+    log::logger().flush();
     let artifact: CompiledArtifact<Glsl> = compiler.compile(&options)?;
+    log::info!(
+        "[ShaderTranslator] EXITED spirv-cross compile OK for ES{} ({} chars)",
+        version,
+        artifact.to_string().len()
+    );
+    log::logger().flush();
     let src = artifact.to_string();
 
     // 后处理：移除 binding、处理 outColor location、确保 precision
