@@ -55,7 +55,7 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
         }
     };
 
-    // 预处理 GLSL：移除 #line、强制版本 >= 150、补全 location/binding
+    // 预处理 GLSL：仅移除 #line，其余交给 glslang
     let preprocessed = crate::shader_translator::preprocess::preprocess(source);
 
     let src = ShaderSource::from(preprocessed.as_str());
