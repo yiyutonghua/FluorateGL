@@ -31,7 +31,7 @@ Env: LIBGL_ES=3
 Env: LIBGL_EGL=libfluorategl.so
 Env: FCL_NATIVEDIR=/data/app/~~x_j5flmUtDs1badK5GgNuQ==/com.tungsten.fcl-Cwrmm2i08nTzC3lc52t1Rw==/lib/arm64
 Env: DRIVER_PATH=/data/app/~~x_j5flmUtDs1badK5GgNuQ==/com.tungsten.fcl-Cwrmm2i08nTzC3lc52t1Rw==/lib/arm64
-Env: LD_LIBRARY_PATH=/data/user/0/com.tungsten.fcl/app_runtime/jna:/data/app/~~EaGkZJCm_za91aE0LxXzsg==/com.fcl.plugin.fluorategl-BlIWGUWzTBVo2pKSMBWniA==/lib/arm64:/data/user/0/com.tungsten.fcl/app_runtime_mod:/data/app/~~x_j5flmUtDs1badK5GgNuQ==/com.tungsten.fcl-Cwrmm2i08nTzC3lc52t1Rw==/lib/arm64:/system/lib64:/vendor/lib64:/vendor/lib64/hw:/system_ext/lib64
+Env: LD_LIBRARY_PATH=/data/user/0/com.tungsten.fcl/app_runtime/jna:/data/app/~~8R0FPN6r863y0sVeqVhKyQ==/com.fcl.plugin.fluorategl-MekOUONx2YHcauSBZz9c_A==/lib/arm64:/data/user/0/com.tungsten.fcl/app_runtime_mod:/data/app/~~x_j5flmUtDs1badK5GgNuQ==/com.tungsten.fcl-Cwrmm2i08nTzC3lc52t1Rw==/lib/arm64:/system/lib64:/vendor/lib64:/vendor/lib64/hw:/system_ext/lib64
 Env: FLUORATEGL_BACKEND=system
 Env: HOME=/storage/emulated/0/FCL/log
 Env: FLUORATEGL_LOG=trace
@@ -82,9 +82,8 @@ DLOPEN: loading /data/user/0/com.tungsten.fcl/app_runtime/java/jre21/lib/libawt_
 DLOPEN: loading /data/app/~~x_j5flmUtDs1badK5GgNuQ==/com.tungsten.fcl-Cwrmm2i08nTzC3lc52t1Rw==/lib/arm64/libopenal.so
 [INFO] [FluorateGL] v0.2.0 Initializing...
 [INFO] [FluorateGL] Backend: System, LogLevel: Trace
-[INFO] [FluorateGL] Captured self handle 0xc9906281b72e98a1 from "/data/app/~~EaGkZJCm_za91aE0LxXzsg==/com.fcl.plugin.fluorategl-BlIWGUWzTBVo2pKSMBWniA==/lib/arm64/libfluorategl.so"
+[INFO] [FluorateGL] Captured self handle 0xf7c25bac680c6faf from "/data/app/~~8R0FPN6r863y0sVeqVhKyQ==/com.fcl.plugin.fluorategl-MekOUONx2YHcauSBZz9c_A==/lib/arm64/libfluorategl.so"
 [INFO] [FluorateGL] EGL library loaded
-Working directory: /storage/emulated/0/FCL/.minecraft/versions/1.21.1
 [WARN] [GlesDispatch] warning: optional function not available: glGetBufferSubData
 [WARN] [GlesDispatch] warning: optional function not available: glVertexAttribI1i
 [WARN] [GlesDispatch] warning: optional function not available: glVertexAttribI2i
@@ -109,10 +108,11 @@ Working directory: /storage/emulated/0/FCL/.minecraft/versions/1.21.1
 [WARN] [GlesDispatch] warning: optional function not available: glGetQueryObjectiv
 [WARN] [GlesDispatch] warning: optional function not available: glGetDoublev
 [WARN] [GlesDispatch] warning: optional function not available: glGetFloati_v
-[WARN] [GlesDispatch] warning: optional function not available: glGetDoublei_v
+[WARN] [GlesDispatch] warning: optional function not available: glGetDoublei_vWorking directory: /storage/emulated/0/FCL/.minecraft/versions/1.21.1
+
 [INFO] [FluorateGL] GLES library loaded
 [INFO] [FluorateGL] v0.2.0 Initialized successfully
-DLOPEN: loading /data/app/~~EaGkZJCm_za91aE0LxXzsg==/com.fcl.plugin.fluorategl-BlIWGUWzTBVo2pKSMBWniA==/lib/arm64/libfluorategl.so
+DLOPEN: loading /data/app/~~8R0FPN6r863y0sVeqVhKyQ==/com.fcl.plugin.fluorategl-MekOUONx2YHcauSBZz9c_A==/lib/arm64/libfluorategl.so
 ==================== Minecraft Arguments ====================
 Java argument: /data/user/0/com.tungsten.fcl/app_runtime/java/jre21/bin/java
 Java argument: -Djava.awt.headless=false
@@ -140,7 +140,7 @@ Java argument: --add-opens=java.desktop/sun.java2d=ALL-UNNAMED
 Java argument: --add-opens=java.base/java.lang.reflect=ALL-UNNAMED
 Java argument: --add-opens=java.base/java.net=ALL-UNNAMED
 Java argument: -Xbootclasspath/a:/data/user/0/com.tungsten.fcl/app_runtime/caciocavallo17/cacio-agent.jar:/data/user/0/com.tungsten.fcl/app_runtime/caciocavallo17/cacio-shared-1.19.1-SNAPSHOT.jar:/data/user/0/com.tungsten.fcl/app_runtime/caciocavallo17/cacio-tta-1.19.1-SNAPSHOT.jar
-Java argument: -Xmx3377m
+Java argument: -Xmx3246m
 Java argument: -Xms2048m
 Java argument: -Dfile.encoding=UTF-8
 Java argument: -Dstdout.encoding=UTF-8
@@ -158,7 +158,7 @@ Java argument: -Dext.net.resolvPath=/data/user/0/com.tungsten.fcl/app_runtime/ja
 Java argument: -Djava.io.tmpdir=/data/user/0/com.tungsten.fcl/cache/fclauncher
 Java argument: -Dos.name=Linux
 Java argument: -Dos.version=Android-16
-Java argument: -Dorg.lwjgl.opengl.libname=/data/app/~~EaGkZJCm_za91aE0LxXzsg==/com.fcl.plugin.fluorategl-BlIWGUWzTBVo2pKSMBWniA==/lib/arm64/libfluorategl.so
+Java argument: -Dorg.lwjgl.opengl.libname=/data/app/~~8R0FPN6r863y0sVeqVhKyQ==/com.fcl.plugin.fluorategl-MekOUONx2YHcauSBZz9c_A==/lib/arm64/libfluorategl.so
 Java argument: -Dorg.lwjgl.freetype.libname=/data/app/~~x_j5flmUtDs1badK5GgNuQ==/com.tungsten.fcl-Cwrmm2i08nTzC3lc52t1Rw==/lib/arm64/libfreetype.so
 Java argument: -Dfml.earlyprogresswindow=false
 Java argument: -Dglfwstub.windowWidth=2772
@@ -176,7 +176,7 @@ Java argument: -Djdk.lang.Process.launchMechanism=FORK
 Java argument: -Dcpu.name=SM7635
 Java argument: -Djna.boot.library.path=/data/user/0/com.tungsten.fcl/app_runtime/jna/5.14.0
 Java argument: -javaagent:/data/user/0/com.tungsten.fcl/files/plugins/MioLibPatcher.jar
-Java argument: -Djava.library.path=/data/user/0/com.tungsten.fcl/app_runtime/java/jre21/lib:/data/user/0/com.tungsten.fcl/app_runtime/java/jre21/lib/jli:/data/user/0/com.tungsten.fcl/app_runtime/java/jre21/lib/server:/data/user/0/com.tungsten.fcl/app_runtime/jna:/data/app/~~EaGkZJCm_za91aE0LxXzsg==/com.fcl.plugin.fluorategl-BlIWGUWzTBVo2pKSMBWniA==/lib/arm64:/data/user/0/com.tungsten.fcl/app_runtime_mod:/data/app/~~x_j5flmUtDs1badK5GgNuQ==/com.tungsten.fcl-Cwrmm2i08nTzC3lc52t1Rw==/lib/arm64:/system/lib64:/vendor/lib64:/vendor/lib64/hw:/system_ext/lib64
+Java argument: -Djava.library.path=/data/user/0/com.tungsten.fcl/app_runtime/java/jre21/lib:/data/user/0/com.tungsten.fcl/app_runtime/java/jre21/lib/jli:/data/user/0/com.tungsten.fcl/app_runtime/java/jre21/lib/server:/data/user/0/com.tungsten.fcl/app_runtime/jna:/data/app/~~8R0FPN6r863y0sVeqVhKyQ==/com.fcl.plugin.fluorategl-MekOUONx2YHcauSBZz9c_A==/lib/arm64:/data/user/0/com.tungsten.fcl/app_runtime_mod:/data/app/~~x_j5flmUtDs1badK5GgNuQ==/com.tungsten.fcl-Cwrmm2i08nTzC3lc52t1Rw==/lib/arm64:/system/lib64:/vendor/lib64:/vendor/lib64/hw:/system_ext/lib64
 Java argument: -Djna.tmpdir=/data/user/0/com.tungsten.fcl/cache/fclauncher
 Java argument: -Dorg.lwjgl.system.SharedLibraryExtractPath=/data/user/0/com.tungsten.fcl/cache/fclauncher
 Java argument: -Dio.netty.native.workdir=/data/user/0/com.tungsten.fcl/cache/fclauncher
@@ -223,20 +223,20 @@ Calling JLI_Launch
 WARNING: Unknown module: net.minecraft.client.main specified to --add-exports
 [MioLibPatcher/INFO]: MioPatcher is running!
 [MioLibPatcher/INFO]: Patch target class: oshi/hardware/CentralProcessor$ProcessorIdentifier
-[17:19:42] [main/WARN]: Did not find udev library in operating system. Some features may not work.
-[17:19:42] [main/WARN]: File not found or not readable: /proc/stat
-[17:19:43] [Datafixer Bootstrap/INFO]: 226 Datafixer optimizations took 1034 milliseconds
-[17:19:51] [Render thread/INFO]: [STDOUT]: [MioLibPatcher/INFO]: Patch target class: org/lwjgl/system/Library
+[17:32:43] [main/WARN]: Did not find udev library in operating system. Some features may not work.
+[17:32:43] [main/WARN]: File not found or not readable: /proc/stat
+[17:32:43] [Datafixer Bootstrap/INFO]: 226 Datafixer optimizations took 1172 milliseconds
+[17:32:51] [Render thread/INFO]: [STDOUT]: [MioLibPatcher/INFO]: Patch target class: org/lwjgl/system/Library
 [LWJGL] Failed to load a library. Possible solutions:
 	a) Add the directory that contains the shared library to -Djava.library.path or -Dorg.lwjgl.librarypath.
 	b) Add the JAR that contains the shared library to the classpath.
 [LWJGL] Enable debug mode with -Dorg.lwjgl.util.Debug=true for better diagnostics.
 [LWJGL] Enable the SharedLibraryLoader debug mode with -Dorg.lwjgl.util.DebugLoader=true for better diagnostics.
-[17:19:51] [Render thread/INFO]: Environment: Environment[sessionHost=https://sessionserver.mojang.com, servicesHost=https://api.minecraftservices.com, name=PROD]
-[17:19:51] [Render thread/INFO]: Setting user: fei
+[17:32:51] [Render thread/INFO]: Environment: Environment[sessionHost=https://sessionserver.mojang.com, servicesHost=https://api.minecraftservices.com, name=PROD]
+[17:32:52] [Render thread/INFO]: Setting user: fei
 Registered forkAndExec
 LwjglLinkerHook:Installing LWJGL dlopen() hook
-[17:19:52] [Render thread/INFO]: Backend library: LWJGL version 3.3.6-snapshot
+[17:32:52] [Render thread/INFO]: Backend library: LWJGL version 3.3.6-snapshot
 EGLBridge: Binding to OpenGL ES
 [INFO] [FluorateGL] === 首次 GL 调用，游戏渲染管线已启动 ===
 [INFO] [FluorateGL] 已屏蔽 GLES Debug PERFORMANCE/OTHER 消息
@@ -246,55 +246,55 @@ EGLBridge: Binding to OpenGL ES
 [DEBUG] [FluorateGL] glGetIntegerv(0x821B) -> 4
 [DEBUG] [FluorateGL] glGetIntegerv(0x821C) -> 6
 [DEBUG] [FluorateGL] glGetIntegerv(0x821D) -> 49
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 0) -> 0x72e35a9a8d
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 1) -> 0x72e35f741d
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 2) -> 0x72e35ed3e8
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 3) -> 0x72e360816d
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 4) -> 0x72e35f1e32
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 5) -> 0x72e35fea74
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 6) -> 0x72e35d101a
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 7) -> 0x72e35dd570
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 8) -> 0x72e35df97d
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 9) -> 0x72e35ab582
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 10) -> 0x72e35e7007
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 11) -> 0x72e35b0ac4
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 12) -> 0x72e36026ca
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 13) -> 0x72e35fc92f
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 14) -> 0x72e35cec5e
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 15) -> 0x72e35ca614
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 16) -> 0x72e35cec77
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 17) -> 0x72e35b0ad9
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 18) -> 0x72e35ad6bf
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 19) -> 0x72e35d1039
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 20) -> 0x72e35d420f
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 21) -> 0x72e35c3387
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 22) -> 0x72e35d422f
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 23) -> 0x72e35e1b0f
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 24) -> 0x72e35e1b31
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 25) -> 0x72e35e7021
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 26) -> 0x72e35ad6d9
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 27) -> 0x72e35a9aa8
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 28) -> 0x72e35f7437
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 29) -> 0x72e35bdbf5
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 30) -> 0x72e35da5f8
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 31) -> 0x72e35bdc19
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 32) -> 0x72e35cc875
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 33) -> 0x72e35ad6f5
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 34) -> 0x72e35ed400
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 35) -> 0x72e35d424f
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 36) -> 0x72e35e703b
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 37) -> 0x72e35ad716
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 38) -> 0x72e35e9609
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 39) -> 0x72e35fea93
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 40) -> 0x72e35ba54c
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 41) -> 0x72e35ba568
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 42) -> 0x72e35f1e56
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 43) -> 0x72e35d104b
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 44) -> 0x72e35c33a7
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 45) -> 0x72e35bdc2e
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 46) -> 0x72e35fc944
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 47) -> 0x72e35f7447
-[DEBUG] [FluorateGL] glGetStringi(0x1F03, 48) -> 0x72e35ba57e
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 0) -> 0x72f0be3ad5
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 1) -> 0x72f0c31465
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 2) -> 0x72f0c27430
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 3) -> 0x72f0c42191
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 4) -> 0x72f0c2be7a
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 5) -> 0x72f0c38abc
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 6) -> 0x72f0c0b04c
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 7) -> 0x72f0c175b8
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 8) -> 0x72f0c199c5
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 9) -> 0x72f0be55b7
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 10) -> 0x72f0c2104f
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 11) -> 0x72f0beab0c
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 12) -> 0x72f0c3c712
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 13) -> 0x72f0c36961
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 14) -> 0x72f0c08ca6
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 15) -> 0x72f0c0465c
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 16) -> 0x72f0c08cbf
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 17) -> 0x72f0beab21
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 18) -> 0x72f0be7707
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 19) -> 0x72f0c0b06b
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 20) -> 0x72f0c0e257
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 21) -> 0x72f0bfd3c1
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 22) -> 0x72f0c0e277
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 23) -> 0x72f0c1bb36
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 24) -> 0x72f0c1bb58
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 25) -> 0x72f0c21069
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 26) -> 0x72f0be7721
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 27) -> 0x72f0be3af0
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 28) -> 0x72f0c3147f
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 29) -> 0x72f0bf7c3d
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 30) -> 0x72f0c14640
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 31) -> 0x72f0bf7c61
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 32) -> 0x72f0c06883
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 33) -> 0x72f0be773d
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 34) -> 0x72f0c27448
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 35) -> 0x72f0c0e297
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 36) -> 0x72f0c21083
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 37) -> 0x72f0be775e
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 38) -> 0x72f0c23651
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 39) -> 0x72f0c38adb
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 40) -> 0x72f0bf4594
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 41) -> 0x72f0bf45b0
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 42) -> 0x72f0c2be9e
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 43) -> 0x72f0c0b07d
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 44) -> 0x72f0bfd3e1
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 45) -> 0x72f0bf7c76
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 46) -> 0x72f0c36976
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 47) -> 0x72f0c3148f
+[DEBUG] [FluorateGL] glGetStringi(0x1F03, 48) -> 0x72f0bf45c6
 [DEBUG] [FluorateGL] glGetIntegerv(0x821E) -> 0
 [DEBUG] [FluorateGL] glGetIntegerv(0x9126) -> 1
 [DEBUG] [FluorateGL] eglGetProcAddress(glBindTexture) -> self handle
@@ -331,7 +331,12 @@ EGLBridge: Binding to OpenGL ES
 [DEBUG] [FluorateGL] eglGetProcAddress(glDeleteVertexArrays) -> self handle
 [DEBUG] [FluorateGL] eglGetProcAddress(glGenVertexArrays) -> self handle
 [DEBUG] [FluorateGL] eglGetProcAddress(glTexBuffer) -> self handle
-[17:19:53] [Download-2/ERROR]: Failed to fetch user properties
+[DEBUG] [FluorateGL] eglGetProcAddress(glTexBufferRange) -> self handle
+[DEBUG] [FluorateGL] eglGetProcAddress(glBindVertexBuffer) -> self handle
+[DEBUG] [FluorateGL] eglGetProcAddress(glVertexAttribFormat) -> self handle
+[DEBUG] [FluorateGL] eglGetProcAddress(glVertexAttribIFormat) -> self handle
+[DEBUG] [FluorateGL] eglGetProcAddress(glVertexAttribBinding) -> self handle
+[17:32:53] [Download-2/ERROR]: Failed to fetch user properties
 com.mojang.authlib.exceptions.InvalidCredentialsException: Status: 401
 	at com.mojang.authlib.exceptions.MinecraftClientHttpException.toAuthenticationException(MinecraftClientHttpException.java:59) ~[authlib-6.0.54.jar:?]
 	at com.mojang.authlib.yggdrasil.YggdrasilUserApiService.fetchProperties(YggdrasilUserApiService.java:150) ~[authlib-6.0.54.jar:?]
@@ -345,11 +350,6 @@ Caused by: com.mojang.authlib.exceptions.MinecraftClientHttpException: Status: 4
 	at com.mojang.authlib.minecraft.client.MinecraftClient.get(MinecraftClient.java:57) ~[authlib-6.0.54.jar:?]
 	at com.mojang.authlib.yggdrasil.YggdrasilUserApiService.fetchProperties(YggdrasilUserApiService.java:121) ~[authlib-6.0.54.jar:?]
 	... 5 more
-[DEBUG] [FluorateGL] eglGetProcAddress(glTexBufferRange) -> self handle
-[DEBUG] [FluorateGL] eglGetProcAddress(glBindVertexBuffer) -> self handle
-[DEBUG] [FluorateGL] eglGetProcAddress(glVertexAttribFormat) -> self handle
-[DEBUG] [FluorateGL] eglGetProcAddress(glVertexAttribIFormat) -> self handle
-[DEBUG] [FluorateGL] eglGetProcAddress(glVertexAttribBinding) -> self handle
 [DEBUG] [FluorateGL] glGetIntegerv(0x0D33) -> 16384
 [DEBUG] [FluorateGL] glTexImage2D(target=0x8064, level=0, internalformat=0x1908, 32768x32768, format=0x1908, type=0x1401, pixels=0x0)
 [DEBUG] [FluorateGL] glTexImage2D: normalized internalformat 0x1908 -> 0x8058
@@ -363,21 +363,19 @@ Caused by: com.mojang.authlib.exceptions.MinecraftClientHttpException: Status: 4
 [DEBUG] [FluorateGL] glTexImage2D: normalized internalformat 0x1908 -> 0x8058
 [DEBUG] [FluorateGL] glTexImage2D(target=0x8064, level=0, internalformat=0x1908, 1024x1024, format=0x1908, type=0x1401, pixels=0x0)
 [DEBUG] [FluorateGL] glTexImage2D: normalized internalformat 0x1908 -> 0x8058
-[17:19:53] [Render thread/INFO]: Failed to determine maximum texture size by probing, trying GL_MAX_TEXTURE_SIZE = 16384
-[DEBUG] [FluorateGL] glGetString(0x1F01) -> 0x73fa5a8800
-[DEBUG] [FluorateGL] glGetString(0x1F02) -> 0x72e3604ea2
+[17:32:53] [Render thread/INFO]: Failed to determine maximum texture size by probing, trying GL_MAX_TEXTURE_SIZE = 16384
+[DEBUG] [FluorateGL] glGetString(0x1F01) -> 0x73fa597800
+[DEBUG] [FluorateGL] glGetString(0x1F02) -> 0x72f0c3eeea
 [DEBUG] [FluorateGL] glGetString(0x1F00) -> 0x73fdd1ca21
 [DEBUG] [FluorateGL] glGenTextures(n=1)
-[INFO] [FluorateGL] State initialized on thread None (tid=18677)
+[INFO] [FluorateGL] State initialized on thread None (tid=32394)
 [DEBUG] [FluorateGL] glGenTextures(n=1)
 [WARN] [FluorateGL] glGetError() -> 0x0500 (GL error)
 [DEBUG] [FluorateGL] glBindTexture(target=0x0DE1, texture=1)
 [DEBUG] [FluorateGL] glTexImage2D(target=0x0DE1, level=0, internalformat=0x8058, 2772x1272, format=0x1908, type=0x1401, pixels=0x0)
 [DEBUG] [FluorateGL] glBindTexture(target=0x0DE1, texture=2)
 [DEBUG] [FluorateGL] glTexImage2D(target=0x0DE1, level=0, internalformat=0x1902, 2772x1272, format=0x1902, type=0x1406, pixels=0x0)
-[DEBUG] [FluorateGL] glTexImage2D: normalized internalformat 0x1902 -> 0x81A6
-[17:19:54] [Render thread/INFO]: OpenGL debug message: id=2147483647, source=API, type=ERROR, severity=HIGH, message='pixel buffer format is not compatible with level format'
-[WARN] [FluorateGL] glGetError() -> 0x0502 (GL error)
+[DEBUG] [FluorateGL] glTexImage2D: normalized internalformat 0x1902 -> 0x8CAC
 [DEBUG] [FluorateGL] glBindTexture(target=0x0DE1, texture=1)
 [DEBUG] [FluorateGL] glTexParameteri(target=0x0DE1, pname=0x2801, param=9728)
 [DEBUG] [FluorateGL] glTexParameteri(target=0x0DE1, pname=0x2800, param=9728)
@@ -398,7 +396,7 @@ Caused by: com.mojang.authlib.exceptions.MinecraftClientHttpException: Status: 4
 [DEBUG] [FluorateGL] glTexParameteri(target=0x0DE1, pname=0x813A, param=0)
 [DEBUG] [FluorateGL] glTexParameteri(target=0x0DE1, pname=0x813B, param=0)
 [DEBUG] [FluorateGL] glTexParameterf(target=0x0DE1, pname=0x8501, param=0)
-[17:19:54] [Render thread/INFO]: OpenGL debug message: id=2147483647, source=API, type=ERROR, severity=HIGH, message='pname 34049 is not supported for this API call'
+[DEBUG] [FluorateGL] glTexParameterf pname 0x8501 ignored (unsupported in GLES)
 [DEBUG] [FluorateGL] glTexImage2D(target=0x0DE1, level=0, internalformat=0x1908, 256x256, format=0x1908, type=0x1401, pixels=0x0)
 [DEBUG] [FluorateGL] glTexImage2D: normalized internalformat 0x1908 -> 0x8058
 [DEBUG] [FluorateGL] glTexParameteri(target=0x0DE1, pname=0x2801, param=9728)
@@ -411,7 +409,7 @@ Caused by: com.mojang.authlib.exceptions.MinecraftClientHttpException: Status: 4
 [DEBUG] [FluorateGL] glTexParameteri(target=0x0DE1, pname=0x813A, param=0)
 [DEBUG] [FluorateGL] glTexParameteri(target=0x0DE1, pname=0x813B, param=0)
 [DEBUG] [FluorateGL] glTexParameterf(target=0x0DE1, pname=0x8501, param=0)
-[17:19:54] [Render thread/INFO]: OpenGL debug message: id=2147483647, source=API, type=ERROR, severity=HIGH, message='pname 34049 is not supported for this API call'
+[DEBUG] [FluorateGL] glTexParameterf pname 0x8501 ignored (unsupported in GLES)
 [DEBUG] [FluorateGL] glTexImage2D(target=0x0DE1, level=0, internalformat=0x1908, 16x16, format=0x1908, type=0x1401, pixels=0x0)
 [DEBUG] [FluorateGL] glTexImage2D: normalized internalformat 0x1908 -> 0x8058
 [DEBUG] [FluorateGL] glBindTexture(target=0x0DE1, texture=4)
@@ -425,28 +423,28 @@ Caused by: com.mojang.authlib.exceptions.MinecraftClientHttpException: Status: 4
 [DEBUG] [FluorateGL] glTexParameteri(target=0x0DE1, pname=0x813A, param=0)
 [DEBUG] [FluorateGL] glTexParameteri(target=0x0DE1, pname=0x813B, param=0)
 [DEBUG] [FluorateGL] glTexParameterf(target=0x0DE1, pname=0x8501, param=0)
-[17:19:54] [Render thread/INFO]: OpenGL debug message: id=2147483647, source=API, type=ERROR, severity=HIGH, message='pname 34049 is not supported for this API call'
+[DEBUG] [FluorateGL] glTexParameterf pname 0x8501 ignored (unsupported in GLES)
 [DEBUG] [FluorateGL] glTexImage2D(target=0x0DE1, level=0, internalformat=0x1908, 16x16, format=0x1908, type=0x1401, pixels=0x0)
 [DEBUG] [FluorateGL] glTexImage2D: normalized internalformat 0x1908 -> 0x8058
 [DEBUG] [FluorateGL] glTexParameteri(target=0x0DE1, pname=0x2801, param=9728)
 [DEBUG] [FluorateGL] glTexParameteri(target=0x0DE1, pname=0x2800, param=9728)
-[DEBUG] [FluorateGL] glGenBuffers: GLES 1 -> desktop 1 (tid=18677)
-[DEBUG] [FluorateGL] glGenBuffers: GLES 2 -> desktop 2 (tid=18677)
-[DEBUG] [FluorateGL] glBindBuffer(0x8892): desktop 1 -> GLES 1 (tid=18677)
-[DEBUG] [FluorateGL] glVertexAttribPointer(index=0, size=3, type=0x1406, norm=0, stride=12, ptr=0x0) bound_buf=1 bound_vao=1 (tid=18677)
-[DEBUG] [FluorateGL] glGenBuffers: GLES 3 -> desktop 3 (tid=18677)
-[DEBUG] [FluorateGL] glBindBuffer(0x8893): desktop 3 -> GLES 3 (tid=18677)
-[DEBUG] [FluorateGL] glGenBuffers: GLES 4 -> desktop 4 (tid=18677)
-[DEBUG] [FluorateGL] glGenBuffers: GLES 5 -> desktop 5 (tid=18677)
-[DEBUG] [FluorateGL] glBindBuffer(0x8892): desktop 4 -> GLES 4 (tid=18677)
-[DEBUG] [FluorateGL] glVertexAttribPointer(index=0, size=3, type=0x1406, norm=0, stride=12, ptr=0x0) bound_buf=4 bound_vao=2 (tid=18677)
-[DEBUG] [FluorateGL] glGenBuffers: GLES 6 -> desktop 6 (tid=18677)
-[DEBUG] [FluorateGL] glBindBuffer(0x8893): desktop 6 -> GLES 6 (tid=18677)
-[DEBUG] [FluorateGL] glGenBuffers: GLES 7 -> desktop 7 (tid=18677)
-[DEBUG] [FluorateGL] glGenBuffers: GLES 8 -> desktop 8 (tid=18677)
-[DEBUG] [FluorateGL] glBindBuffer(0x8892): desktop 7 -> GLES 7 (tid=18677)
-[DEBUG] [FluorateGL] glVertexAttribPointer(index=0, size=3, type=0x1406, norm=0, stride=12, ptr=0x0) bound_buf=7 bound_vao=3 (tid=18677)
-[DEBUG] [FluorateGL] glBindBuffer(0x8893): desktop 6 -> GLES 6 (tid=18677)
+[DEBUG] [FluorateGL] glGenBuffers: GLES 1 -> desktop 1 (tid=32394)
+[DEBUG] [FluorateGL] glGenBuffers: GLES 2 -> desktop 2 (tid=32394)
+[DEBUG] [FluorateGL] glBindBuffer(0x8892): desktop 1 -> GLES 1 (tid=32394)
+[DEBUG] [FluorateGL] glVertexAttribPointer(index=0, size=3, type=0x1406, norm=0, stride=12, ptr=0x0) bound_buf=1 bound_vao=1 (tid=32394)
+[DEBUG] [FluorateGL] glGenBuffers: GLES 3 -> desktop 3 (tid=32394)
+[DEBUG] [FluorateGL] glBindBuffer(0x8893): desktop 3 -> GLES 3 (tid=32394)
+[DEBUG] [FluorateGL] glGenBuffers: GLES 4 -> desktop 4 (tid=32394)
+[DEBUG] [FluorateGL] glGenBuffers: GLES 5 -> desktop 5 (tid=32394)
+[DEBUG] [FluorateGL] glBindBuffer(0x8892): desktop 4 -> GLES 4 (tid=32394)
+[DEBUG] [FluorateGL] glVertexAttribPointer(index=0, size=3, type=0x1406, norm=0, stride=12, ptr=0x0) bound_buf=4 bound_vao=2 (tid=32394)
+[DEBUG] [FluorateGL] glGenBuffers: GLES 6 -> desktop 6 (tid=32394)
+[DEBUG] [FluorateGL] glBindBuffer(0x8893): desktop 6 -> GLES 6 (tid=32394)
+[DEBUG] [FluorateGL] glGenBuffers: GLES 7 -> desktop 7 (tid=32394)
+[DEBUG] [FluorateGL] glGenBuffers: GLES 8 -> desktop 8 (tid=32394)
+[DEBUG] [FluorateGL] glBindBuffer(0x8892): desktop 7 -> GLES 7 (tid=32394)
+[DEBUG] [FluorateGL] glVertexAttribPointer(index=0, size=3, type=0x1406, norm=0, stride=12, ptr=0x0) bound_buf=7 bound_vao=3 (tid=32394)
+[DEBUG] [FluorateGL] glBindBuffer(0x8893): desktop 6 -> GLES 6 (tid=32394)
 [DEBUG] [FluorateGL] glBindTexture(target=0x0DE1, texture=0)
 [DEBUG] [FluorateGL] glGenTextures(n=1)
 [DEBUG] [FluorateGL] glGenTextures(n=1)
@@ -457,8 +455,7 @@ Caused by: com.mojang.authlib.exceptions.MinecraftClientHttpException: Status: 4
 [DEBUG] [FluorateGL] glTexParameteri(target=0x0DE1, pname=0x2802, param=33071)
 [DEBUG] [FluorateGL] glTexParameteri(target=0x0DE1, pname=0x2803, param=33071)
 [DEBUG] [FluorateGL] glTexImage2D(target=0x0DE1, level=0, internalformat=0x1902, 2772x1272, format=0x1902, type=0x1406, pixels=0x0)
-[DEBUG] [FluorateGL] glTexImage2D: normalized internalformat 0x1902 -> 0x81A6
-[17:19:54] [Render thread/INFO]: OpenGL debug message: id=2147483647, source=API, type=ERROR, severity=HIGH, message='pixel buffer format is not compatible with level format'
+[DEBUG] [FluorateGL] glTexImage2D: normalized internalformat 0x1902 -> 0x8CAC
 [DEBUG] [FluorateGL] glBindTexture(target=0x0DE1, texture=6)
 [DEBUG] [FluorateGL] glTexParameteri(target=0x0DE1, pname=0x2801, param=9728)
 [DEBUG] [FluorateGL] glTexParameteri(target=0x0DE1, pname=0x2800, param=9728)
@@ -473,7 +470,7 @@ Caused by: com.mojang.authlib.exceptions.MinecraftClientHttpException: Status: 4
 [DEBUG] [FluorateGL] glCreateShader(0x8B31)
 [DEBUG] [ShaderTranslator] SPIR-V translate start: stage=vertex (0x8B31)
 [DEBUG] [FluorateGL] glCompileShader(1)
-packages: 1
+ 1
 	Number of physical CPUs: 4
 	Number of logical CPUs: 8
 	Graphics card #0 name: unknown
@@ -482,15 +479,15 @@ packages: 1
 	Graphics card #0 deviceId: unknown
 	Graphics card #0 versionInfo: unknown
 	Virtual memory max (MiB): 17971.14
-	Virtual memory used (MiB): 11391.58
+	Virtual memory used (MiB): 12868.74
 	Swap memory total (MiB): 12288.00
-	Swap memory used (MiB): 3964.22
-	Space in storage for jna.tmpdir (MiB): available: 10661.34, total: 223839.06
-	Space in storage for org.lwjgl.system.SharedLibraryExtractPath (MiB): available: 10661.34, total: 223839.06
-	Space in storage for io.netty.native.workdir (MiB): available: 10661.34, total: 223839.06
-	Space in storage for java.io.tmpdir (MiB): available: 10661.34, total: 223839.06
-	Space in storage for workdir (MiB): available: 10661.34, total: 223839.06
-	JVM Flags: 4 total; -Xbootclasspath/a:/data/user/0/com.tungsten.fcl/app_runtime/caciocavallo17/cacio-agent.jar:/data/user/0/com.tungsten.fcl/app_runtime/caciocavallo17/cacio-shared-1.19.1-SNAPSHOT.jar:/data/user/0/com.tungsten.fcl/app_runtime/caciocavallo17/cacio-tta-1.19.1-SNAPSHOT.jar -Xmx3377m -Xms2048m -XX:ActiveProcessorCount=8
+	Swap memory used (MiB): 4871.49
+	Space in storage for jna.tmpdir (MiB): available: 10646.01, total: 223839.06
+	Space in storage for org.lwjgl.system.SharedLibraryExtractPath (MiB): available: 10646.01, total: 223839.06
+	Space in storage for io.netty.native.workdir (MiB): available: 10646.01, total: 223839.06
+	Space in storage for java.io.tmpdir (MiB): available: 10646.01, total: 223839.06
+	Space in storage for workdir (MiB): available: 10646.01, total: 223839.06
+	JVM Flags: 4 total; -Xbootclasspath/a:/data/user/0/com.tungsten.fcl/app_runtime/caciocavallo17/cacio-agent.jar:/data/user/0/com.tungsten.fcl/app_runtime/caciocavallo17/cacio-shared-1.19.1-SNAPSHOT.jar:/data/user/0/com.tungsten.fcl/app_runtime/caciocavallo17/cacio-tta-1.19.1-SNAPSHOT.jar -Xmx3246m -Xms2048m -XX:ActiveProcessorCount=8
 	Launched Version: 1.21.1
 	Launcher name: Fold Craft Launcher
 	Backend library: LWJGL version 3.3.6-snapshot
@@ -498,9 +495,7 @@ packages: 1
 	Window size: <not initialized>
 	GFLW Platform: x11
 	GL Caps: Using framebuffer using OpenGL 3.2
-	GL debug messages: id=2147483647, source=API, type=ERROR, severity=HIGH, message='pixel buffer format is not compatible with level format' x 1
-id=2147483647, source=API, type=ERROR, severity=HIGH, message='pname 34049 is not supported for this API call' x 3
-id=2147483647, source=API, type=ERROR, severity=HIGH, message='pixel buffer format is not compatible with level format' x 1
+	GL debug messages: 
 	Is Modded: Probably not. Client jar signature and brand is untouched
 	Universe: 404
 	Type: Client (map_client.txt)
@@ -508,6 +503,6 @@ id=2147483647, source=API, type=ERROR, severity=HIGH, message='pixel buffer form
 	System encoding: UTF-8
 	File encoding: UTF-8
 	CPU: 8x SM7635
-#@!@# Game crashed! Crash report saved to: #@!@# /storage/emulated/0/FCL/.minecraft/versions/1.21.1/crash-reports/crash-2026-07-22_17.19.55-client.txt
+#@!@# Game crashed! Crash report saved to: #@!@# /storage/emulated/0/FCL/.minecraft/versions/1.21.1/crash-reports/crash-2026-07-22_17.32.55-client.txt
 
 OpenJDK exited with code : -1
