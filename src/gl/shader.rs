@@ -9,6 +9,14 @@ pub extern "C" fn glCreateShader(shader_type: u32) -> u32 {
     log::debug!("[FluorateGL] glCreateShader(0x{:04X})", shader_type);
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = (dispatch.create_shader)(shader_type);
+        if gles_id == 0 {
+            // GLES 返回 0 通常表示当前线程无 EGL 上下文（如异步加载线程）
+            log::warn!(
+                "[FluorateGL] glCreateShader(0x{:04X}) -> GLES returned 0 (no context on tid={})",
+                shader_type,
+                state::thread_id_u64()
+            );
+        }
         let desktop_id = state::with_state(|s| s.shaders.alloc(gles_id));
         state::with_state(|s| {
             s.shader_types.insert(desktop_id, shader_type);
@@ -222,6 +230,13 @@ pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.shaders.get_gles(shader).unwrap_or(0));
         if gles_id == 0 {
+            // shader 不在 IdMap 中：可能是跨线程查询（异步线程创建、Render 线程查询）
+            // 或 GLES 创建失败（gles_id=0 被 alloc）。此时不设置 *params，调用方看到 0（GL_FALSE）。
+            log::warn!(
+                "[FluorateGL] glGetShaderiv: shader {} not found in IdMap (tid={}), params untouched (caller sees GL_FALSE)",
+                shader,
+                state::thread_id_u64()
+            );
             return;
         }
 

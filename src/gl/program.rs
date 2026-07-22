@@ -8,6 +8,13 @@ pub extern "C" fn glCreateProgram() -> u32 {
     log::debug!("[FluorateGL] glCreateProgram()");
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = (dispatch.create_program)();
+        if gles_id == 0 {
+            // GLES 返回 0 通常表示当前线程无 EGL 上下文（如异步加载线程）
+            log::warn!(
+                "[FluorateGL] glCreateProgram() -> GLES returned 0 (no context on tid={})",
+                state::thread_id_u64()
+            );
+        }
         state::with_state(|s| s.programs.alloc(gles_id))
     })
 }
@@ -109,6 +116,13 @@ pub extern "C" fn glGetProgramiv(program: u32, pname: u32, params: *mut i32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
+            // program 不在 IdMap 中：可能是跨线程查询或 GLES 创建失败。
+            // 此时不设置 *params，调用方看到 0（GL_FALSE），可能误判链接失败。
+            log::warn!(
+                "[FluorateGL] glGetProgramiv: program {} not found in IdMap (tid={}), params untouched (caller sees GL_FALSE)",
+                program,
+                state::thread_id_u64()
+            );
             return;
         }
         (dispatch.get_program_iv)(gles_id, pname, params);

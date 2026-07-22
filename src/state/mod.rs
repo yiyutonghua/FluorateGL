@@ -75,12 +75,15 @@ where
 }
 
 /// 获取当前线程 ID（用于诊断日志）
+///
+/// 注意：Android 的 target_os 是 "android" 而非 "linux"，
+/// 之前只匹配 linux 导致 Android 上 tid 始终返回 0，无法区分异步线程。
 pub fn thread_id_u64() -> u64 {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     unsafe {
         libc::gettid() as u64
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
         0
     }
