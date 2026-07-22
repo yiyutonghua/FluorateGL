@@ -31,6 +31,15 @@ pub fn post_process(src: &str) -> String {
     //    outColorN 的 location 由后续 processOutColorLocations 重新添加。
     result = strip_varying_locations(&result);
 
+    // 0.5 移除 standalone uniform 的 layout(location=N)
+    //     preprocess 为 non-opaque uniform（mat4/vec3/float 等）注入 location 以满足
+    //     glslang OpenGL SPIR-V 模式 parse 要求，且每个 shader 独立从 0 计数。
+    //     跨 stage 链接时，VS 与 FS 中不同名 uniform 会占用同一 location（如 VS 的
+    //     Color@1 与 FS 的 FogColor@1），导致 GLES linker 报 location 冲突。
+    //     GLES 中 standalone uniform 无需显式 location（MC 通过 glGetUniformLocation
+    //     动态查询），移除安全。uniform block（含 `{`，用 binding 不用 location）不受影响。
+    result = strip_uniform_locations(&result);
+
     // 1. 移除非 image 的 layout(binding=X)（对齐 MobileGlues removeLayoutBinding）
     //    注意：image 的 binding 不能移除！image 必须通过 layout(binding=N) 与
     //    glBindImageTexture(unit,...) 的 unit 对应。移除后 image 无法正确绑定。
@@ -88,7 +97,10 @@ pub fn post_process(src: &str) -> String {
             let prefix = caps.name("prefix").map(|m| m.as_str()).unwrap_or("");
             let typ = caps.name("type").map(|m| m.as_str()).unwrap_or("");
             let num = caps.name("num").map(|m| m.as_str()).unwrap_or("0");
-            format!("layout(location={}) {}out {} outColor{};", num, prefix, typ, num)
+            format!(
+                "layout(location={}) {}out {} outColor{};",
+                num, prefix, typ, num
+            )
         })
         .to_string();
 
@@ -140,6 +152,38 @@ fn strip_varying_locations(src: &str) -> String {
     re_loc_trailing
         .replace_all(&result, "layout($1) $2$3")
         .to_string()
+}
+
+/// 移除 standalone uniform 声明前的 layout(location=N)
+///
+/// preprocess 为 non-opaque uniform 注入 location（每 shader 独立从 0 计数），
+/// 跨 stage 链接时不同名 uniform 会撞 location。GLES 中 standalone uniform 无需显式
+/// location（MC 通过 glGetUniformLocation 动态查询），移除安全。
+///
+/// 仅处理 standalone uniform（无 `{`）。uniform block（含 `{`，用 binding 不用 location）
+/// 不受影响。处理三种形式：
+/// - `layout(location = N) uniform ...` → `uniform ...`
+/// - `layout(location = N, X) uniform ...` → `layout(X) uniform ...`
+/// - `layout(X, location = N) uniform ...` → `layout(X) uniform ...`
+fn strip_uniform_locations(src: &str) -> String {
+    let re_loc_only =
+        Regex::new(r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*\)\s*(uniform\b)").unwrap();
+    let re_loc_leading = Regex::new(r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*,\s*").unwrap();
+    let re_loc_trailing = Regex::new(r"(?i),\s*location\s*=\s*\d+").unwrap();
+
+    src.lines()
+        .map(|line| {
+            // 仅处理 standalone uniform 声明行（含 uniform 且不含 block 的 `{`）
+            if !line.contains("uniform") || line.contains('{') {
+                return line.to_string();
+            }
+            let l = re_loc_only.replace_all(line, "$1").to_string();
+            let l = re_loc_leading.replace_all(&l, "layout(").to_string();
+            let l = re_loc_trailing.replace_all(&l, "").to_string();
+            l.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// 修复 atomic counter 的 binding 限定符
@@ -298,6 +342,30 @@ mod tests {
     }
 
     #[test]
+    fn test_strip_uniform_location_standalone() {
+        // standalone uniform 的 location 应被移除（GLES 由 glGetUniformLocation 动态查询）
+        let input = "layout(location = 0) uniform mat4 MVP;";
+        let result = strip_uniform_locations(input);
+        assert_eq!(result, "uniform mat4 MVP;");
+    }
+
+    #[test]
+    fn test_strip_uniform_location_preserves_block() {
+        // uniform block（含 `{`）用 binding 不用 location，不应被处理
+        let input = "layout(std140) uniform Block { mat4 m; };";
+        let result = strip_uniform_locations(input);
+        assert_eq!(result, "layout(std140) uniform Block { mat4 m; };");
+    }
+
+    #[test]
+    fn test_strip_uniform_location_with_other_qualifier() {
+        // layout(location = N, std140) → layout(std140)（仅移除 location，保留其他限定符）
+        let input = "layout(location = 3, column_major) uniform mat4 M;";
+        let result = strip_uniform_locations(input);
+        assert_eq!(result, "layout(column_major) uniform mat4 M;");
+    }
+
+    #[test]
     fn test_strip_varying_location_out() {
         let input = "layout(location = 1) out vec4 fragColor;";
         let result = strip_varying_locations(input);
@@ -329,8 +397,7 @@ mod tests {
 
     #[test]
     fn test_strip_varying_location_multiple() {
-        let input =
-            "layout(location = 0) in vec3 Position;\nlayout(location = 1) flat out vec4 vertexColor;\n";
+        let input = "layout(location = 0) in vec3 Position;\nlayout(location = 1) flat out vec4 vertexColor;\n";
         let result = strip_varying_locations(input);
         assert!(result.contains("in vec3 Position;"));
         assert!(result.contains("flat out vec4 vertexColor;"));
@@ -374,7 +441,11 @@ mod tests {
         // image 的 binding 不应被移除
         let input = "layout(binding = 0, rgba32f) uniform writeonly highp image2D img;";
         let result = post_process(input);
-        assert!(result.contains("binding = 0"), "image binding should be preserved, got: {}", result);
+        assert!(
+            result.contains("binding = 0"),
+            "image binding should be preserved, got: {}",
+            result
+        );
     }
 
     #[test]

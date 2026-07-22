@@ -9,7 +9,7 @@
 //!
 //! 对齐 MobileGlues 的 translate_glsl_to_glsles 流程。
 
-use crate::shader_translator::{gles_compile, spirv_compile};
+use crate::shader_translator::{gles_compile, spirv_compile, string_pass};
 
 #[derive(Debug, Clone)]
 pub enum TranslationResult {
@@ -100,11 +100,20 @@ fn translate_internal(source: &str, stage: u32) -> TranslationResult {
     }
 
     log::warn!(
-        "[ShaderTranslator] all GLES versions failed for shader stage {}, total took {:?}",
+        "[ShaderTranslator] all GLES versions failed for shader stage {}, falling back to string_pass; total took {:?}",
         stage_name,
         total_start.elapsed()
     );
-    TranslationResult::Failed
+    // 回退到字符串级翻译（string_pass），而非直接透传桌面 GLSL 给 GLES（几乎必然编译失败）。
+    // string_pass 做版本替换、legacy 语法迁移、precision 注入等，作为 SPIR-V 管线失败的兜底。
+    let fallback = string_pass::translate(source, stage);
+    log::info!(
+        "[ShaderTranslator] string_pass fallback produced {} chars for stage {} (0x{:04X})",
+        fallback.len(),
+        stage_name,
+        stage
+    );
+    TranslationResult::Translated(fallback)
 }
 
 /// SPIR-V 中间处理 Pass

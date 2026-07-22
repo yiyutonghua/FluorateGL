@@ -37,11 +37,15 @@ pub fn compile(spv: &[u32], version: u16) -> Result<String, SpirvCrossError> {
     options.es_default_float_precision_highp = true;
     options.es_default_int_precision_highp = true;
 
-    // GLES 坐标系 Y 轴翻转（对齐 MobileGlues）
-    options.common.flip_vertex_y = true;
+    // 不翻转 Y 轴：输入是桌面 OpenGL SPIR-V（client=OpenGL，NDC Y-up），
+    // GLES 同样是 Y-up，无需翻转。MobileGlues 设 true 是因其输入方言为 Vulkan（Y-down），
+    // FluorateGL 用 Target::OpenGL（Y-up），设 true 会导致 Y 二次翻转、画面上下颠倒。
+    options.common.flip_vertex_y = false;
 
-    // Vulkan [0,w] 深度范围 → OpenGL [-w,w] 深度范围（对齐 MobileGlues）
-    options.common.fixup_clipspace = true;
+    // 不修正 clip space：桌面 OpenGL 与 GLES 都使用 [-w,w] clip space（NDC 深度 [-1,1]），
+    // 无需 remap。fixup_clipspace 假设输入是 Vulkan（[0,w]），设 true 会把 [-w,w] 错误映射，
+    // 导致深度测试全错。MobileGlues 设 true 同样是因 Vulkan 输入方言。
+    options.common.fixup_clipspace = false;
 
     // 不输出 #line 指令（我们在后处理中统一清理）
     options.common.emit_line_directives = false;

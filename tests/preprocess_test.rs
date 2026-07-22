@@ -135,6 +135,53 @@ fn preprocess_keeps_es_version_unchanged() {
 }
 
 #[test]
+fn preprocess_es_detection_not_misled_by_es_substring_in_comment() {
+    // 之前用 contains("es") 检测 ES 版本，会误匹配 meshes/textures/harness/entities
+    // 等含 "es" 子串的注释，导致桌面版本被误判为 ES 而跳过升级。
+    // 这里用含 "meshes" 注释的桌面 330 shader 验证：应升级到 450 core，而非保持 330。
+    let src = "#version 330 // entity meshes shader\nvoid main() {}\n";
+    let result = preprocess::preprocess(src);
+    assert!(
+        result.starts_with("#version 450 core"),
+        "expected upgrade to 450 core (not misjudged as ES), got: {}",
+        result
+    );
+}
+
+#[test]
+fn preprocess_binding_counter_advances_past_existing_binding() {
+    // 已有 binding 的 UBO 应推进 counter，避免后续注入的 binding 与已有值冲突。
+    // layout(std140, binding=2) uniform A; 后跟 layout(std140) uniform B;
+    // B 应被注入 binding=3（而非 0，避免与 A 的 binding=2 冲突区）。
+    let src = "#version 450 core\n\
+        layout(std140, binding = 2) uniform A { mat4 a; };\n\
+        layout(std140) uniform B { mat4 b; };\n";
+    let result = preprocess::preprocess(src);
+    assert!(
+        result.contains("layout(std140, binding = 2) uniform A"),
+        "existing binding should be preserved, got: {}",
+        result
+    );
+    assert!(
+        result.contains("layout(std140, binding=3) uniform B"),
+        "B should get binding=3 (advance past existing 2), got: {}",
+        result
+    );
+}
+
+#[test]
+fn preprocess_injects_location_for_in_with_trailing_comment() {
+    // 行尾带注释的 in/out 声明也应被注入 location
+    let src = "#version 450 core\nin vec4 color; // vertex color\nvoid main() {}\n";
+    let result = preprocess::preprocess(src);
+    assert!(
+        result.contains("layout(location=0) in vec4 color;"),
+        "expected location injected despite trailing comment, got: {}",
+        result
+    );
+}
+
+#[test]
 fn preprocess_keeps_310_es_unchanged() {
     let src = "#version 310 es\nvoid main() {}\n";
     let result = preprocess::preprocess(src);

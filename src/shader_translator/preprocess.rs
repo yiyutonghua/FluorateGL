@@ -63,9 +63,11 @@ fn remove_line_directives(source: &str) -> String {
 ///   桌面 GLSL 100-150 使用旧语法（attribute/varying/gl_FragColor），
 ///   升级到 330 core 后 glslang 可能仍因旧语法拒绝，但部分已用 in/out 的 shader 能通过。
 /// - #version < 330 且 ES 版本 → 保持不变（GLSL ES 语法与桌面不兼容，升级无意义）
-/// - #version 330-460 且非 ES → 升级到 450 core
+/// - #version 330-450 且非 ES → 升级到 450 core
 ///   （含 compatibility profile：glslang 在 OpenGL SPIR-V 模式拒绝 Compatibility，
 ///   统一替换为 450 core 去除 compatibility）
+/// - #version 460 且非 ES → 保持 460（460 是 450 超集，降级会丢失 subgroup 等特性），
+///   但规范化为 core profile（移除 compatibility）
 /// - ES 版本 → 保持不变
 fn force_glsl_version(result: &mut String) {
     let version = extract_version(result);
@@ -75,12 +77,17 @@ fn force_glsl_version(result: &mut String) {
         }
         Some(v) => {
             if let Some(ver) = parse_version_number(v) {
-                let is_es = v.to_lowercase().contains("es");
-                if ver >= 330 && ver <= 460 && !is_es {
-                    // 330-460 桌面版本统一升级到 450 core
+                let is_es = is_es_version(v);
+                if ver >= 330 && ver < 460 && !is_es {
+                    // 330-450 桌面版本统一升级到 450 core
                     // 含 compatibility profile 的也会被替换为 core（glslang 拒绝 Compatibility）
                     let re = Regex::new(r"(?m)^#version\s+\d+.*$").unwrap();
                     *result = re.replace(result, "#version 450 core").to_string();
+                } else if ver == 460 && !is_es {
+                    // 460 保持版本号，仅规范化为 core（移除 compatibility profile）
+                    // glslang OpenGL SPIR-V 模式拒绝 Compatibility，460 compatibility 需替换为 core
+                    let re = Regex::new(r"(?m)^#version\s+\d+.*$").unwrap();
+                    *result = re.replace(result, "#version 460 core").to_string();
                 } else if ver < 330 && !is_es {
                     // 桌面 GLSL 旧版本升级到 330 core（OpenGL SPIR-V 最低要求）
                     // ES 版本保持不变（语法不兼容，升级无意义）
@@ -101,6 +108,25 @@ fn parse_version_number(version_line: &str) -> Option<u32> {
         .and_then(|v| v.parse::<u32>().ok())
 }
 
+/// 判断 #version 行是否为 ES 版本
+///
+/// 精确匹配 "es" 作为独立 token（大小写不敏感）。
+/// 之前用 `contains("es")` 会误匹配 meshes/textures/harness/entities 等含 "es" 子串的
+/// 注释或文本，导致 ES 误判、跳过版本升级，进而破坏后续 layout 限定符注入。
+fn is_es_version(version_line: &str) -> bool {
+    version_line
+        .split_whitespace()
+        .any(|t| t.eq_ignore_ascii_case("es"))
+}
+
+/// 从 layout 限定符字符串中解析 binding 值
+/// 输入如 "std140, binding=3" 或 "binding = 5" → 返回 3 或 5
+fn parse_binding(qualifiers: &str) -> Option<u32> {
+    let re = Regex::new(r"binding\s*=\s*(\d+)").unwrap();
+    re.captures(qualifiers)
+        .and_then(|c| c[1].parse::<u32>().ok())
+}
+
 /// 为缺少 location 的 in/out 变量自动添加 layout(location=X)
 ///
 /// OpenGL SPIR-V 模式下，glslang parse 阶段要求所有 in/out 变量必须有 location
@@ -118,7 +144,7 @@ fn inject_missing_locations(result: &mut String) {
     // 情况1: [layout(...)] [修饰符] in/out type name[;];
     // 情况2: [修饰符] in/out type name;
     let re = Regex::new(
-        r"(?m)^(?P<indent>\s*)(?:layout\s*\(\s*(?P<layout_qual>[^)]*)\s*\)\s*)?(?P<prefix>(?:(?:flat|smooth|noperspective|centroid|patch|precise|invariant)\s+)*)(?P<qualifier>in|out)\s+(?P<rest>.+?;\s*)$"
+        r"(?m)^(?P<indent>\s*)(?:layout\s*\(\s*(?P<layout_qual>[^)]*)\s*\)\s*)?(?P<prefix>(?:(?:flat|smooth|noperspective|centroid|patch|precise|invariant)\s+)*)(?P<qualifier>in|out)\s+(?P<rest>.+?;[^\n]*)$"
     ).unwrap();
 
     // in 和 out 独立计数，分别从 0 开始（不同接口空间，不冲突）
@@ -247,8 +273,9 @@ fn inject_missing_uniform_locations(result: &mut String) {
             let type_name = caps.name("type").map(|m| m.as_str()).unwrap_or("");
             let rest = caps.name("rest").map(|m| m.as_str()).unwrap_or("");
 
-            // 跳过已有 layout 的声明
-            if line.contains("layout(") {
+            // 跳过已有 location 的声明（仅检查 location，避免误跳过有 layout(std140)
+            // 等非 location 限定符但缺 location 的 standalone uniform，导致 glslang parse 失败）
+            if line.contains("location") {
                 modified.push_str(line);
                 modified.push('\n');
                 continue;
@@ -331,18 +358,28 @@ fn inject_missing_bindings(result: &mut String) -> bool {
 
             // 检查是否已有 binding
             if qualifiers.contains("binding") {
+                // 已有 binding：解析值并推进 counter 到 max(counter, existing+1)，
+                // 避免后续注入的 binding 与已有值冲突。
+                if let Some(existing) = parse_binding(qualifiers) {
+                    binding_counter = binding_counter.max(existing + 1);
+                }
                 modified.push_str(line);
                 modified.push('\n');
                 continue;
             }
 
-            // 注入 binding
+            // 注入 binding。保留 `{` 之后的内容（单行 block 如
+            // `layout(std140) uniform Block { mat4 m; } inst;` 不丢失字段与实例名）。
+            let trailing = caps.get(0).map(|m| &line[m.end()..]).unwrap_or("");
             let new_qualifiers = if qualifiers.trim().is_empty() {
                 format!("binding={}", binding_counter)
             } else {
                 format!("{}, binding={}", qualifiers.trim(), binding_counter)
             };
-            let new_line = format!("{}layout({}) {} {} {{", indent, new_qualifiers, kind, name);
+            let new_line = format!(
+                "{}layout({}) {} {} {{{}",
+                indent, new_qualifiers, kind, name, trailing
+            );
             modified.push_str(&new_line);
             modified.push('\n');
             binding_counter += 1;
@@ -353,14 +390,16 @@ fn inject_missing_bindings(result: &mut String) -> bool {
             let name = caps.name("name").map(|m| m.as_str()).unwrap_or("");
 
             // 注入 layout(std140, binding=N) 或 layout(std430, binding=N)
+            // 保留 `{` 之后的内容（同上，单行 block 不丢失字段与实例名）
+            let trailing = caps.get(0).map(|m| &line[m.end()..]).unwrap_or("");
             let layout_qualifier = if kind == "buffer" {
                 format!("std430, binding={}", binding_counter)
             } else {
                 format!("std140, binding={}", binding_counter)
             };
             let new_line = format!(
-                "{}layout({}) {} {} {{",
-                indent, layout_qualifier, kind, name
+                "{}layout({}) {} {} {{{}",
+                indent, layout_qualifier, kind, name, trailing
             );
             modified.push_str(&new_line);
             modified.push('\n');
@@ -391,7 +430,7 @@ fn inject_missing_bindings(result: &mut String) -> bool {
 /// 破坏 ES 语法。
 fn ensure_binding_version(result: &mut String) {
     let need_upgrade = extract_version(result).and_then(|v| {
-        let is_es = v.to_lowercase().contains("es");
+        let is_es = is_es_version(v);
         if is_es {
             // ES 310+ 已支持 layout(binding)，无需升级
             return None;
