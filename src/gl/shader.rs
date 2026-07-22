@@ -242,20 +242,17 @@ pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
         // 保留 error 级诊断日志，让失败有迹可循，便于定位 SPIR-V 翻译根因。
         if pname == GL_COMPILE_STATUS && *params == 0 {
             // 主动获取 GLES 编译错误信息，便于诊断翻译后源码的编译问题
-            let mut info_buf = [0i8; 4096];
+            // 注意：不同平台 gl_bindings 的签名为 *mut c_char（i8 或 u8），用 cast 兼容
+            let mut info_buf = [0u8; 4096];
             let mut info_len: i32 = 0;
             (dispatch.get_shader_info_log)(
                 gles_id,
                 info_buf.len() as i32,
                 &mut info_len,
-                info_buf.as_mut_ptr(),
+                info_buf.as_mut_ptr() as *mut _,
             );
             let info_str = if info_len > 0 {
-                let bytes: Vec<u8> = info_buf[..info_len as usize]
-                    .iter()
-                    .map(|&b| b as u8)
-                    .collect();
-                String::from_utf8_lossy(&bytes).to_string()
+                String::from_utf8_lossy(&info_buf[..info_len as usize]).to_string()
             } else {
                 "(empty)".to_string()
             };
