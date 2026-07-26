@@ -43,12 +43,16 @@ fn remove_line_directives(source: &str) -> String {
     re.replace_all(source, "").to_string()
 }
 
-/// 规范化 GLSL 版本以满足 Vulkan target 要求
+/// 规范化 GLSL 版本以满足 Vulkan target + layout 限定符要求
 ///
 /// Vulkan target 要求 GLSL >= 140，且拒绝 compatibility profile。
+/// preprocess 注入的 `layout(binding=)` 和 `layout(location=)` 需要 GLSL 420+
+/// （GL_ARB_shading_language_420pack），否则 glslang parse 报
+/// "not supported for this version or the enabled extensions"。
+///
 /// - 无 #version → 插入 #version 450 core
-/// - #version < 140 且非 ES → 升级到 140 core（Vulkan 最低要求）
-/// - #version >= 140 且非 ES → 保持版本号，规范化为 core（移除 compatibility）
+/// - #version < 460 且非 ES → 升级到 450 core（统一支持 layout 限定符 + 移除 compatibility）
+/// - #version == 460 且非 ES → 保持 460，规范化为 core
 /// - ES 版本 → 保持不变
 fn force_glsl_version(result: &mut String) {
     let version = extract_version(result);
@@ -64,14 +68,13 @@ fn force_glsl_version(result: &mut String) {
                     return;
                 }
                 let re = Regex::new(r"(?m)^#version\s+\d+.*$").unwrap();
-                if ver < 140 {
-                    // 桌面 GLSL < 140 升级到 140 core（Vulkan 最低要求）
-                    *result = re.replace(result, "#version 140 core").to_string();
+                if ver < 460 {
+                    // 桌面 GLSL < 460 升级到 450 core
+                    // （支持 layout(binding/location)，移除 compatibility，Vulkan 接受 >= 140）
+                    *result = re.replace(result, "#version 450 core").to_string();
                 } else {
-                    // >= 140 保持版本号，仅规范化为 core（移除 compatibility profile）
-                    // glslang Vulkan 模式拒绝 Compatibility
-                    let replacement = format!("#version {} core", ver);
-                    *result = re.replace(result, replacement.as_str()).to_string();
+                    // 460 保持版本号，仅规范化为 core
+                    *result = re.replace(result, "#version 460 core").to_string();
                 }
             }
         }
@@ -331,34 +334,42 @@ mod tests {
 
     #[test]
     fn test_force_glsl_version_keep_low() {
-        // 桌面 GLSL < 140 升级到 140 core（Vulkan 最低要求）
+        // 桌面 GLSL < 460 统一升级到 450 core（支持 layout 限定符）
         let mut result = "#version 120\nvoid main() {}".to_string();
         force_glsl_version(&mut result);
-        assert!(result.starts_with("#version 140 core"));
+        assert!(result.starts_with("#version 450 core"));
     }
 
     #[test]
     fn test_force_glsl_version_keep_150() {
-        // #version 150 保持不变（Vulkan 接受 >= 140），仅规范化为 core
+        // #version 150 升级到 450 core（layout 限定符需要 420+）
         let mut result = "#version 150\nvoid main() {}".to_string();
         force_glsl_version(&mut result);
-        assert!(result.starts_with("#version 150 core"));
+        assert!(result.starts_with("#version 450 core"));
     }
 
     #[test]
     fn test_force_glsl_version_keep_330() {
-        // #version 330 保持不变（Vulkan 接受），仅规范化为 core
+        // #version 330 升级到 450 core（layout 限定符需要 420+）
         let mut result = "#version 330\nvoid main() {}".to_string();
         force_glsl_version(&mut result);
-        assert!(result.starts_with("#version 330 core"));
+        assert!(result.starts_with("#version 450 core"));
     }
 
     #[test]
     fn test_force_glsl_version_keep_450() {
-        // #version >= 450 保持不变
+        // #version 450 规范化为 core
         let mut result = "#version 450\nvoid main() {}".to_string();
         force_glsl_version(&mut result);
         assert!(result.starts_with("#version 450 core"));
+    }
+
+    #[test]
+    fn test_force_glsl_version_keep_460() {
+        // #version 460 保持版本号，仅规范化为 core
+        let mut result = "#version 460\nvoid main() {}".to_string();
+        force_glsl_version(&mut result);
+        assert!(result.starts_with("#version 460 core"));
     }
 
     #[test]
@@ -434,8 +445,8 @@ mod tests {
     fn test_preprocess_full_pipeline() {
         let input = "#version 330\nlayout(std140) uniform MyBlock {\n    mat4 data;\n};\nin vec4 color;\nout vec4 fragColor;\nuniform mat4 MVP;\nvoid main() {\n    fragColor = color;\n}\n";
         let result = preprocess(input);
-        // Vulkan target 接受 330，版本保持（仅规范化为 core）
-        assert!(result.contains("#version 330 core"));
+        // 版本升级到 450 core（layout 限定符需要 420+）
+        assert!(result.contains("#version 450 core"));
         // UBO 应有 binding
         assert!(result.contains("layout(std140, binding=0) uniform MyBlock"));
         // in/out 应有 location，且 in/out 独立计数（都从 0 开始）
@@ -443,9 +454,9 @@ mod tests {
         assert!(result.contains("layout(location=0) out vec4 fragColor;"));
     }
 
-    /// Vulkan target 下 #version 150 保持不变（glslang 接受 >= 140）
+    /// preprocess 将 #version 150 升级到 450 core（layout 限定符需要 420+）
     #[test]
-    fn test_preprocess_keeps_version_150() {
+    fn test_preprocess_upgrades_version_150() {
         let input = "#version 150\n\
             uniform mat4 ModelViewMat;\n\
             in vec3 Position;\n\
@@ -454,10 +465,10 @@ mod tests {
                 gl_Position = ModelViewMat * vec4(Position, 1.0);\n\
             }\n";
         let result = preprocess(input);
-        // 版本保持 150（Vulkan 接受），仅规范化为 core
+        // 版本升级到 450 core
         assert!(
-            result.contains("#version 150 core"),
-            "expected #version 150 core, got: {}",
+            result.contains("#version 450 core"),
+            "expected #version 450 core, got: {}",
             result
         );
         // in/out 应有 location
