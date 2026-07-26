@@ -440,14 +440,8 @@ vec4 minecraft_sample_lightmap(sampler2D lightMap, ivec2 uv) {
     return texture(lightMap, clamp(uv / 256.0, vec2(0.0), vec2(1.0)));
 }"#;
         let result = fix_minecraft_lightmap(input);
-        assert!(
-            result.contains("uv / 2"),
-            "整数除法 uv / 2 不应被修改"
-        );
-        assert!(
-            result.contains("vec2(uv) / 256.0"),
-            "浮点除法应被修复"
-        );
+        assert!(result.contains("uv / 2"), "整数除法 uv / 2 不应被修改");
+        assert!(result.contains("vec2(uv) / 256.0"), "浮点除法应被修复");
     }
 
     // ── strip_line_directives 测试 ──
@@ -513,10 +507,7 @@ vec4 minecraft_sample_lightmap(sampler2D lightMap, ivec2 uv) {
     fn test_strip_mc_version_comment_none() {
         let input = "// normal comment\nvoid main() {}\n";
         let result = strip_mc_version_comment(input);
-        assert_eq!(
-            result, input,
-            "普通注释不应被移除"
-        );
+        assert_eq!(result, input, "普通注释不应被移除");
     }
 
     // ── translate 集成测试（确保不回归） ──
