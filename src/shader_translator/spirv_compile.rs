@@ -1,20 +1,18 @@
 //! GLSL → SPIR-V 编译模块
 //!
 //! 使用 glslang crate 将桌面 GLSL 编译为 SPIR-V 字节码。
-//! 本分支（glslang-targetvk）实验性使用 Vulkan target：
+//! 本分支（glslang-targetvk）使用 Vulkan target：
 //! - target = Vulkan 1.2 + SPIR-V 1.5
 //! - ShaderOptions: AUTO_MAP_BINDINGS | AUTO_MAP_LOCATIONS | VULKAN_RULES_RELAXED
 //!
-//! 背景：glslang 0.8.1 的 Program::compile 硬编码了 VULKAN_RULES | SPV_RULES，
-//! 即使 target 是 OpenGL，compile 阶段也按 Vulkan 规则校验。使用 Target::Vulkan
-//! 使 client/target 标记与实际校验行为一致，避免 OpenGL target 下 parse 阶段
-//! 与 compile 阶段规则不一致的问题。
+//! 背景：glslang 0.8.1 的 Program::compile 硬编码 VULKAN_RULES，
+//! 使用 Target::Vulkan 使 client/target 标记与实际校验行为一致。
 //!
 //! Vulkan target 要求：
-//! - GLSL >= 140（preprocess 已升级到 >= 330，满足）
+//! - GLSL >= 140（preprocess 规范化到 >= 140，满足）
 //! - 所有 in/out 有 location（preprocess 已注入，满足）
 //! - 所有 UBO/SSBO 有 binding（preprocess 已注入，满足）
-//! - 独立 non-opaque uniform 需包装进 UBO（VULKAN_RULES_RELAXED 可能放宽，待验证）
+//! - 独立 non-opaque uniform 需包装进 UBO（VULKAN_RULES_RELAXED 不放宽）
 
 use glslang::{
     Compiler, CompilerOptions, ShaderInput, ShaderMessage, ShaderOptions,

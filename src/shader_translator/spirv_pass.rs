@@ -1,13 +1,11 @@
 //! SPIR-V 翻译管线编排模块
 //!
 //! 协调以下子模块完成桌面 GLSL → GLSL ES 的完整翻译：
-//! 1. preprocess：GLSL 预处理（移除 #line、版本升级、注入 location/binding）
-//! 2. spirv_compile：GLSL → SPIR-V 编译（glslang）
+//! 1. preprocess：GLSL 预处理（移除 #line、规范化版本、注入 location/binding）
+//! 2. spirv_compile：GLSL → SPIR-V 编译（glslang, Vulkan target）
 //! 3. spirv_pass：SPIR-V 中间处理 Pass（预留扩展点，当前为直通）
 //! 4. gles_compile：SPIR-V → GLSL ES 编译（spirv-cross2）
 //! 5. postprocess：GLSL ES 后处理（移除 binding、处理 outColor、precision）
-//!
-//! 对齐 MobileGlues 的 translate_glsl_to_glsles 流程。
 
 use crate::shader_translator::{gles_compile, spirv_compile, string_pass};
 
