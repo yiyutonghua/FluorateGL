@@ -206,8 +206,14 @@ void main() {
 "#;
         let translated = assert_translated_to_gles(src, GL_VERTEX_SHADER, "simple_vertex");
         // 翻译后应包含关键变量
-        assert!(translated.contains("gl_Position"), "vertex shader 应保留 gl_Position");
-        assert!(translated.contains("vertexColor"), "vertex shader 应保留 vertexColor");
+        assert!(
+            translated.contains("gl_Position"),
+            "vertex shader 应保留 gl_Position"
+        );
+        assert!(
+            translated.contains("vertexColor"),
+            "vertex shader 应保留 vertexColor"
+        );
     }
 
     #[test]
@@ -220,7 +226,10 @@ void main() {
 }
 "#;
         let translated = assert_translated_to_gles(src, GL_FRAGMENT_SHADER, "simple_fragment");
-        assert!(translated.contains("fragColor"), "fragment shader 应保留 fragColor");
+        assert!(
+            translated.contains("fragColor"),
+            "fragment shader 应保留 fragColor"
+        );
     }
 
     #[test]
@@ -240,8 +249,14 @@ void main() {
 }
 "#;
         let translated = assert_translated_to_gles(src, GL_VERTEX_SHADER, "ubo_shader");
-        assert!(translated.contains("ModelViewMat"), "UBO 成员 ModelViewMat 应保留");
-        assert!(translated.contains("ColorModulator"), "UBO 成员 ColorModulator 应保留");
+        assert!(
+            translated.contains("ModelViewMat"),
+            "UBO 成员 ModelViewMat 应保留"
+        );
+        assert!(
+            translated.contains("ColorModulator"),
+            "UBO 成员 ColorModulator 应保留"
+        );
     }
 
     #[test]

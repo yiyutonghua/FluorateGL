@@ -21,7 +21,7 @@
 //! Vulkan target 要求：GLSL >= 140，所有 in/out 有 location，UBO/SSBO 有 binding。
 //! preprocess 负责注入这些。
 
-use shaderc::{Compiler, CompileOptions, OptimizationLevel, ShaderKind, TargetEnv, EnvVersion};
+use shaderc::{CompileOptions, Compiler, EnvVersion, OptimizationLevel, ShaderKind, TargetEnv};
 use std::sync::OnceLock;
 
 // GL shader stage 常量
@@ -46,19 +46,14 @@ static COMPILER: OnceLock<Option<Compiler>> = OnceLock::new();
 /// - `None`：初始化失败（glslang_initialize_process 失败，通常表示系统问题）
 fn get_compiler() -> Option<&'static Compiler> {
     COMPILER
-        .get_or_init(|| {
-            match Compiler::new() {
-                Ok(c) => {
-                    log::info!("[ShaderTranslator] shaderc Compiler initialized");
-                    Some(c)
-                }
-                Err(e) => {
-                    log::error!(
-                        "[ShaderTranslator] shaderc Compiler::new() failed: {:?}",
-                        e
-                    );
-                    None
-                }
+        .get_or_init(|| match Compiler::new() {
+            Ok(c) => {
+                log::info!("[ShaderTranslator] shaderc Compiler initialized");
+                Some(c)
+            }
+            Err(e) => {
+                log::error!("[ShaderTranslator] shaderc Compiler::new() failed: {:?}", e);
+                None
             }
         })
         .as_ref()
