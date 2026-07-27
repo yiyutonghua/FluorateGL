@@ -2,7 +2,7 @@ name: Build for Android aarch64
 
 on:
   push:
-    branches: [ main, glslang-targetvk ]
+    branches: [ main]
 
 jobs:
   build:
@@ -34,7 +34,7 @@ jobs:
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r27c   # 你也可以换成 r26 等稳定版本
+          ndk-version: r27c
           link-to-sdk: true
 
       # 5. 设置环境变量（让 cargo-ndk 能找到 NDK，并为 shaderc 传递 CMake 参数）
@@ -53,6 +53,6 @@ jobs:
       - name: Upload .so artifact
         uses: actions/upload-artifact@v4
         with:
-        name: libfluorategl-android-aarch64
-        path: target/aarch64-linux-android/release/libfluorategl.so
+          name: libfluorategl-android-aarch64
+          path: target/aarch64-linux-android/release/libfluorategl.so
 
