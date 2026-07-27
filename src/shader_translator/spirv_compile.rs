@@ -109,42 +109,6 @@ fn stderr_sync(msg: &str) {
     let _ = handle.flush();
 }
 
-/// 将 preprocessed source 完整写入文件，绕过日志后端截断
-///
-/// 日志后端只打印了前 2000 chars，大 shader（5302 chars）后 3300 chars
-/// 未知，无法判断 parse 崩溃是否由后续内容触发。写文件可拿到完整源码，
-/// 便于本地用 glslangValidator 命令行复现。
-///
-/// 写入路径优先级：
-/// 1. /data/local/tmp/shader_<stage>_<n>.glsl（FCL 环境 app 可写）
-/// 2. 失败则跳过（不影响主流程）
-fn dump_preprocessed_to_file(stage: u32, source: &str) {
-    use std::fs;
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = format!("/data/local/tmp/shader_{:04X}_{}.glsl", stage, n);
-    match fs::write(&path, source) {
-        Ok(_) => {
-            stderr_sync(&format!(
-                "[ShaderTranslator] DUMPED preprocessed source for stage 0x{:04X} to {} ({} chars)",
-                stage,
-                path,
-                source.len()
-            ));
-        }
-        Err(e) => {
-            stderr_sync(&format!(
-                "[ShaderTranslator] FAILED to dump preprocessed source to {}: {} (errno {:?})",
-                path,
-                e,
-                e.raw_os_error()
-            ));
-        }
-    }
-}
-
 /// 将 GLSL 源码编译为 SPIR-V 字节码
 ///
 /// 流程：预处理 → glslang create → set_options(VULKAN_RULES_RELAXED) →
@@ -256,15 +220,6 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
         preprocessed.chars().take(2000).collect::<String>()
     );
     log::logger().flush();
-    // 诊断：完整 preprocessed 写入文件，绕过日志后端截断
-    // 大 shader（>5000 chars）的 parse 崩溃可能与后 3000 chars 内容有关，
-    // 必须拿到完整源码才能本地复现。
-    dump_preprocessed_to_file(stage, &preprocessed);
-    stderr_sync(&format!(
-        "[ShaderTranslator] ENTERING preprocess+parse for stage 0x{:04X} (preprocessed {} chars dumped to file)",
-        stage,
-        preprocessed.len()
-    ));
 
     log::debug!(
         "[ShaderTranslator] step4: calling glslang_shader_preprocess for stage 0x{:04X}",
