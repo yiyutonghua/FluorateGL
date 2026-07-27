@@ -19,11 +19,13 @@ use regex::Regex;
 ///
 /// 执行顺序：
 /// 1. 移除 #line 指令
-/// 2. 规范化 GLSL 版本（无版本插入 450，< 140 升级到 140，移除 compatibility profile）
-/// 3. 为缺少 location 的 in/out 变量自动添加 layout(location=X)（in/out 独立计数）
-/// 4. 为缺少 binding 的 UBO/SSBO 自动添加 layout(binding=X)
+/// 2. 移除 MC 的 `/*#version N*\/` 注释（moj_import 文本拼接产物，会干扰 glslang parse）
+/// 3. 规范化 GLSL 版本（无版本插入 450，< 140 升级到 140，移除 compatibility profile）
+/// 4. 为缺少 location 的 in/out 变量自动添加 layout(location=X)（in/out 独立计数）
+/// 5. 为缺少 binding 的 UBO/SSBO 自动添加 layout(binding=X)
 pub fn preprocess(source: &str) -> String {
     let mut result = remove_line_directives(source);
+    strip_mc_version_comment(&mut result);
     force_glsl_version(&mut result);
     inject_missing_locations(&mut result);
     inject_missing_bindings(&mut result);
@@ -41,6 +43,28 @@ pub fn extract_version(source: &str) -> Option<&str> {
 fn remove_line_directives(source: &str) -> String {
     let re = Regex::new(r"(?m)^\s*#line\s+.*$(\n|$)?").unwrap();
     re.replace_all(source, "").to_string()
+}
+
+/// 移除 Minecraft moj_import 产生的 `/*#version N*/` 注释
+///
+/// MC 在 Java 端文本拼接 include 时会留下被注释掉的旧 #version 行，
+/// 形如 `/*#version 330*/`。虽然对桌面 GLSL 是合法注释，但某些 glslang
+/// 版本在 Vulkan target 下 parse 时会受其干扰（可能与 #version 检测逻辑
+/// 冲突），导致静默失败。在 preprocess 阶段主动移除，与 string_pass 回退
+/// 路径保持一致。
+///
+/// 正则与 string_pass::strip_mc_version_comment 保持一致。
+fn strip_mc_version_comment(result: &mut String) {
+    let re = Regex::new(r"/\*#version\s+\d+\s*\*/").unwrap();
+    let new_result = re.replace_all(result, "").into_owned();
+    if new_result.len() != result.len() {
+        log::debug!(
+            "[ShaderTranslator] preprocess 移除了 /*#version N*/ 注释 ({} -> {} chars)",
+            result.len(),
+            new_result.len()
+        );
+        *result = new_result;
+    }
 }
 
 /// 规范化 GLSL 版本以满足 Vulkan target + layout 限定符要求
@@ -452,6 +476,24 @@ mod tests {
         // in/out 应有 location，且 in/out 独立计数（都从 0 开始）
         assert!(result.contains("layout(location=0) in vec4 color;"));
         assert!(result.contains("layout(location=0) out vec4 fragColor;"));
+    }
+
+    /// 验证移除 MC moj_import 产生的 /*#version N*/ 注释
+    /// 复现 1.21.11 场景：fragment shader 源码含 `/*#version 330*/` 注释
+    #[test]
+    fn test_strip_mc_version_comment_in_preprocess() {
+        let input = "#version 330\n#line 0 1\n/*#version 330*/\nvoid main() {}\n";
+        let result = preprocess(input);
+        // /*#version 330*/ 应被移除
+        assert!(
+            !result.contains("/*#version"),
+            "/*#version N*/ 注释应被移除，实际: {}",
+            result
+        );
+        // #line 也应被移除
+        assert!(!result.contains("#line"));
+        // 版本应升级到 450 core
+        assert!(result.contains("#version 450 core"));
     }
 
     /// preprocess 将 #version 150 升级到 450 core（layout 限定符需要 420+）

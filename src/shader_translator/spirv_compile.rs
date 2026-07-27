@@ -84,17 +84,28 @@ unsafe fn program_log(program: *mut sys::glslang_program_t) -> String {
         .into_owned()
 }
 
+/// 同时输出 ERROR 到 log 框架和 stderr（诊断用途）
+///
+/// 背景：方案C上线后发现 compile() 返回 None 但 log::error! 日志缺失
+/// （疑似 Android logcat 缓冲/flush 时机问题）。stderr 能绕过 log 框架
+/// 直接写入 fd，确保关键失败信息可见。在 Android 上表现为 System.err tag。
+/// 诊断期使用，定位到根因后可移除 eprintln!。
+fn error_dual(msg: &str) {
+    log::error!("{}", msg);
+    eprintln!("{}", msg);
+}
+
 /// 将 GLSL 源码编译为 SPIR-V 字节码
 ///
 /// 流程：预处理 → glslang create → set_options(VULKAN_RULES_RELAXED) →
 ///       preprocess → parse → program link → SPIRV generate
 ///
-/// 失败时返回 None 并输出 error 级别日志。
+/// 失败时返回 None 并输出 error 级别日志（同时写 stderr 防吞）。
 pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
     // 确保全局 glslang process 已初始化（借用 glslang crate 的全局 OnceLock）
     if glslang::Compiler::acquire().is_none() {
-        log::error!(
-            "[ShaderTranslator] glslang compiler not available (glslang_initialize_process failed)"
+        error_dual(
+            "[ShaderTranslator] glslang compiler not available (glslang_initialize_process failed)",
         );
         return None;
     }
@@ -102,27 +113,26 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
     let glsl_stage = match map_gl_stage(stage) {
         Some(s) => s,
         None => {
-            log::error!(
+            error_dual(&format!(
                 "[ShaderTranslator] map_gl_stage returned None for stage 0x{:04X}; source (first 500 chars):\n{}",
                 stage,
                 source.chars().take(500).collect::<String>()
-            );
+            ));
             return None;
         }
     };
 
-    // 预处理 GLSL：移除 #line、规范化版本、注入 location/binding
+    // 预处理 GLSL：移除 #line、移除 /*#version*/ 注释、规范化版本、注入 location/binding
     let preprocessed = crate::shader_translator::preprocess::preprocess(source);
 
     // code 必须以 null 结尾，且保持存活到 parse 完成
     let code = match CString::new(preprocessed.as_str()) {
         Ok(c) => c,
         Err(e) => {
-            log::error!(
+            error_dual(&format!(
                 "[ShaderTranslator] GLSL source contains null byte for stage 0x{:04X}: {:?}",
-                stage,
-                e
-            );
+                stage, e
+            ));
             return None;
         }
     };
@@ -156,12 +166,16 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
     };
 
     // 步骤 1：创建 shader
+    log::debug!(
+        "[ShaderTranslator] step1: calling glslang_shader_create for stage 0x{:04X}",
+        stage
+    );
     let shader_ptr = unsafe { sys::glslang_shader_create(&input) };
     if shader_ptr.is_null() {
-        log::error!(
+        error_dual(&format!(
             "[ShaderTranslator] glslang_shader_create returned null for stage 0x{:04X}",
             stage
-        );
+        ));
         return None;
     }
     let _shader_guard = ShaderHandle(shader_ptr);
@@ -178,46 +192,77 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
     let empty_preamble = CString::new("").unwrap();
     unsafe { sys::glslang_shader_set_preamble(shader_ptr, empty_preamble.as_ptr()) };
 
-    // 步骤 4：preprocess
+    // 步骤 4：preprocess + parse
+    // 标记进入，并打印 preprocessed 内容（前 2000 chars）用于诊断
     log::info!(
         "[ShaderTranslator] ENTERING glslang preprocess+parse for stage 0x{:04X} (source {} chars, preprocessed {} chars)",
         stage,
         source.len(),
         preprocessed.len()
     );
+    log::debug!(
+        "[ShaderTranslator] preprocessed source for stage 0x{:04X} (first 2000 chars):\n{}",
+        stage,
+        preprocessed.chars().take(2000).collect::<String>()
+    );
     log::logger().flush();
-    if unsafe { sys::glslang_shader_preprocess(shader_ptr, &input) } == 0 {
+
+    log::debug!(
+        "[ShaderTranslator] step4: calling glslang_shader_preprocess for stage 0x{:04X}",
+        stage
+    );
+    let preprocess_ret = unsafe { sys::glslang_shader_preprocess(shader_ptr, &input) };
+    log::debug!(
+        "[ShaderTranslator] glslang_shader_preprocess returned {} for stage 0x{:04X}",
+        preprocess_ret,
+        stage
+    );
+    if preprocess_ret == 0 {
         let log = unsafe { shader_log(shader_ptr) };
-        log::error!(
+        error_dual(&format!(
             "[ShaderTranslator] glslang preprocess FAILED for stage 0x{:04X}: {}; source (first 500 chars):\n{}",
             stage,
             log,
             source.chars().take(500).collect::<String>()
-        );
+        ));
         log::logger().flush();
         return None;
     }
 
     // 步骤 5：parse
-    if unsafe { sys::glslang_shader_parse(shader_ptr, &input) } == 0 {
+    log::debug!(
+        "[ShaderTranslator] step5: calling glslang_shader_parse for stage 0x{:04X}",
+        stage
+    );
+    let parse_ret = unsafe { sys::glslang_shader_parse(shader_ptr, &input) };
+    log::debug!(
+        "[ShaderTranslator] glslang_shader_parse returned {} for stage 0x{:04X}",
+        parse_ret,
+        stage
+    );
+    if parse_ret == 0 {
         let log = unsafe { shader_log(shader_ptr) };
-        log::error!(
+        error_dual(&format!(
             "[ShaderTranslator] glslang parse FAILED for stage 0x{:04X}: {}; source (first 500 chars):\n{}",
             stage,
             log,
             source.chars().take(500).collect::<String>()
-        );
+        ));
         log::logger().flush();
         return None;
     }
 
     // 步骤 6：创建 program 并链接
+    log::debug!(
+        "[ShaderTranslator] step6: calling glslang_program_create for stage 0x{:04X}",
+        stage
+    );
     let program_ptr = unsafe { sys::glslang_program_create() };
     if program_ptr.is_null() {
-        log::error!(
+        error_dual(&format!(
             "[ShaderTranslator] glslang_program_create returned null for stage 0x{:04X}",
             stage
-        );
+        ));
         return None;
     }
     let _program_guard = ProgramHandle(program_ptr);
@@ -227,14 +272,24 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
     let messages = sys::glslang_messages_t::DEFAULT
         | sys::glslang_messages_t::VULKAN_RULES
         | sys::glslang_messages_t::SPV_RULES;
-    if unsafe { sys::glslang_program_link(program_ptr, messages.0) } == 0 {
+    log::debug!(
+        "[ShaderTranslator] step6: calling glslang_program_link for stage 0x{:04X}",
+        stage
+    );
+    let link_ret = unsafe { sys::glslang_program_link(program_ptr, messages.0) };
+    log::debug!(
+        "[ShaderTranslator] glslang_program_link returned {} for stage 0x{:04X}",
+        link_ret,
+        stage
+    );
+    if link_ret == 0 {
         let log = unsafe { program_log(program_ptr) };
-        log::error!(
+        error_dual(&format!(
             "[ShaderTranslator] glslang program link FAILED for stage 0x{:04X}: {}; source (first 500 chars):\n{}",
             stage,
             log,
             source.chars().take(500).collect::<String>()
-        );
+        ));
         log::logger().flush();
         return None;
     }
@@ -252,11 +307,10 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
     let size = unsafe { sys::glslang_program_SPIRV_get_size(program_ptr) };
     if size == 0 {
         let log = unsafe { program_log(program_ptr) };
-        log::error!(
+        error_dual(&format!(
             "[ShaderTranslator] glslang SPIRV_generate produced 0 words for stage 0x{:04X}: {}",
-            stage,
-            log
-        );
+            stage, log
+        ));
         log::logger().flush();
         return None;
     }
