@@ -8,12 +8,17 @@ crate-type = ["cdylib", "rlib"]
 name = "fluorategl"
 
 [dependencies]
+bitflags = "2.13.1"
 bytemuck = { version = "1", default-features = false }
 ctor = "1.0.9"
+glam = "0.33.2"
 libc = "0.2.186"
+libloading = "0.9.0"
 log = "0.4.33"
 regex = "1"
+rustc-hash = "2.1.3"
 shaderc = { version = "0.10.1", features = ["build-from-source"] }
+slotmap = "1.1.1"
 spirv-cross2 = { version = "0.7.1", default-features = false, features = ["glsl","cpp"] }
 
 [profile.release]
