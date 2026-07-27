@@ -1,26 +1,28 @@
 //! GLSL → SPIR-V 编译模块
 //!
-//! 使用 glslang crate 将桌面 GLSL 编译为 SPIR-V 字节码。
-//! 对齐 MobileGlues 的 glslang 配置：
-//! - client = OpenGL（EShClientOpenGL + EShTargetOpenGL_450）
-//! - target_language = SPIR-V 1.5（EShTargetSpv + EShTargetSpv_1_5）
-//! - ShaderOptions: AUTO_MAP_BINDINGS | AUTO_MAP_LOCATIONS | VULKAN_RULES_RELAXED
+//! 使用 shaderc（Google 维护的 glslang 封装层）将桌面 GLSL 编译为 SPIR-V 字节码。
 //!
-//! 注意：MobileGlues 的 C++ API 通过 setEnvInput(EShClientVulkan) + setEnvClient(EShClientOpenGL)
-//! 实现"Vulkan 输入 + OpenGL 客户端"的混合模式。Rust crate 的 glslang_input_t 只有一个
-//! client 字段，但 setEnvClient 会覆盖 setEnvInput 设置的 client，所以最终效果等价于
-//! 纯 OpenGL 客户端 + SPIR-V 目标。这里使用 Target::OpenGL { spirv_version: Some(...) }。
+//! ## 为什么用 shaderc 而非直接 FFI 调用 glslang_sys
 //!
-//! 相比 Target::Vulkan，OpenGL SPIR-V 模式更宽松：
-//! - 允许独立 non-opaque uniform（无需包装进 UBO block）
-//! - 允许省略 layout(location)（由 AUTO_MAP_LOCATIONS 自动分配）
-//! - 允许省略 layout(binding)（由 AUTO_MAP_BINDINGS 自动分配）
-//! - 要求 GLSL >= 330（Vulkan 仅要求 >= 140）
+//! 之前直接调用 glslang_sys C API（方案C），在 parse 阶段对大 fragment shader
+//! 触发崩溃，且无法被 catch_unwind 捕获、关键诊断日志被日志后端吞掉。
+//!
+//! shaderc 的优势：
+//! - 高层 safe Rust API，无需手动管理 shader/program 生命周期
+//! - 内部用 C++ try/catch 兜底，即使底层 glslang 崩溃也返回 `Error` 而非 native crash
+//! - 默认 target 为 Vulkan，自动处理 VULKAN_RULES_RELAXED 等规则
+//! - `Error::CompilationError(String)` 直接携带 glslang 完整诊断信息
+//!
+//! ## 编译流程
+//!
+//! 1. preprocess：移除 #line、移除 /*#version*/ 注释、规范化版本、注入 location/binding
+//! 2. shaderc compile_into_spirv：GLSL → SPIR-V（target=Vulkan1_2, SPIRV1_5）
+//!
+//! Vulkan target 要求：GLSL >= 140，所有 in/out 有 location，UBO/SSBO 有 binding。
+//! preprocess 负责注入这些。
 
-use glslang::{
-    Compiler, CompilerOptions, OpenGlVersion, ShaderInput, ShaderMessage, ShaderOptions,
-    ShaderSource, ShaderStage, SourceLanguage, SpirvVersion, Target,
-};
+use shaderc::{CompileOptions, Compiler, EnvVersion, OptimizationLevel, ShaderKind, TargetEnv};
+use std::sync::OnceLock;
 
 // GL shader stage 常量
 pub const GL_VERTEX_SHADER: u32 = 0x8B31;
@@ -30,131 +32,145 @@ pub const GL_TESS_CONTROL_SHADER: u32 = 0x8E88;
 pub const GL_TESS_EVALUATION_SHADER: u32 = 0x8E87;
 pub const GL_COMPUTE_SHADER: u32 = 0x91B9;
 
+/// 全局 Compiler 单例
+///
+/// shaderc::Compiler 构造代价高（内部初始化 glslang 全局状态），
+/// 用 OnceLock 缓存，整个进程生命周期复用一个实例。
+/// Compiler 是 Send+Sync，可安全跨线程使用。
+static COMPILER: OnceLock<Option<Compiler>> = OnceLock::new();
+
+/// 获取全局 Compiler 实例
+///
+/// 返回 `Option<&Compiler>`：
+/// - `Some(&compiler)`：编译器初始化成功
+/// - `None`：初始化失败（glslang_initialize_process 失败，通常表示系统问题）
+fn get_compiler() -> Option<&'static Compiler> {
+    COMPILER
+        .get_or_init(|| match Compiler::new() {
+            Ok(c) => {
+                log::info!("[ShaderTranslator] shaderc Compiler initialized");
+                Some(c)
+            }
+            Err(e) => {
+                log::error!("[ShaderTranslator] shaderc Compiler::new() failed: {:?}", e);
+                None
+            }
+        })
+        .as_ref()
+}
+
 /// 将 GLSL 源码编译为 SPIR-V 字节码
 ///
-/// 流程：预处理 → glslang parse → glslang compile → SPIR-V
-/// 失败时返回 None 并输出 error 级别日志。
+/// 流程：preprocess（注入 location/binding）→ shaderc compile_into_spirv
+///
+/// 失败时返回 None 并输出 error 级别日志（含 glslang 诊断信息）。
 pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
-    let compiler = match Compiler::acquire() {
+    let compiler = match get_compiler() {
         Some(c) => c,
         None => {
-            log::error!(
-                "[ShaderTranslator] glslang compiler not available (glslang_initialize_process failed)"
-            );
+            log::error!("[ShaderTranslator] shaderc compiler not available");
             return None;
         }
     };
-    let glsl_stage = match map_gl_stage(stage) {
-        Some(s) => s,
+
+    let kind = match map_gl_stage(stage) {
+        Some(k) => k,
         None => {
             log::error!(
-                "[ShaderTranslator] map_gl_stage returned None for stage 0x{:04X}; source (first 500 chars):\n{}",
-                stage,
-                source.chars().take(500).collect::<String>()
+                "[ShaderTranslator] map_gl_stage returned None for stage 0x{:04X}",
+                stage
             );
             return None;
         }
     };
 
-    // 预处理 GLSL：移除 #line、强制版本 >= 150、补全 location/binding
+    // 预处理 GLSL：移除 #line、移除 /*#version*/ 注释、规范化版本、注入 location/binding
     let preprocessed = crate::shader_translator::preprocess::preprocess(source);
 
-    let src = ShaderSource::from(preprocessed.as_str());
-
-    // 对齐 MobileGlues: OpenGL 客户端 + SPIR-V 1.5 目标
-    // EShClientOpenGL + EShTargetOpenGL_450 + EShTargetSpv + EShTargetSpv_1_5
-    // 相比 Vulkan 目标，OpenGL SPIR-V 允许独立 uniform、省略 location/binding
-    let options = CompilerOptions {
-        source_language: SourceLanguage::GLSL,
-        target: Target::OpenGL {
-            version: OpenGlVersion::OpenGL4_5,
-            spirv_version: Some(SpirvVersion::SPIRV1_5),
-        },
-        version_profile: None,
-        messages: ShaderMessage::SUPPRESS_WARNINGS,
-    };
-
-    let input = match ShaderInput::new(
-        &src,
-        glsl_stage,
-        &options,
-        None::<&[(&str, Option<&str>)]>,
-        None,
-    ) {
-        Ok(input) => input,
-        Err(e) => {
-            log::error!(
-                "[ShaderTranslator] glslang parse failed for stage 0x{:04X}: {:?}; source (first 500 chars):\n{}",
-                stage,
-                e,
-                source.chars().take(500).collect::<String>()
-            );
-            return None;
-        }
-    };
-
-    let mut shader = match compiler.create_shader(input) {
-        Ok(shader) => shader,
-        Err(e) => {
-            log::error!(
-                "[ShaderTranslator] glslang shader creation failed for stage 0x{:04X}: {:?}; source (first 500 chars):\n{}",
-                stage,
-                e,
-                source.chars().take(500).collect::<String>()
-            );
-            return None;
-        }
-    };
-
-    // 对齐 MobileGlues: 开启 AutoMapBindings + AutoMapLocations + VulkanRulesRelaxed
-    shader.options(
-        ShaderOptions::AUTO_MAP_BINDINGS
-            | ShaderOptions::AUTO_MAP_LOCATIONS
-            | ShaderOptions::VULKAN_RULES_RELAXED,
-    );
-
-    // glslang compile 是 FFI 调用（C++ 代码），native 崩溃（segfault/SIGABRT）
-    // 无法被 catch_unwind 捕获。此处用 info 级日志 + flush 标记进入/退出，
-    // 若崩溃后日志只有 "ENTERING" 无 "EXITED"，则确认崩溃在 glslang 内部。
-    log::info!(
-        "[ShaderTranslator] ENTERING glslang compile for stage 0x{:04X} (source {} chars, preprocessed {} chars)",
+    log::debug!(
+        "[ShaderTranslator] ENTERING shaderc compile for stage 0x{:04X} (source {} chars, preprocessed {} chars)",
         stage,
         source.len(),
         preprocessed.len()
     );
-    log::logger().flush();
-    match shader.compile() {
-        Ok(spv) => {
+
+    // 构造编译选项
+    // - target: Vulkan 1.2（支持现代 SPIR-V 特性）
+    // - optimization: Performance（启用 SPIRV-Tools 优化）
+    let mut options = match CompileOptions::new() {
+        Ok(o) => o,
+        Err(e) => {
+            log::error!(
+                "[ShaderTranslator] shaderc CompileOptions::new() failed: {:?}",
+                e
+            );
+            return None;
+        }
+    };
+    options.set_target_env(TargetEnv::Vulkan, EnvVersion::Vulkan1_2 as u32);
+    // 不做优化：Performance 级别会 strip OpName（变量名），导致 spirv-cross 反编译时
+    // 用 fallback 名（如 `_13`），MC 的 glGetUniformLocation 按变量名查找会失败。
+    // Zero 级别保留所有 debug info（OpName/OpMemberName），spirv-cross 能用原始变量名。
+    options.set_optimization_level(OptimizationLevel::Zero);
+    // 生成 debug info：确保 OpName/OpMemberName/OpLine/OpSource 等诊断指令保留。
+    // spirv-cross 依赖 OpName 还原变量名（如 sampler `Tex`、UBO 成员 `ModelViewMat`）。
+    options.set_generate_debug_info();
+    // 自动给没有显式 binding 的 uniform（包括 sampler）分配 binding point。
+    // Vulkan target 要求所有 opaque uniform（sampler/image/UBO/SSBO）必须有 binding。
+    // 桌面 GLSL 允许省略 binding（由链接器分配），preprocess 已给 UBO/SSBO 注入 binding，
+    // 但独立 sampler（如 `uniform sampler2D Tex;`）仍缺 binding，用此选项自动分配。
+    // 不会影响已有显式 binding 的 uniform。
+    options.set_auto_bind_uniforms(true);
+
+    // 执行编译
+    let result = compiler.compile_into_spirv(
+        &preprocessed,
+        kind,
+        "shader.glsl", // 用于诊断的文件名
+        "main",        // 入口点（GLSL 默认 main）
+        Some(&options),
+    );
+
+    match result {
+        Ok(artifact) => {
+            let spv: Vec<u32> = artifact.as_binary().to_vec();
             log::info!(
-                "[ShaderTranslator] EXITED glslang compile OK for stage 0x{:04X} (SPIR-V {} words)",
+                "[ShaderTranslator] EXITED shaderc compile OK for stage 0x{:04X} (SPIR-V {} words)",
                 stage,
                 spv.len()
             );
-            log::logger().flush();
             Some(spv)
+        }
+        Err(shaderc::Error::CompilationError(code, msg)) => {
+            log::error!(
+                "[ShaderTranslator] shaderc compile FAILED for stage 0x{:04X} (code {}): {}; source (first 500 chars):\n{}",
+                stage,
+                code,
+                msg,
+                source.chars().take(500).collect::<String>()
+            );
+            None
         }
         Err(e) => {
             log::error!(
-                "[ShaderTranslator] EXITED glslang compile FAILED for stage 0x{:04X}: {:?}; source (first 500 chars):\n{}",
+                "[ShaderTranslator] shaderc compile error for stage 0x{:04X}: {:?}",
                 stage,
-                e,
-                source.chars().take(500).collect::<String>()
+                e
             );
-            log::logger().flush();
             None
         }
     }
 }
 
-/// GL stage 常量 → glslang ShaderStage 映射
-pub fn map_gl_stage(stage: u32) -> Option<ShaderStage> {
+/// GL stage 常量 → shaderc::ShaderKind 映射
+pub fn map_gl_stage(stage: u32) -> Option<ShaderKind> {
     match stage {
-        GL_VERTEX_SHADER => Some(ShaderStage::Vertex),
-        GL_FRAGMENT_SHADER => Some(ShaderStage::Fragment),
-        GL_GEOMETRY_SHADER => Some(ShaderStage::Geometry),
-        GL_TESS_CONTROL_SHADER => Some(ShaderStage::TesselationControl),
-        GL_TESS_EVALUATION_SHADER => Some(ShaderStage::TesselationEvaluation),
-        GL_COMPUTE_SHADER => Some(ShaderStage::Compute),
+        GL_VERTEX_SHADER => Some(ShaderKind::Vertex),
+        GL_FRAGMENT_SHADER => Some(ShaderKind::Fragment),
+        GL_GEOMETRY_SHADER => Some(ShaderKind::Geometry),
+        GL_TESS_CONTROL_SHADER => Some(ShaderKind::TessControl),
+        GL_TESS_EVALUATION_SHADER => Some(ShaderKind::TessEvaluation),
+        GL_COMPUTE_SHADER => Some(ShaderKind::Compute),
         _ => None,
     }
 }

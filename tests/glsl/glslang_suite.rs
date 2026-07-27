@@ -100,6 +100,7 @@ fn main() {
     let mut skipped = 0usize;
     let mut compile_fail_samples: Vec<String> = Vec::new();
     let mut translate_fail_samples: Vec<String> = Vec::new();
+    let mut crash_samples: Vec<String> = Vec::new();
 
     // 收集所有测试文件并排序，保证输出顺序稳定
     let mut files: Vec<_> = fs::read_dir(suite_dir)
@@ -185,10 +186,30 @@ fn main() {
                     stage_name
                 );
                 crashed += 1;
+                if crash_samples.len() < 30 {
+                    crash_samples.push(format!(
+                        "{} ({}) [exit code {}]",
+                        path.display(),
+                        stage_name,
+                        c
+                    ));
+                }
             }
             None => {
                 // SIGABRT (assertion) 或 SIGSEGV
+                eprintln!(
+                    "[glslang] worker CRASHED (signal): {} ({})",
+                    path.display(),
+                    stage_name
+                );
                 crashed += 1;
+                if crash_samples.len() < 30 {
+                    crash_samples.push(format!(
+                        "{} ({}) [signal crash]",
+                        path.display(),
+                        stage_name
+                    ));
+                }
             }
         }
     }
@@ -238,6 +259,14 @@ fn main() {
         println!("GLES 编译失败样本 (前 {} 个):", compile_fail_samples.len());
         for s in &compile_fail_samples {
             println!("  ✗ {}", s);
+        }
+    }
+
+    if !crash_samples.is_empty() {
+        println!();
+        println!("崩溃样本 (前 {} 个):", crash_samples.len());
+        for s in &crash_samples {
+            println!("  💥 {}", s);
         }
     }
 }

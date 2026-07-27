@@ -1,0 +1,58 @@
+name: Build for Android aarch64
+
+on:
+  push:
+    branches: [ main, glslang-targetvk ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 1. 安装系统依赖（shaderc 构建时需要）
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build python3
+
+      # 2. 安装 Rust 工具链，并添加 Android 目标
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: aarch64-linux-android
+          override: true
+
+      # 3. 安装 cargo-ndk（自动管理 NDK 环境变量）
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      # 4. 设置 Android NDK（使用 nttld/setup-ndk）
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c   # 你也可以换成 r26 等稳定版本
+          link-to-sdk: true
+
+      # 5. 设置环境变量（让 cargo-ndk 能找到 NDK，并为 shaderc 传递 CMake 参数）
+      - name: Set environment variables
+        run: |
+          # cargo-ndk 默认会读 ANDROID_NDK_HOME，这里指向 setup-ndk 设置的路径
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
+          # 给 shaderc 的 CMake 构建传入工具链文件和 Android 参数
+          echo "SHADERC_CMAKE_FLAGS=-DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_NATIVE_API_LEVEL=21" >> $GITHUB_ENV
+
+      # 6. 构建（cargo ndk 会自动设置 CC/CXX 等）
+      - name: Build release
+        run: cargo ndk --target aarch64-linux-android --build --release
+       
+      # 7. 上传编译好的 .so 文件作为 Artifact
+      - name: Upload .so artifact
+        uses: actions/upload-artifact@v4
+        with:
+        name: libfluorategl-android-aarch64
+        path: target/aarch64-linux-android/release/libfluorategl.so
+

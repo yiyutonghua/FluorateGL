@@ -1,24 +1,17 @@
 //! GLSL 源码预处理模块
 //!
-//! 对齐 MobileGlues 的 preprocess_glsl，并额外处理 SPIR-V 编译所需的
-//! location/binding 自动分配（作为安全网，OpenGL SPIR-V 模式下非必需）。
+//! 本分支（glslang-targetvk）使用 Vulkan target 编译 GLSL → SPIR-V。
+//! Vulkan target 要求 GLSL >= 140，#version 150 可直接处理，无需版本升级。
+//! Vulkan 拒绝独立 non-opaque uniform（必须包装进 UBO），因此不再注入
+//! uniform 的 layout(location)。
 //!
-//! 使用 OpenGL SPIR-V 目标（client=OpenGL, target=SPIRV）编译 GLSL，
-//! 该模式比 Vulkan 目标更宽松：
-//! - 允许独立 non-opaque uniform（无需包装进 UBO block）
-//! - 允许省略 layout(location) 和 layout(binding)
-//! - 要求 GLSL >= 330
+//! 保留的注入：
+//! - in/out varying 的 layout(location)（Vulkan 要求所有 in/out 有 location）
+//! - UBO/SSBO 的 layout(binding)（Vulkan 要求所有 buffer 有 binding）
 //!
 //! 重要：in/out varying 的 location 注入使用独立的 in_counter 和 out_counter。
-//! 之前的实现用单一 counter，导致 VS in(location=0) 和 VS out(location=0) 被视为
-//! 冲突，spirv-cross 重新分配 VS out 到高 location，而 FS in 保留低 location，
-//! 导致跨 stage 链接失败（output X location mismatch）。
-//! 修复：in 和 out 是独立的接口空间（SPIR-V Input/Output StorageClass），
+//! in 和 out 是独立的接口空间（SPIR-V Input/Output StorageClass），
 //! 分别从 0 计数，保证 VS out 和 FS in 的同名 varying location 一致。
-//!
-//! 仍会注入：
-//! - non-opaque uniform 的 layout(location)（OpenGL SPIR-V 模式要求，否则 parse 失败）
-//! - UBO/SSBO 的 layout(binding)（作为安全网，配合 AUTO_MAP_BINDINGS）
 
 use regex::Regex;
 
@@ -26,25 +19,16 @@ use regex::Regex;
 ///
 /// 执行顺序：
 /// 1. 移除 #line 指令
-/// 2. 强制 GLSL 版本（无版本插入 450，330-440 升级到 450）
-/// 3. 为缺少 location 的 in/out 变量自动添加 layout(location=X)（in/out 独立计数）
-/// 4. 为缺少 location 的 non-opaque uniform 自动添加 layout(location=X)
+/// 2. 移除 MC 的 `/*#version N*\/` 注释（moj_import 文本拼接产物，会干扰 glslang parse）
+/// 3. 规范化 GLSL 版本（无版本插入 450，< 140 升级到 140，移除 compatibility profile）
+/// 4. 为缺少 location 的 in/out 变量自动添加 layout(location=X)（in/out 独立计数）
 /// 5. 为缺少 binding 的 UBO/SSBO 自动添加 layout(binding=X)
-/// 6. 如果注入了 binding 或 uniform location，且版本低于 420，升级到 420
-///    （layout(binding) 和 non-opaque uniform 的 layout(location) 都需要 GLSL 420+）
 pub fn preprocess(source: &str) -> String {
     let mut result = remove_line_directives(source);
+    strip_mc_version_comment(&mut result);
     force_glsl_version(&mut result);
     inject_missing_locations(&mut result);
-    // 注入 uniform location 后需要版本保障：GLSL 330 core 不支持
-    // non-opaque uniform 的 layout(location)，需要 420+（GL_ARB_shading_language_420pack）。
-    // 之前只在注入 binding 时升级版本，导致无 UBO 但有独立 uniform 的 shader
-    // （如 MC rendertype_solid）停留在 330 core，glslang parse 失败。
-    let injected_location = inject_missing_uniform_locations(&mut result);
-    let injected_binding = inject_missing_bindings(&mut result);
-    if injected_binding || injected_location {
-        ensure_layout_version(&mut result);
-    }
+    inject_missing_bindings(&mut result);
     result
 }
 
@@ -61,18 +45,38 @@ fn remove_line_directives(source: &str) -> String {
     re.replace_all(source, "").to_string()
 }
 
-/// 确保 GLSL 版本满足 OpenGL SPIR-V 要求并支持 layout 限定符
+/// 移除 Minecraft moj_import 产生的 `/*#version N*/` 注释
+///
+/// MC 在 Java 端文本拼接 include 时会留下被注释掉的旧 #version 行，
+/// 形如 `/*#version 330*/`。虽然对桌面 GLSL 是合法注释，但某些 glslang
+/// 版本在 Vulkan target 下 parse 时会受其干扰（可能与 #version 检测逻辑
+/// 冲突），导致静默失败。在 preprocess 阶段主动移除，与 string_pass 回退
+/// 路径保持一致。
+///
+/// 正则与 string_pass::strip_mc_version_comment 保持一致。
+fn strip_mc_version_comment(result: &mut String) {
+    let re = Regex::new(r"/\*#version\s+\d+\s*\*/").unwrap();
+    let new_result = re.replace_all(result, "").into_owned();
+    if new_result.len() != result.len() {
+        log::debug!(
+            "[ShaderTranslator] preprocess 移除了 /*#version N*/ 注释 ({} -> {} chars)",
+            result.len(),
+            new_result.len()
+        );
+        *result = new_result;
+    }
+}
+
+/// 规范化 GLSL 版本以满足 Vulkan target + layout 限定符要求
+///
+/// Vulkan target 要求 GLSL >= 140，且拒绝 compatibility profile。
+/// preprocess 注入的 `layout(binding=)` 和 `layout(location=)` 需要 GLSL 420+
+/// （GL_ARB_shading_language_420pack），否则 glslang parse 报
+/// "not supported for this version or the enabled extensions"。
 ///
 /// - 无 #version → 插入 #version 450 core
-/// - #version < 330 且非 ES 版本 → 升级到 330 core
-///   桌面 GLSL 100-150 使用旧语法（attribute/varying/gl_FragColor），
-///   升级到 330 core 后 glslang 可能仍因旧语法拒绝，但部分已用 in/out 的 shader 能通过。
-/// - #version < 330 且 ES 版本 → 保持不变（GLSL ES 语法与桌面不兼容，升级无意义）
-/// - #version 330-450 且非 ES → 升级到 450 core
-///   （含 compatibility profile：glslang 在 OpenGL SPIR-V 模式拒绝 Compatibility，
-///   统一替换为 450 core 去除 compatibility）
-/// - #version 460 且非 ES → 保持 460（460 是 450 超集，降级会丢失 subgroup 等特性），
-///   但规范化为 core profile（移除 compatibility）
+/// - #version < 460 且非 ES → 升级到 450 core（统一支持 layout 限定符 + 移除 compatibility）
+/// - #version == 460 且非 ES → 保持 460，规范化为 core
 /// - ES 版本 → 保持不变
 fn force_glsl_version(result: &mut String) {
     let version = extract_version(result);
@@ -83,23 +87,19 @@ fn force_glsl_version(result: &mut String) {
         Some(v) => {
             if let Some(ver) = parse_version_number(v) {
                 let is_es = is_es_version(v);
-                if ver >= 330 && ver < 460 && !is_es {
-                    // 330-450 桌面版本统一升级到 450 core
-                    // 含 compatibility profile 的也会被替换为 core（glslang 拒绝 Compatibility）
-                    let re = Regex::new(r"(?m)^#version\s+\d+.*$").unwrap();
-                    *result = re.replace(result, "#version 450 core").to_string();
-                } else if ver == 460 && !is_es {
-                    // 460 保持版本号，仅规范化为 core（移除 compatibility profile）
-                    // glslang OpenGL SPIR-V 模式拒绝 Compatibility，460 compatibility 需替换为 core
-                    let re = Regex::new(r"(?m)^#version\s+\d+.*$").unwrap();
-                    *result = re.replace(result, "#version 460 core").to_string();
-                } else if ver < 330 && !is_es {
-                    // 桌面 GLSL 旧版本升级到 330 core（OpenGL SPIR-V 最低要求）
+                if is_es {
                     // ES 版本保持不变（语法不兼容，升级无意义）
-                    let re = Regex::new(r"(?m)^#version\s+\d+.*$").unwrap();
-                    *result = re.replace(result, "#version 330 core").to_string();
+                    return;
                 }
-                // ES 版本: 保持不变
+                let re = Regex::new(r"(?m)^#version\s+\d+.*$").unwrap();
+                if ver < 460 {
+                    // 桌面 GLSL < 460 升级到 450 core
+                    // （支持 layout(binding/location)，移除 compatibility，Vulkan 接受 >= 140）
+                    *result = re.replace(result, "#version 450 core").to_string();
+                } else {
+                    // 460 保持版本号，仅规范化为 core
+                    *result = re.replace(result, "#version 460 core").to_string();
+                }
             }
         }
     }
@@ -236,99 +236,6 @@ fn parse_array_size(rest: &str) -> u32 {
     1
 }
 
-/// 为缺少 location 的 non-opaque uniform 变量自动添加 layout(location=X)
-///
-/// OpenGL SPIR-V 模式要求所有 non-opaque uniform（mat4, vec3, float 等）
-/// 必须有 layout(location=L)，否则 glslang parse 阶段报错：
-/// "non-opaque uniform variables need a layout(location=L)"
-///
-/// opaque uniform（sampler/texture/image）由 AUTO_MAP_BINDINGS 处理，不需要此注入。
-/// uniform block 由 inject_missing_bindings 处理。
-///
-/// 策略：扫描独立的 `uniform <type> <name>;` 声明（非 block、非 opaque），
-/// 为缺少 location 的声明按出现顺序分配递增 location 编号。
-///
-/// 返回 true 表示至少注入了一个 location（调用方需确保 GLSL 版本 >= 420，
-/// 因为 non-opaque uniform 的 layout(location) 需要 GLSL 420+）。
-fn inject_missing_uniform_locations(result: &mut String) -> bool {
-    // 匹配: uniform <type> <name>[<array>];
-    // Rust regex crate 不支持 lookahead，opaque 类型在代码中过滤
-    let re =
-        Regex::new(r"(?m)^(?P<indent>\s*)uniform\s+(?P<type>\w+)\s+(?P<rest>.+?;\s*)$").unwrap();
-
-    // opaque 类型前缀：这些类型由 AUTO_MAP_BINDINGS 处理，不需要 layout(location)
-    // 包含整数/无符号变体：isampler/usampler/itexture/utexture/iimage/uimage
-    const OPAQUE_PREFIXES: &[&str] = &[
-        "sampler",
-        "isampler",
-        "usampler",
-        "texture",
-        "itexture",
-        "utexture",
-        "image",
-        "iimage",
-        "uimage",
-        "atomic_uint",
-        "subpass",
-    ];
-
-    let mut location_counter: u32 = 0;
-    let mut injected = false;
-    let mut modified = String::with_capacity(result.len());
-
-    for line in result.lines() {
-        if let Some(caps) = re.captures(line) {
-            let indent = caps.name("indent").map(|m| m.as_str()).unwrap_or("");
-            let type_name = caps.name("type").map(|m| m.as_str()).unwrap_or("");
-            let rest = caps.name("rest").map(|m| m.as_str()).unwrap_or("");
-
-            // 跳过已有 location 的声明（仅检查 location，避免误跳过有 layout(std140)
-            // 等非 location 限定符但缺 location 的 standalone uniform，导致 glslang parse 失败）
-            if line.contains("location") {
-                modified.push_str(line);
-                modified.push('\n');
-                continue;
-            }
-
-            // 跳过 block 声明（包含 {）
-            if rest.contains('{') {
-                modified.push_str(line);
-                modified.push('\n');
-                continue;
-            }
-
-            // 跳过 opaque 类型（sampler/texture/image/atomic_uint/subpass）
-            if OPAQUE_PREFIXES.iter().any(|p| type_name.starts_with(p)) {
-                modified.push_str(line);
-                modified.push('\n');
-                continue;
-            }
-
-            // 注入 layout(location=N)
-            let new_line = format!(
-                "{}layout(location={}) uniform {} {}",
-                indent, location_counter, type_name, rest
-            );
-            modified.push_str(&new_line);
-            modified.push('\n');
-            // 数组声明占多个 location
-            location_counter += parse_array_size(rest);
-            injected = true;
-        } else {
-            modified.push_str(line);
-            modified.push('\n');
-        }
-    }
-
-    // 移除末尾多余的换行
-    if modified.ends_with('\n') && !result.ends_with('\n') {
-        modified.pop();
-    }
-
-    *result = modified;
-    injected
-}
-
 /// 为缺少 binding 的 UBO/SSBO 自动添加 layout(binding=X)
 ///
 /// Vulkan SPIR-V 要求所有 uniform buffer 和 shader storage buffer 必须有 binding。
@@ -431,36 +338,6 @@ fn inject_missing_bindings(result: &mut String) -> bool {
     injected
 }
 
-/// 如果 GLSL 版本低于 420，升级到 420
-///
-/// 此函数同时覆盖两种 layout 限定符的版本要求：
-/// - `layout(binding=X)`：UBO/SSBO 的 binding 需要 GLSL 420+，否则 glslang 报：
-///   "binding : not supported for this version or the enabled extensions"
-/// - `layout(location=X)` for non-opaque uniform：独立 uniform 的 location 需要
-///   GLSL 420+（GL_ARB_shading_language_420pack），否则 glslang 报：
-///   "location qualifier on uniform or buffer : not supported for this version"
-///
-/// 注意：ES 版本（300 es/310 es/320 es）已支持 layout(binding) 和 layout(location)，
-/// 无需升级。之前不检查 is_es，导致 `#version 320 es` 被错误替换为
-/// `#version 420`（桌面），破坏 ES 语法。
-fn ensure_layout_version(result: &mut String) {
-    let need_upgrade = extract_version(result).and_then(|v| {
-        let is_es = is_es_version(v);
-        if is_es {
-            // ES 310+ 已支持 layout(binding)，无需升级
-            return None;
-        }
-        parse_version_number(v).map(|ver| ver < 420)
-    });
-
-    if !need_upgrade.unwrap_or(false) {
-        return;
-    }
-
-    let re = Regex::new(r"(?m)^#version\s+\d+.*$").unwrap();
-    *result = re.replace(result, "#version 420 core").to_string();
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,15 +358,23 @@ mod tests {
 
     #[test]
     fn test_force_glsl_version_keep_low() {
-        // 桌面 GLSL < 330 升级到 330 core（OpenGL SPIR-V 最低要求）
+        // 桌面 GLSL < 460 统一升级到 450 core（支持 layout 限定符）
         let mut result = "#version 120\nvoid main() {}".to_string();
         force_glsl_version(&mut result);
-        assert!(result.starts_with("#version 330 core"));
+        assert!(result.starts_with("#version 450 core"));
     }
 
     #[test]
-    fn test_force_glsl_version_upgrade_330_to_450() {
-        // #version 330-440 升级到 450
+    fn test_force_glsl_version_keep_150() {
+        // #version 150 升级到 450 core（layout 限定符需要 420+）
+        let mut result = "#version 150\nvoid main() {}".to_string();
+        force_glsl_version(&mut result);
+        assert!(result.starts_with("#version 450 core"));
+    }
+
+    #[test]
+    fn test_force_glsl_version_keep_330() {
+        // #version 330 升级到 450 core（layout 限定符需要 420+）
         let mut result = "#version 330\nvoid main() {}".to_string();
         force_glsl_version(&mut result);
         assert!(result.starts_with("#version 450 core"));
@@ -497,10 +382,18 @@ mod tests {
 
     #[test]
     fn test_force_glsl_version_keep_450() {
-        // #version >= 450 保持不变
+        // #version 450 规范化为 core
         let mut result = "#version 450\nvoid main() {}".to_string();
         force_glsl_version(&mut result);
-        assert!(result.starts_with("#version 450"));
+        assert!(result.starts_with("#version 450 core"));
+    }
+
+    #[test]
+    fn test_force_glsl_version_keep_460() {
+        // #version 460 保持版本号，仅规范化为 core
+        let mut result = "#version 460\nvoid main() {}".to_string();
+        force_glsl_version(&mut result);
+        assert!(result.starts_with("#version 460 core"));
     }
 
     #[test]
@@ -547,45 +440,6 @@ mod tests {
     }
 
     #[test]
-    fn test_inject_uniform_locations() {
-        let mut result =
-            "#version 450\nuniform mat4 MVP;\nuniform vec3 color;\nvoid main() {}\n".to_string();
-        inject_missing_uniform_locations(&mut result);
-        assert!(result.contains("layout(location=0) uniform mat4 MVP;"));
-        assert!(result.contains("layout(location=1) uniform vec3 color;"));
-    }
-
-    #[test]
-    fn test_inject_uniform_locations_skip_opaque() {
-        // sampler/texture/image 是 opaque，不应注入 location
-        let mut result = "#version 450\nuniform sampler2D tex;\nuniform mat4 MVP;\n".to_string();
-        inject_missing_uniform_locations(&mut result);
-        assert!(!result.contains("layout(location=0) uniform sampler2D"));
-        assert!(result.contains("layout(location=0) uniform mat4 MVP;"));
-    }
-
-    #[test]
-    fn test_inject_uniform_locations_skip_block() {
-        // uniform block 不应注入 location
-        let mut result =
-            "#version 450\nuniform MyBlock {\n    mat4 data;\n};\nuniform float scale;\n"
-                .to_string();
-        inject_missing_uniform_locations(&mut result);
-        assert!(!result.contains("layout(location=0) uniform MyBlock"));
-        assert!(result.contains("layout(location=0) uniform float scale;"));
-    }
-
-    #[test]
-    fn test_inject_uniform_locations_skip_existing_layout() {
-        let mut result =
-            "#version 450\nlayout(location=3) uniform mat4 MVP;\nuniform float scale;\n"
-                .to_string();
-        inject_missing_uniform_locations(&mut result);
-        assert!(result.contains("layout(location=3) uniform mat4 MVP;"));
-        assert!(result.contains("layout(location=0) uniform float scale;"));
-    }
-
-    #[test]
     fn test_inject_bindings_layout_block() {
         let mut result = "#version 330\nlayout(std140) uniform DynamicTransforms {\n    mat4 ModelViewMat;\n};\n".to_string();
         let injected = inject_missing_bindings(&mut result);
@@ -612,68 +466,55 @@ mod tests {
     }
 
     #[test]
-    fn test_ensure_layout_version_upgrade() {
-        let mut result = "#version 330\nvoid main() {}".to_string();
-        ensure_layout_version(&mut result);
-        assert!(result.starts_with("#version 420"));
-    }
-
-    #[test]
-    fn test_ensure_layout_version_ok() {
-        let mut result = "#version 450\nvoid main() {}".to_string();
-        ensure_layout_version(&mut result);
-        assert!(result.starts_with("#version 450"));
-    }
-
-    #[test]
     fn test_preprocess_full_pipeline() {
         let input = "#version 330\nlayout(std140) uniform MyBlock {\n    mat4 data;\n};\nin vec4 color;\nout vec4 fragColor;\nuniform mat4 MVP;\nvoid main() {\n    fragColor = color;\n}\n";
         let result = preprocess(input);
-        // 版本应升级到 450
+        // 版本升级到 450 core（layout 限定符需要 420+）
         assert!(result.contains("#version 450 core"));
         // UBO 应有 binding
         assert!(result.contains("layout(std140, binding=0) uniform MyBlock"));
-        // non-opaque uniform 应有 location
-        assert!(result.contains("layout(location=0) uniform mat4 MVP;"));
         // in/out 应有 location，且 in/out 独立计数（都从 0 开始）
         assert!(result.contains("layout(location=0) in vec4 color;"));
         assert!(result.contains("layout(location=0) out vec4 fragColor;"));
     }
 
-    /// 回归测试：无 UBO 但有独立 uniform 的 shader（如 MC rendertype_solid）
-    /// 之前此场景版本停留在 330 core，glslang 因 uniform layout(location) 不支持而 parse 失败。
-    /// 修复后：注入 uniform location 时也触发版本升级到 420 core。
+    /// 验证移除 MC moj_import 产生的 /*#version N*/ 注释
+    /// 复现 1.21.11 场景：fragment shader 源码含 `/*#version 330*/` 注释
     #[test]
-    fn test_preprocess_uniform_location_without_ubo_upgrades_version() {
-        // MC 1.21.x 风格 shader：#version 150 + 独立 uniform，无 UBO
+    fn test_strip_mc_version_comment_in_preprocess() {
+        let input = "#version 330\n#line 0 1\n/*#version 330*/\nvoid main() {}\n";
+        let result = preprocess(input);
+        // /*#version 330*/ 应被移除
+        assert!(
+            !result.contains("/*#version"),
+            "/*#version N*/ 注释应被移除，实际: {}",
+            result
+        );
+        // #line 也应被移除
+        assert!(!result.contains("#line"));
+        // 版本应升级到 450 core
+        assert!(result.contains("#version 450 core"));
+    }
+
+    /// preprocess 将 #version 150 升级到 450 core（layout 限定符需要 420+）
+    #[test]
+    fn test_preprocess_upgrades_version_150() {
         let input = "#version 150\n\
             uniform mat4 ModelViewMat;\n\
-            uniform sampler2D Sampler0;\n\
             in vec3 Position;\n\
-            in vec2 UV0;\n\
-            in ivec2 UV2;\n\
             out vec4 vertexColor;\n\
             void main() {\n\
                 gl_Position = ModelViewMat * vec4(Position, 1.0);\n\
             }\n";
         let result = preprocess(input);
-        // #version 150 先升级到 330 core，注入 uniform location 后再升级到 420 core
+        // 版本升级到 450 core
         assert!(
-            result.contains("#version 420 core"),
-            "expected #version 420 core for uniform location support, got: {}",
+            result.contains("#version 450 core"),
+            "expected #version 450 core, got: {}",
             result
         );
-        // non-opaque uniform 应有 location
-        assert!(result.contains("layout(location=0) uniform mat4 ModelViewMat;"));
-        // sampler 是 opaque，不应被注入 location
-        for line in result.lines() {
-            if line.contains("uniform sampler2D") {
-                assert!(
-                    !line.contains("layout(location="),
-                    "sampler 不应有 location: {}",
-                    line
-                );
-            }
-        }
+        // in/out 应有 location
+        assert!(result.contains("layout(location=0) in vec3 Position;"));
+        assert!(result.contains("layout(location=0) out vec4 vertexColor;"));
     }
 }
