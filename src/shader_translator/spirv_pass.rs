@@ -25,16 +25,35 @@ pub enum TranslationResult {
 /// 还是 panic（catch_unwind 捕获），都统一回退到 string_pass 字符串级翻译。
 /// 这避免了 shader.rs 的 Failed 分支透传桌面 GLSL 给 GLES 导致崩溃。
 pub fn translate(source: &str, stage: u32) -> TranslationResult {
-    match std::panic::catch_unwind(|| translate_internal(source, stage)) {
+    // 标记进入 catch_unwind，便于区分 panic vs native crash：
+    // - panic → catch_unwind 返回 Err，下方 "CAUGHT PANIC" 日志可见
+    // - native crash → 进程直接死，下方日志不可见，只能靠 crash report
+    eprintln!("[ShaderTranslator] BEFORE catch_unwind for stage 0x{:04X}", stage);
+    let result = std::panic::catch_unwind(|| translate_internal(source, stage));
+    eprintln!("[ShaderTranslator] AFTER catch_unwind for stage 0x{:04X}: {:?}", stage, result.is_ok());
+    match result {
         Ok(TranslationResult::Translated(s)) => TranslationResult::Translated(s),
         Ok(TranslationResult::PassThrough) => TranslationResult::PassThrough,
         Ok(TranslationResult::Failed) | Err(_) => {
             // 统一兜底：无论 SPIR-V 管线失败还是 panic，都走 string_pass
+            // Err 表示 panic 被捕获（extern "C" 不该 Rust panic，但 glslang-sys
+            // 的某些封装可能触发）。用 eprintln 强制输出，绕过日志后端吞日志问题。
+            if result.is_err() {
+                eprintln!(
+                    "[ShaderTranslator] CAUGHT PANIC in translate_internal for stage 0x{:04X}: {:?}",
+                    stage,
+                    result.as_ref().err()
+                );
+            }
             log::warn!(
                 "[ShaderTranslator] SPIR-V pipeline failed/panicked for stage 0x{:04X}, falling back to string_pass",
                 stage
             );
             log::logger().flush();
+            eprintln!(
+                "[ShaderTranslator] SPIR-V pipeline failed/panicked for stage 0x{:04X}, falling back to string_pass",
+                stage
+            );
             let fallback = string_pass::translate(source, stage);
             log::info!(
                 "[ShaderTranslator] string_pass fallback produced {} chars for stage 0x{:04X}",

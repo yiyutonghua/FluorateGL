@@ -95,6 +95,56 @@ fn error_dual(msg: &str) {
     eprintln!("{}", msg);
 }
 
+/// 强制同步输出到 stderr（持锁 write_all + flush），诊断用途
+///
+/// 背景：日志后端在打印大段 preprocessed source 后，后续小日志可能被
+/// 缓冲区串写/截断（如 "GLES info log: ERRinecraft:core/terrain" 交错）。
+/// 此函数持 stderr 锁完整写出，避免与其他线程交错。
+fn stderr_sync(msg: &str) {
+    use std::io::Write;
+    let stderr = std::io::stderr();
+    let mut handle = stderr.lock();
+    let _ = handle.write_all(msg.as_bytes());
+    let _ = handle.write_all(b"\n");
+    let _ = handle.flush();
+}
+
+/// 将 preprocessed source 完整写入文件，绕过日志后端截断
+///
+/// 日志后端只打印了前 2000 chars，大 shader（5302 chars）后 3300 chars
+/// 未知，无法判断 parse 崩溃是否由后续内容触发。写文件可拿到完整源码，
+/// 便于本地用 glslangValidator 命令行复现。
+///
+/// 写入路径优先级：
+/// 1. /data/local/tmp/shader_<stage>_<n>.glsl（FCL 环境 app 可写）
+/// 2. 失败则跳过（不影响主流程）
+fn dump_preprocessed_to_file(stage: u32, source: &str) {
+    use std::fs;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = format!("/data/local/tmp/shader_{:04X}_{}.glsl", stage, n);
+    match fs::write(&path, source) {
+        Ok(_) => {
+            stderr_sync(&format!(
+                "[ShaderTranslator] DUMPED preprocessed source for stage 0x{:04X} to {} ({} chars)",
+                stage,
+                path,
+                source.len()
+            ));
+        }
+        Err(e) => {
+            stderr_sync(&format!(
+                "[ShaderTranslator] FAILED to dump preprocessed source to {}: {} (errno {:?})",
+                path,
+                e,
+                e.raw_os_error()
+            ));
+        }
+    }
+}
+
 /// 将 GLSL 源码编译为 SPIR-V 字节码
 ///
 /// 流程：预处理 → glslang create → set_options(VULKAN_RULES_RELAXED) →
@@ -206,12 +256,30 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
         preprocessed.chars().take(2000).collect::<String>()
     );
     log::logger().flush();
+    // 诊断：完整 preprocessed 写入文件，绕过日志后端截断
+    // 大 shader（>5000 chars）的 parse 崩溃可能与后 3000 chars 内容有关，
+    // 必须拿到完整源码才能本地复现。
+    dump_preprocessed_to_file(stage, &preprocessed);
+    stderr_sync(&format!(
+        "[ShaderTranslator] ENTERING preprocess+parse for stage 0x{:04X} (preprocessed {} chars dumped to file)",
+        stage,
+        preprocessed.len()
+    ));
 
     log::debug!(
         "[ShaderTranslator] step4: calling glslang_shader_preprocess for stage 0x{:04X}",
         stage
     );
+    stderr_sync(&format!(
+        "[ShaderTranslator] step4: BEFORE glslang_shader_preprocess for stage 0x{:04X}",
+        stage
+    ));
     let preprocess_ret = unsafe { sys::glslang_shader_preprocess(shader_ptr, &input) };
+    stderr_sync(&format!(
+        "[ShaderTranslator] step4: AFTER glslang_shader_preprocess returned {} for stage 0x{:04X}",
+        preprocess_ret,
+        stage
+    ));
     log::debug!(
         "[ShaderTranslator] glslang_shader_preprocess returned {} for stage 0x{:04X}",
         preprocess_ret,
@@ -230,22 +298,37 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
     }
 
     // 步骤 5：parse
+    // parse 是疑似崩溃点。前后加 stderr_sync 标记，便于确认 parse 是否返回。
+    // parse 前主动读一次 info_log（preprocess 可能已写入警告），便于对照。
+    let info_before_parse = unsafe { shader_log(shader_ptr) };
+    stderr_sync(&format!(
+        "[ShaderTranslator] step5: BEFORE glslang_shader_parse for stage 0x{:04X} (info_log before parse: {})",
+        stage,
+        if info_before_parse.is_empty() { "(empty)" } else { &info_before_parse }
+    ));
     log::debug!(
         "[ShaderTranslator] step5: calling glslang_shader_parse for stage 0x{:04X}",
         stage
     );
     let parse_ret = unsafe { sys::glslang_shader_parse(shader_ptr, &input) };
+    // 立即读 info_log，防止后续操作清空
+    let info_after_parse = unsafe { shader_log(shader_ptr) };
+    stderr_sync(&format!(
+        "[ShaderTranslator] step5: AFTER glslang_shader_parse returned {} for stage 0x{:04X} (info_log after parse: {})",
+        parse_ret,
+        stage,
+        if info_after_parse.is_empty() { "(empty)" } else { &info_after_parse }
+    ));
     log::debug!(
         "[ShaderTranslator] glslang_shader_parse returned {} for stage 0x{:04X}",
         parse_ret,
         stage
     );
     if parse_ret == 0 {
-        let log = unsafe { shader_log(shader_ptr) };
         error_dual(&format!(
             "[ShaderTranslator] glslang parse FAILED for stage 0x{:04X}: {}; source (first 500 chars):\n{}",
             stage,
-            log,
+            info_after_parse,
             source.chars().take(500).collect::<String>()
         ));
         log::logger().flush();
