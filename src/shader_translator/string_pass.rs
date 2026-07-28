@@ -69,8 +69,7 @@ fn replace_version(source: &str) -> String {
     re.replace_all(source, |caps: &regex::Captures| {
         let ver: u32 = caps[1].parse().unwrap_or(0);
         let target = match ver {
-            450 | 460 => "#version 320 es",
-            120..=440 => "#version 300 es",
+            120..=460 => "#version 320 es",
             _ => "#version 300 es",
         };
         target.to_string()

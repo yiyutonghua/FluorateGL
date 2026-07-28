@@ -27,9 +27,26 @@ pub fn preprocess(source: &str) -> String {
     let mut result = remove_line_directives(source);
     strip_mc_version_comment(&mut result);
     force_glsl_version(&mut result);
+    rename_vulkan_builtin_variables(&mut result); // <--- 新增：重命名 Vulkan 内置变量
     inject_missing_locations(&mut result);
     inject_missing_bindings(&mut result);
     result
+}
+
+/// 将桌面 GLSL 的内置变量重命名为 Vulkan GLSL 对应的名称
+fn rename_vulkan_builtin_variables(result: &mut String) {
+    // 1. gl_VertexID -> gl_VertexIndex
+    let re_vertex = Regex::new(r"\bgl_VertexID\b").unwrap();
+    *result = re_vertex.replace_all(result, "gl_VertexIndex").into_owned();
+
+    // 2. 变量名 sampler -> u_sampler (避免与关键字冲突)
+    // \b 保证了 sampler2D 中的 sampler 不会被替换
+    let re_sampler = Regex::new(r"\bsampler\b").unwrap();
+    let new_result = re_sampler.replace_all(result, "u_sampler").into_owned();
+    if new_result.len() != result.len() {
+        log::debug!("[ShaderTranslator] preprocess 重命名了变量 sampler -> u_sampler");
+        *result = new_result;
+    }
 }
 
 /// 提取 GLSL 源码中的 #version 行
