@@ -17,7 +17,7 @@ libloading = "0.9.0"
 log = "0.4.33"
 regex = "1"
 rustc-hash = "2.1.3"
-shaderc = { version = "0.10.1", features = ["build-from-source"] }
+shaderc = "0.10.1"
 slotmap = "1.1.1"
 spirv-cross2 = { version = "0.7.1", default-features = false, features = ["glsl","cpp"] }
 
