@@ -27,7 +27,9 @@ pub fn preprocess(source: &str) -> String {
     let mut result = remove_line_directives(source);
     strip_mc_version_comment(&mut result);
     force_glsl_version(&mut result);
-    rename_vulkan_builtin_variables(&mut result); // <--- 新增：重命名 Vulkan 内置变量
+    rename_vulkan_builtin_variables(&mut result);
+    // 新增：转换独立 uniform 到 UBO
+    result = convert_uniforms_to_ubo(&result);
     inject_missing_locations(&mut result);
     inject_missing_bindings(&mut result);
     result
@@ -353,6 +355,68 @@ fn inject_missing_bindings(result: &mut String) -> bool {
 
     *result = modified;
     injected
+}
+
+fn convert_uniforms_to_ubo(src: &str) -> String {
+    // 收集所有非不透明 uniform
+    let uniform_re = Regex::new(
+        r"(?m)^\s*uniform\s+(?P<type>[a-zA-Z_][\w]*(\s*[^\s;]+)*)\s+(?P<name>[a-zA-Z_][\w]*)\s*;",
+    )
+    .unwrap();
+    let mut uniforms = Vec::new();
+    let mut result = src.to_string();
+
+    // 遍历行，记录并移除
+    let mut new_lines = Vec::new();
+    for line in src.lines() {
+        if let Some(caps) = uniform_re.captures(line) {
+            let ty = caps.name("type").unwrap().as_str();
+            let name = caps.name("name").unwrap().as_str();
+            // 判断是否为不透明类型（简化：检查是否包含 sampler/image/atomic_uint）
+            if !ty.contains("sampler")
+                && !ty.contains("image")
+                && !ty.contains("atomic_uint")
+                && !ty.contains("buffer")
+            {
+                uniforms.push((ty.to_string(), name.to_string()));
+                // 不添加此行到 new_lines（即删除）
+                continue;
+            }
+        }
+        new_lines.push(line.to_string());
+    }
+
+    if uniforms.is_empty() {
+        return src.to_string(); // 无变化
+    }
+
+    // 确定 binding（简单起见，使用固定值 0，但建议扫描已有 binding 避免冲突）
+    let binding = find_available_binding(&result); // 需实现
+
+    // 构建 UBO 声明
+    let mut ubo_decl = format!(
+        "layout(std140, binding = {}) uniform UniformBlock {{\n",
+        binding
+    );
+    for (ty, name) in &uniforms {
+        ubo_decl.push_str(&format!("    {} {};\n", ty, name));
+    }
+    ubo_decl.push_str("};\n");
+
+    // 插入 UBO 声明（一般在 #version 之后）
+    let insert_pos = find_insert_position(&result); // 在 #version 行后
+    result.insert_str(insert_pos, &ubo_decl);
+
+    // 替换所有原变量名 -> UniformBlock.name
+    for (_, name) in &uniforms {
+        // 使用正则 \bname\b 替换，注意只替换全局作用域（无法完美处理）
+        let name_re = Regex::new(&format!(r"\b{}\b", regex::escape(name))).unwrap();
+        result = name_re
+            .replace_all(&result, &format!("UniformBlock.{}", name))
+            .into_owned();
+    }
+
+    result
 }
 
 #[cfg(test)]
