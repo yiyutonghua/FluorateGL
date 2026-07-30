@@ -14,6 +14,7 @@
 //! 分别从 0 计数，保证 VS out 和 FS in 的同名 varying location 一致。
 
 use regex::Regex;
+use std::collections::HashSet;
 
 /// GLSL 预处理主入口
 ///
@@ -357,30 +358,31 @@ fn inject_missing_bindings(result: &mut String) -> bool {
     injected
 }
 
+/// 将全局非不透明 uniform 转换为一个独立的 UBO，并替换所有引用。
+/// 注意：此实现假定 uniform 名唯一且无同名局部变量/注释干扰。
 fn convert_uniforms_to_ubo(src: &str) -> String {
-    // 收集所有非不透明 uniform
+    // 匹配单行全局 uniform 声明（不包括块，不包括 sampler/image/atomic_uint）
+    // 例如：uniform mat4 ModelViewMat;
+    //        uniform vec4 ColorModulator;
     let uniform_re = Regex::new(
-        r"(?m)^\s*uniform\s+(?P<type>[a-zA-Z_][\w]*(\s*[^\s;]+)*)\s+(?P<name>[a-zA-Z_][\w]*)\s*;",
-    )
-    .unwrap();
-    let mut uniforms = Vec::new();
-    let mut result = src.to_string();
+        r"(?m)^\s*uniform\s+(?P<type>[a-zA-Z_][\w]*(\s*\*\s*)?(?:[a-zA-Z_][\w]*\s*)?)\s+(?P<name>[a-zA-Z_][\w]*)\s*;"
+    ).unwrap();
 
-    // 遍历行，记录并移除
+    let mut uniforms = Vec::new();
     let mut new_lines = Vec::new();
+
     for line in src.lines() {
         if let Some(caps) = uniform_re.captures(line) {
             let ty = caps.name("type").unwrap().as_str();
             let name = caps.name("name").unwrap().as_str();
-            // 判断是否为不透明类型（简化：检查是否包含 sampler/image/atomic_uint）
+            // 排除不透明类型：sampler, image, atomic_uint, buffer（不透明）
             if !ty.contains("sampler")
                 && !ty.contains("image")
                 && !ty.contains("atomic_uint")
                 && !ty.contains("buffer")
             {
                 uniforms.push((ty.to_string(), name.to_string()));
-                // 不添加此行到 new_lines（即删除）
-                continue;
+                continue; // 删除此行
             }
         }
         new_lines.push(line.to_string());
@@ -390,8 +392,8 @@ fn convert_uniforms_to_ubo(src: &str) -> String {
         return src.to_string(); // 无变化
     }
 
-    // 确定 binding（简单起见，使用固定值 0，但建议扫描已有 binding 避免冲突）
-    let binding = find_available_binding(&result); // 需实现
+    // 确定 binding
+    let binding = find_available_binding(src);
 
     // 构建 UBO 声明
     let mut ubo_decl = format!(
@@ -403,20 +405,62 @@ fn convert_uniforms_to_ubo(src: &str) -> String {
     }
     ubo_decl.push_str("};\n");
 
-    // 插入 UBO 声明（一般在 #version 之后）
-    let insert_pos = find_insert_position(&result); // 在 #version 行后
-    result.insert_str(insert_pos, &ubo_decl);
+    // 寻找插入点（#version 行后）
+    let insert_pos = find_insert_position(src);
+    let mut result = String::with_capacity(src.len() + ubo_decl.len() + uniforms.len() * 20);
+    result.push_str(&src[..insert_pos]);
+    result.push_str(&ubo_decl);
+    result.push_str(&src[insert_pos..]);
 
-    // 替换所有原变量名 -> UniformBlock.name
+    // 替换所有原变量名为 UniformBlock.name（全局替换，可能误改注释/字符串/局部变量）
     for (_, name) in &uniforms {
-        // 使用正则 \bname\b 替换，注意只替换全局作用域（无法完美处理）
+        // 使用词边界，且只替换标识符（不替换类型名等）
         let name_re = Regex::new(&format!(r"\b{}\b", regex::escape(name))).unwrap();
+        // 注意：可能误改同名字符串，但 MC 着色器中极少出现
         result = name_re
             .replace_all(&result, &format!("UniformBlock.{}", name))
             .into_owned();
     }
 
     result
+}
+
+/// 扫描源中所有已使用的 binding 编号（包括 UBO、SSBO、sampler 等），返回当前最大编号 + 1。
+/// 若无任何 binding，则返回 0。
+fn find_available_binding(src: &str) -> u32 {
+    let binding_re = Regex::new(r"binding\s*=\s*(\d+)").unwrap();
+    let mut used = HashSet::new();
+    for caps in binding_re.captures_iter(src) {
+        if let Some(m) = caps.get(1) {
+            if let Ok(val) = m.as_str().parse::<u32>() {
+                used.insert(val);
+            }
+        }
+    }
+    // 从 0 开始找最小未使用编号（但通常递增分配更简单）
+    let mut candidate = 0;
+    while used.contains(&candidate) {
+        candidate += 1;
+    }
+    candidate
+}
+
+/// 返回适合插入新声明的位置（在 #version 行之后，若有则在其后，否则在开头）
+fn find_insert_position(src: &str) -> usize {
+    if let Some(version_line) = src.lines().find(|l| l.trim_start().starts_with("#version")) {
+        // 找到该行结束位置（包括换行符）
+        let line_end = version_line.as_ptr() as usize + version_line.len() - src.as_ptr() as usize;
+        // 加上换行符偏移（如果有）
+        let pos = line_end
+            + if src[line_end..].starts_with('\n') {
+                1
+            } else {
+                0
+            };
+        pos
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]
