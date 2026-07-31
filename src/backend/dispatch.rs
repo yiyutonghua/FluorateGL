@@ -380,6 +380,30 @@ impl GlesDispatch {
             }};
         }
 
+        // 按 core / OES / EXT 后缀顺序尝试加载扩展函数。
+        // GLES 驱动常以带后缀的符号名（如 glDrawElementsBaseVertexOES）导出扩展函数，
+        // 仅试 core 名会误判为不支持。capabilities 层会基于扩展字符串做权威能力检测。
+        macro_rules! load_opt_suffixes {
+            ($core:expr, $oes:expr, $ext:expr) => {{
+                let mut ptr = loader.get_proc($core);
+                if ptr.is_null() && !$oes.is_empty() {
+                    ptr = loader.get_proc($oes);
+                }
+                if ptr.is_null() && !$ext.is_empty() {
+                    ptr = loader.get_proc($ext);
+                }
+                if ptr.is_null() {
+                    log::debug!(
+                        "[GlesDispatch] extension function not available: {} / {} / {} (will emulate/stub)",
+                        $core, $oes, $ext
+                    );
+                    unsafe { std::mem::transmute::<unsafe extern "C" fn(), _>(unimplemented_stub) }
+                } else {
+                    unsafe { std::mem::transmute(ptr) }
+                }
+            }};
+        }
+
         Some(Self {
             stub: unimplemented_stub,
             clear: unsafe { std::mem::transmute(load!("glClear")) },
@@ -667,23 +691,59 @@ impl GlesDispatch {
 
             multi_draw_arrays: load_opt!("glMultiDrawArrays"),
             multi_draw_elements: load_opt!("glMultiDrawElements"),
-            // GLES 3.2 base vertex / base instance（Adreno 等老驱动多不支持，stub 时降级模拟）
-            draw_elements_base_vertex: load_opt!("glDrawElementsBaseVertex"),
-            draw_range_elements_base_vertex: load_opt!("glDrawRangeElementsBaseVertex"),
-            draw_elements_instanced_base_vertex: load_opt!("glDrawElementsInstancedBaseVertex"),
-            draw_elements_instanced_base_instance: load_opt!("glDrawElementsInstancedBaseInstance"),
-            draw_elements_instanced_base_vertex_base_instance: load_opt!(
-                "glDrawElementsInstancedBaseVertexBaseInstance"
+            // GLES 3.2 / GL_OES_draw_elements_base_vertex：base vertex 系列
+            draw_elements_base_vertex: load_opt_suffixes!(
+                "glDrawElementsBaseVertex",
+                "glDrawElementsBaseVertexOES",
+                "glDrawElementsBaseVertexEXT"
             ),
-            draw_arrays_instanced_base_instance: load_opt!("glDrawArraysInstancedBaseInstance"),
-            multi_draw_elements_base_vertex: load_opt!("glMultiDrawElementsBaseVertex"),
-            // GLES 3.1 indirect draw
+            draw_range_elements_base_vertex: load_opt_suffixes!(
+                "glDrawRangeElementsBaseVertex",
+                "glDrawRangeElementsBaseVertexOES",
+                ""
+            ),
+            draw_elements_instanced_base_vertex: load_opt_suffixes!(
+                "glDrawElementsInstancedBaseVertex",
+                "glDrawElementsInstancedBaseVertexOES",
+                ""
+            ),
+            // GLES 3.2 / GL_EXT_base_instance：base instance 系列
+            draw_elements_instanced_base_instance: load_opt_suffixes!(
+                "glDrawElementsInstancedBaseInstance",
+                "",
+                "glDrawElementsInstancedBaseInstanceEXT"
+            ),
+            draw_elements_instanced_base_vertex_base_instance: load_opt_suffixes!(
+                "glDrawElementsInstancedBaseVertexBaseInstance",
+                "",
+                "glDrawElementsInstancedBaseVertexBaseInstanceEXT"
+            ),
+            draw_arrays_instanced_base_instance: load_opt_suffixes!(
+                "glDrawArraysInstancedBaseInstance",
+                "",
+                "glDrawArraysInstancedBaseInstanceEXT"
+            ),
+            // GLES 3.2 / GL_EXT_multi_draw_elements_base_vertex
+            multi_draw_elements_base_vertex: load_opt_suffixes!(
+                "glMultiDrawElementsBaseVertex",
+                "",
+                "glMultiDrawElementsBaseVertexEXT"
+            ),
+            // GLES 3.1 indirect draw（core，无扩展后缀）
             draw_arrays_indirect: load_opt!("glDrawArraysIndirect"),
             draw_elements_indirect: load_opt!("glDrawElementsIndirect"),
-            // GLES 3.2 multi-draw indirect
-            multi_draw_arrays_indirect: load_opt!("glMultiDrawArraysIndirect"),
-            multi_draw_elements_indirect: load_opt!("glMultiDrawElementsIndirect"),
-            // GL 4.6 / EXT indirect count（GLES 几乎无支持）
+            // GLES 3.2 / GL_EXT_multi_draw_indirect
+            multi_draw_arrays_indirect: load_opt_suffixes!(
+                "glMultiDrawArraysIndirect",
+                "",
+                "glMultiDrawArraysIndirectEXT"
+            ),
+            multi_draw_elements_indirect: load_opt_suffixes!(
+                "glMultiDrawElementsIndirect",
+                "",
+                "glMultiDrawElementsIndirectEXT"
+            ),
+            // GL 4.6 / GL_ARB_indirect_compute...：GLES 无对应扩展，几乎必然 stub
             multi_draw_arrays_indirect_count: load_opt!("glMultiDrawArraysIndirectCount"),
             multi_draw_elements_indirect_count: load_opt!("glMultiDrawElementsIndirectCount"),
 

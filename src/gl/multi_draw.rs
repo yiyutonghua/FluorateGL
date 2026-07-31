@@ -1,19 +1,18 @@
 //! Multi-draw 系列函数拦截层
 //!
 //! 桌面 GL 的 `glMultiDraw*` 系列在一次调用中提交多个 draw command，减少 CPU 往返。
-//! GLES 支持情况：
-//! - `glMultiDrawArrays` / `glMultiDrawElements`：GLES 1.0 扩展，多数驱动有
-//! - `glMultiDrawElementsBaseVertex`：GLES 3.2 / EXT，老驱动多 stub
-//! - `glMultiDrawArraysIndirect` / `glMultiDrawElementsIndirect`：GLES 3.2 core
-//! - `glMultiDrawArraysIndirectCount` / `glMultiDrawElementsIndirectCount`：GL 4.6 /
-//!   EXT_mesh_shader，GLES 几乎无支持
+//!
+//! 决策依据：优先使用 [`crate::backend::capabilities`]（基于真实 GLES 扩展查询），
+//! `is_stub`（函数指针层面）作兜底——即使扩展声明支持，若 `load_opt_suffixes!`
+//! 未加载到符号（驱动声明扩展但未导出函数），仍走模拟。
 //!
 //! stub 降级策略：
-//! - `glMultiDrawArrays/Elements/BaseVertex`：循环调用对应的单次 draw（丢弃 basevertex）
-//! - `glMultiDrawArrays/ElementsIndirect`：若 `glDrawArrays/ElementsIndirect` 可用则循环，
-//!   否则无法模拟（需读 GPU buffer），告警返回
-//! - `IndirectCount` 系列：依赖 `glGetBufferParameter64iv` 查 count buffer，无法可靠模拟，
-//!   告警返回
+//! - `glMultiDrawArrays/Elements`：循环调用对应的单次 draw
+//! - `glMultiDrawElementsBaseVertex`：优先循环 `glDrawElementsBaseVertex`（保留 basevertex），
+//!   否则循环 `glDrawElements`（丢弃 basevertex）
+//! - `glMultiDrawArrays/ElementsIndirect`：若单次 Indirect 可用则循环（处理 stride=0 紧密排列），
+//!   否则无法模拟，告警返回
+//! - `IndirectCount` 系列：无法可靠模拟，告警返回
 
 use crate::backend;
 use crate::backend::dispatch::GlesDispatch;
@@ -42,6 +41,24 @@ struct DrawElementsIndirectCommand {
     base_instance: u32,
 }
 
+/// 计算 indirect command 的步长。
+/// stride=0 表示紧密排列，使用 command 结构体的实际大小。
+fn array_indirect_stride(stride: isize) -> isize {
+    if stride == 0 {
+        std::mem::size_of::<DrawArraysIndirectCommand>() as isize
+    } else {
+        stride
+    }
+}
+
+fn element_indirect_stride(stride: isize) -> isize {
+    if stride == 0 {
+        std::mem::size_of::<DrawElementsIndirectCommand>() as isize
+    } else {
+        stride
+    }
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glMultiDrawArrays(
@@ -50,6 +67,9 @@ pub extern "C" fn glMultiDrawArrays(
     count: *const i32,
     drawcount: i32,
 ) {
+    if drawcount <= 0 {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.multi_draw_arrays as *const ()) {
             // 降级：循环 glDrawArrays
@@ -71,6 +91,9 @@ pub extern "C" fn glMultiDrawElements(
     indices: *const *const std::ffi::c_void,
     drawcount: i32,
 ) {
+    if drawcount <= 0 {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.multi_draw_elements as *const ()) {
             // 降级：循环 glDrawElements
@@ -93,13 +116,21 @@ pub extern "C" fn glMultiDrawElementsBaseVertex(
     drawcount: i32,
     basevertex: *const i32,
 ) {
+    if drawcount <= 0 {
+        return;
+    }
+    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        if is_stub(
-            dispatch,
-            dispatch.multi_draw_elements_base_vertex as *const (),
-        ) {
+        let supported = caps.multi_draw_elements_base_vertex
+            && !is_stub(
+                dispatch,
+                dispatch.multi_draw_elements_base_vertex as *const (),
+            );
+        if !supported {
             // 优先尝试 glDrawElementsBaseVertex（保留 basevertex 语义）
-            if is_stub(dispatch, dispatch.draw_elements_base_vertex as *const ()) {
+            let base_vertex_ok = caps.draw_elements_base_vertex
+                && !is_stub(dispatch, dispatch.draw_elements_base_vertex as *const ());
+            if !base_vertex_ok {
                 // 驱动完全不支持 basevertex：降级为普通 glDrawElements，丢弃 basevertex。
                 // 注意：这会导致索引偏移错误，仅作 best-effort，避免崩溃。
                 log::warn!(
@@ -127,24 +158,6 @@ pub extern "C" fn glMultiDrawElementsBaseVertex(
     });
 }
 
-/// 计算 indirect command 的步长。
-/// stride=0 表示紧密排列，使用 command 结构体的实际大小。
-fn array_indirect_stride(stride: isize) -> isize {
-    if stride == 0 {
-        std::mem::size_of::<DrawArraysIndirectCommand>() as isize
-    } else {
-        stride
-    }
-}
-
-fn element_indirect_stride(stride: isize) -> isize {
-    if stride == 0 {
-        std::mem::size_of::<DrawElementsIndirectCommand>() as isize
-    } else {
-        stride
-    }
-}
-
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glMultiDrawArraysIndirect(
@@ -153,10 +166,18 @@ pub extern "C" fn glMultiDrawArraysIndirect(
     drawcount: i32,
     stride: isize,
 ) {
+    if drawcount <= 0 {
+        return;
+    }
+    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        if is_stub(dispatch, dispatch.multi_draw_arrays_indirect as *const ()) {
+        let supported = caps.multi_draw_indirect
+            && !is_stub(dispatch, dispatch.multi_draw_arrays_indirect as *const ());
+        if !supported {
             // 降级：若 glDrawArraysIndirect 可用则循环调用
-            if is_stub(dispatch, dispatch.draw_arrays_indirect as *const ()) {
+            let indirect_ok = caps.indirect_draw
+                && !is_stub(dispatch, dispatch.draw_arrays_indirect as *const ());
+            if !indirect_ok {
                 log::warn!(
                     "[FluorateGL] glMultiDrawArraysIndirect: GLES 不支持 indirect draw，无法模拟，已跳过"
                 );
@@ -182,9 +203,17 @@ pub extern "C" fn glMultiDrawElementsIndirect(
     drawcount: i32,
     stride: isize,
 ) {
+    if drawcount <= 0 {
+        return;
+    }
+    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        if is_stub(dispatch, dispatch.multi_draw_elements_indirect as *const ()) {
-            if is_stub(dispatch, dispatch.draw_elements_indirect as *const ()) {
+        let supported = caps.multi_draw_indirect
+            && !is_stub(dispatch, dispatch.multi_draw_elements_indirect as *const ());
+        if !supported {
+            let indirect_ok = caps.indirect_draw
+                && !is_stub(dispatch, dispatch.draw_elements_indirect as *const ());
+            if !indirect_ok {
                 log::warn!(
                     "[FluorateGL] glMultiDrawElementsIndirect: GLES 不支持 indirect draw，无法模拟，已跳过"
                 );
@@ -210,13 +239,16 @@ pub extern "C" fn glMultiDrawArraysIndirectCount(
     maxdrawcount: i32,
     stride: isize,
 ) {
+    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        if is_stub(
-            dispatch,
-            dispatch.multi_draw_arrays_indirect_count as *const (),
-        ) {
+        let supported = caps.indirect_count
+            && !is_stub(
+                dispatch,
+                dispatch.multi_draw_arrays_indirect_count as *const (),
+            );
+        if !supported {
             // IndirectCount 需从 GPU buffer 读取实际 drawcount，无法在 CPU 侧可靠模拟。
-            // 仅当 maxdrawcount=0 时可安全跳过，否则告警。
+            // 仅当 maxdrawcount<=0 时可安全跳过，否则告警。
             if maxdrawcount > 0 {
                 log::warn!(
                     "[FluorateGL] glMultiDrawArraysIndirectCount: GLES 不支持 indirect count，无法模拟，已跳过"
@@ -244,11 +276,14 @@ pub extern "C" fn glMultiDrawElementsIndirectCount(
     maxdrawcount: i32,
     stride: isize,
 ) {
+    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        if is_stub(
-            dispatch,
-            dispatch.multi_draw_elements_indirect_count as *const (),
-        ) {
+        let supported = caps.indirect_count
+            && !is_stub(
+                dispatch,
+                dispatch.multi_draw_elements_indirect_count as *const (),
+            );
+        if !supported {
             if maxdrawcount > 0 {
                 log::warn!(
                     "[FluorateGL] glMultiDrawElementsIndirectCount: GLES 不支持 indirect count，无法模拟，已跳过"

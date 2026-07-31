@@ -8,6 +8,7 @@
 //! 全局状态用 `OnceLock` 存储，库生命周期内不可变；首次 GL/EGL 调用时
 //! 触发 GPU 信息记录与驱动 Debug 噪声屏蔽。
 
+pub mod capabilities;
 pub mod dispatch;
 pub mod loader;
 
@@ -21,6 +22,7 @@ static CONFIG: OnceLock<Config> = OnceLock::new();
 pub static GLES_DISPATCH: OnceLock<dispatch::GlesDispatch> = OnceLock::new();
 static EGL_DISPATCH: OnceLock<crate::egl_sys::dispatch::EglDispatch> = OnceLock::new();
 static INIT_ONCE: OnceLock<()> = OnceLock::new();
+static GLES_CAPABILITIES: OnceLock<capabilities::GlesCapabilities> = OnceLock::new();
 
 pub fn mark_initialized() {
     let _ = INIT_ONCE.set(());
@@ -65,6 +67,7 @@ where
         log::info!("[FluorateGL] === 首次 GL 调用，游戏渲染管线已启动 ===");
         suppress_debug_noise();
         log_gpu_info();
+        query_capabilities();
     }
 
     let dispatch = GLES_DISPATCH.get().unwrap_or_else(|| {
@@ -185,3 +188,33 @@ pub fn gles_dispatch() -> Option<&'static dispatch::GlesDispatch> {
 pub fn egl_dispatch() -> Option<&'static crate::egl_sys::dispatch::EglDispatch> {
     EGL_DISPATCH.get()
 }
+
+/// 在首次 GL 调用时（EGL 上下文已创建）查询真实 GLES 版本与扩展，构建能力表。
+///
+/// 拦截层（drawing.rs / multi_draw.rs）基于此表决定原生转发/模拟/跳过。
+/// 必须在 EGL 上下文已创建后调用，否则 glGetString 返回 null。
+fn query_capabilities() {
+    if let Some(dispatch) = GLES_DISPATCH.get() {
+        let caps = capabilities::GlesCapabilities::query(dispatch);
+        let _ = GLES_CAPABILITIES.set(caps);
+    }
+}
+
+/// 返回 GLES 能力表引用。
+///
+/// 若尚未初始化（首次 GL 调用前，或 GLES 库加载失败），返回全 false 的兜底表。
+/// 拦截层应优先用此表判断扩展支持，`is_stub` 作为函数指针层面的兜底。
+pub fn capabilities() -> &'static capabilities::GlesCapabilities {
+    GLES_CAPABILITIES.get().unwrap_or(&FALLBACK_CAPS)
+}
+
+/// 兜底能力表（全 false），GLES 库加载失败时使用
+static FALLBACK_CAPS: capabilities::GlesCapabilities = capabilities::GlesCapabilities {
+    version: capabilities::GlesVersion(0),
+    draw_elements_base_vertex: false,
+    base_instance: false,
+    multi_draw_elements_base_vertex: false,
+    multi_draw_indirect: false,
+    indirect_draw: false,
+    indirect_count: false,
+};

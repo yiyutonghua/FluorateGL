@@ -1,0 +1,212 @@
+//! GLES 后端能力检测
+//!
+//! 通过 `glGetString(GL_VERSION)` 和 `glGetStringi(GL_EXTENSIONS, i)` 查询**真实** GLES
+//! 版本与扩展（绕过拦截层对 MC 伪造的 FAKE_EXTENSIONS），构建权威能力表。
+//!
+//! 拦截层（drawing.rs / multi_draw.rs）基于此表决定：
+//! - 原生转发（扩展支持）
+//! - 模拟降级（扩展不支持但可用其他函数组合实现）
+//! - 告警跳过（无法模拟）
+//!
+//! `is_stub`（函数指针层面）作为兜底：即使扩展声明支持，若 `load_opt_suffixes!`
+//! 未加载到符号（驱动声明扩展但未导出函数），仍走模拟。
+
+use crate::backend::dispatch::GlesDispatch;
+
+/// GLES 版本号（major * 10 + minor），如 3.2 → 32
+#[derive(Clone, Copy, Debug)]
+pub struct GlesVersion(pub u16);
+
+impl GlesVersion {
+    /// 是否 >= 指定版本
+    pub fn at_least(self, major: u8, minor: u8) -> bool {
+        self.0 >= (major as u16 * 10 + minor as u16)
+    }
+}
+
+/// GLES 真实能力表
+///
+/// 各字段对应拦截层用到的扩展/版本特性，基于扩展字符串查询。
+#[derive(Clone, Debug)]
+pub struct GlesCapabilities {
+    /// GLES 版本（如 30/31/32），主要用于诊断日志
+    #[allow(dead_code)]
+    pub version: GlesVersion,
+    /// GL_OES_draw_elements_base_vertex 或 GLES 3.2
+    /// 覆盖：glDrawElementsBaseVertex, glDrawRangeElementsBaseVertex,
+    ///       glDrawElementsInstancedBaseVertex
+    pub draw_elements_base_vertex: bool,
+    /// GL_EXT_base_instance 或 GLES 3.2
+    /// 覆盖：glDrawArraysInstancedBaseInstance, glDrawElementsInstancedBaseInstance,
+    ///       glDrawElementsInstancedBaseVertexBaseInstance（还需 base_vertex）
+    pub base_instance: bool,
+    /// GL_EXT_multi_draw_elements_base_vertex 或 GLES 3.2
+    /// 覆盖：glMultiDrawElementsBaseVertex
+    pub multi_draw_elements_base_vertex: bool,
+    /// GL_EXT_multi_draw_indirect 或 GLES 3.2
+    /// 覆盖：glMultiDrawArraysIndirect, glMultiDrawElementsIndirect
+    pub multi_draw_indirect: bool,
+    /// GLES 3.1+（core，无扩展）
+    /// 覆盖：glDrawArraysIndirect, glDrawElementsIndirect
+    pub indirect_draw: bool,
+    /// GL_ARB_indirect_compute / GL 4.6（GLES 几乎无支持）
+    /// 覆盖：glMultiDrawArraysIndirectCount, glMultiDrawElementsIndirectCount
+    pub indirect_count: bool,
+}
+
+impl GlesCapabilities {
+    /// 全 false 兜底（GLES 库加载失败时使用）
+    #[allow(dead_code)]
+    pub fn none() -> Self {
+        Self {
+            version: GlesVersion(0),
+            draw_elements_base_vertex: false,
+            base_instance: false,
+            multi_draw_elements_base_vertex: false,
+            multi_draw_indirect: false,
+            indirect_draw: false,
+            indirect_count: false,
+        }
+    }
+
+    /// 查询真实 GLES 版本与扩展，构建能力表。
+    ///
+    /// 必须在 EGL 上下文已创建后调用（首次 GL 调用时由 backend/mod.rs 触发）。
+    /// 通过 dispatch 直接访问 GLES，绕过拦截层的伪造扩展。
+    pub fn query(dispatch: &GlesDispatch) -> Self {
+        let version = parse_gles_version(dispatch);
+        let extensions = query_extensions(dispatch);
+
+        let is_32 = version.at_least(3, 2);
+        let is_31 = version.at_least(3, 1);
+
+        let caps = Self {
+            version,
+            draw_elements_base_vertex: is_32
+                || extensions
+                    .iter()
+                    .any(|e| e == "GL_OES_draw_elements_base_vertex"),
+            base_instance: is_32 || extensions.iter().any(|e| e == "GL_EXT_base_instance"),
+            multi_draw_elements_base_vertex: is_32
+                || extensions
+                    .iter()
+                    .any(|e| e == "GL_EXT_multi_draw_elements_base_vertex"),
+            multi_draw_indirect: is_32
+                || extensions.iter().any(|e| e == "GL_EXT_multi_draw_indirect"),
+            indirect_draw: is_31,
+            // GLES 无标准 indirect count 扩展
+            indirect_count: false,
+        };
+
+        log::info!(
+            "[FluorateGL] GLES 能力检测: version={} base_vertex={} base_instance={} multi_base_vertex={} multi_indirect={} indirect_draw={} indirect_count={}",
+            version.0,
+            caps.draw_elements_base_vertex,
+            caps.base_instance,
+            caps.multi_draw_elements_base_vertex,
+            caps.multi_draw_indirect,
+            caps.indirect_draw,
+            caps.indirect_count
+        );
+        if !caps.draw_elements_base_vertex {
+            log::warn!(
+                "[FluorateGL] GLES 不支持 GL_OES_draw_elements_base_vertex，BaseVertex 系列将降级模拟（索引偏移丢失）"
+            );
+        }
+        if !caps.base_instance {
+            log::warn!(
+                "[FluorateGL] GLES 不支持 GL_EXT_base_instance，BaseInstance 系列将降级模拟（baseinstance 丢失）"
+            );
+        }
+
+        caps
+    }
+}
+
+/// 解析 GLES 版本号
+///
+/// GLES 的 GL_VERSION 字符串格式如 "OpenGL ES 3.2 V@0415.0..."，
+/// 解析 "3.2" 部分得到 320。
+fn parse_gles_version(dispatch: &GlesDispatch) -> GlesVersion {
+    // GL_VERSION = 0x1F02
+    let version_ptr = unsafe { (dispatch.get_string)(0x1F02) };
+    if version_ptr.is_null() {
+        return GlesVersion(0);
+    }
+    let version_str = unsafe {
+        std::ffi::CStr::from_ptr(version_ptr)
+            .to_string_lossy()
+            .into_owned()
+    };
+
+    // 查找 "OpenGL ES N.M" 模式
+    let v = version_str
+        .split("OpenGL ES")
+        .nth(1)
+        .and_then(|s| s.trim_start().split_whitespace().next())
+        .and_then(|s| {
+            let mut parts = s.split('.');
+            let major = parts.next()?.parse::<u16>().ok()?;
+            let minor = parts
+                .next()
+                .and_then(|m| m.parse::<u16>().ok())
+                .unwrap_or(0);
+            Some(major * 10 + minor)
+        })
+        .unwrap_or(0);
+
+    GlesVersion(v)
+}
+
+/// 通过 glGetStringi 遍历 GLES 扩展列表
+///
+/// GLES 3.0+ 必须用 indexed 查询（glGetString(GL_EXTENSIONS) 可能返回超长字符串或 null）。
+fn query_extensions(dispatch: &GlesDispatch) -> Vec<String> {
+    // GL_NUM_EXTENSIONS = 0x821D
+    let mut num = 0i32;
+    unsafe {
+        (dispatch.get_integerv)(0x821D, &mut num);
+    }
+    if num <= 0 {
+        return Vec::new();
+    }
+
+    // GL_EXTENSIONS = 0x1F03
+    let mut exts = Vec::with_capacity(num as usize);
+    for i in 0..num as u32 {
+        let ptr = unsafe { (dispatch.get_string_i)(0x1F03, i) };
+        if !ptr.is_null() {
+            if let Ok(s) = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_str() {
+                exts.push(s.to_string());
+            }
+        }
+    }
+    exts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_at_least() {
+        let v = GlesVersion(32); // 3.2
+        assert!(v.at_least(3, 2));
+        assert!(v.at_least(3, 1));
+        assert!(v.at_least(3, 0));
+        assert!(!v.at_least(4, 0));
+
+        let v = GlesVersion(31); // 3.1
+        assert!(!v.at_least(3, 2));
+        assert!(v.at_least(3, 1));
+    }
+
+    #[test]
+    fn none_caps_all_false() {
+        let c = GlesCapabilities::none();
+        assert!(!c.draw_elements_base_vertex);
+        assert!(!c.base_instance);
+        assert!(!c.indirect_draw);
+        assert!(!c.indirect_count);
+    }
+}
