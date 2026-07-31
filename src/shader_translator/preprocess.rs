@@ -16,6 +16,10 @@
 use regex::Regex;
 use std::collections::HashSet;
 
+/// GLSL stage 常量（与 GL_VERTEX_SHADER/GL_FRAGMENT_SHADER 对齐）
+pub const GL_VERTEX_SHADER: u32 = 0x8B31;
+pub const GL_FRAGMENT_SHADER: u32 = 0x8B30;
+
 /// GLSL 预处理主入口
 ///
 /// 执行顺序：
@@ -24,16 +28,35 @@ use std::collections::HashSet;
 /// 3. 规范化 GLSL 版本（无版本插入 450，< 140 升级到 140，移除 compatibility profile）
 /// 4. 为缺少 location 的 in/out 变量自动添加 layout(location=X)（in/out 独立计数）
 /// 5. 为缺少 binding 的 UBO/SSBO 自动添加 layout(binding=X)
-pub fn preprocess(source: &str) -> String {
+///
+/// `stage` 参数用于给 convert_uniforms_to_ubo 生成的 UBO 起唯一块名，
+/// 避免 VS/FS 各自的 UniformBlock 跨 stage 链接时 type mismatch。
+pub fn preprocess(source: &str, stage: u32) -> String {
     let mut result = remove_line_directives(source);
     strip_mc_version_comment(&mut result);
     force_glsl_version(&mut result);
     rename_vulkan_builtin_variables(&mut result);
-    // 新增：转换独立 uniform 到 UBO
-    result = convert_uniforms_to_ubo(&result);
+    // 转换独立 uniform 到 UBO（块名按 stage 区分，避免跨 stage type mismatch）
+    result = convert_uniforms_to_ubo(&result, stage);
     inject_missing_locations(&mut result);
     inject_missing_bindings(&mut result);
     result
+}
+
+/// 根据 stage 生成唯一的 UniformBlock 块名
+///
+/// 每个 shader 独立 preprocess，各自把本 stage 的独立 uniform 包装进 UBO。
+/// 若所有 stage 共用同一个块名，VS/FS 的成员不同会导致 GLES 链接器报
+/// "UniformBlock type mismatch with other stage"。
+/// 按 stage 命名（VS→UniformBlockVS, FS→UniformBlockFS）后，块名不同，
+/// 链接器不会尝试匹配，各自独立绑定。MC 通过 glGetUniformLocation 按成员名
+/// 查询 uniform（块名不影响成员查询），功能不受影响。
+fn uniform_block_name(stage: u32) -> &'static str {
+    match stage {
+        GL_VERTEX_SHADER => "UniformBlockVS",
+        GL_FRAGMENT_SHADER => "UniformBlockFS",
+        _ => "UniformBlockOther",
+    }
 }
 
 /// 将桌面 GLSL 的内置变量重命名为 Vulkan GLSL 对应的名称
@@ -367,7 +390,7 @@ fn inject_missing_bindings(result: &mut String) -> bool {
 /// Vulkan target 拒绝独立 non-opaque uniform（必须包装进 UBO）。
 /// 本函数扫描单行 `uniform T name;` 声明，收集后包装进无实例名 UBO：
 /// ```glsl
-/// layout(std140, binding = N) uniform UniformBlock {
+/// layout(std140, binding = N) uniform UniformBlockVS {
 ///     mat4 ModelViewMat;
 ///     vec4 ColorModulator;
 /// };
@@ -376,11 +399,14 @@ fn inject_missing_bindings(result: &mut String) -> bool {
 /// 无实例名 UBO 的成员全局可见，源码中的引用 `ModelViewMat` 无需替换即可继续使用。
 /// 这避免了引用替换的所有风险（历史 Bug：替换污染 UBO 声明块内部、误改局部变量等）。
 ///
+/// 块名按 stage 区分（VS→UniformBlockVS, FS→UniformBlockFS），避免跨 stage
+/// 同名 UBO 成员不一致导致 GLES 链接器报 "type mismatch with other stage"。
+///
 /// 流程：
 /// 1. 扫描收集 non-opaque uniform，同时产出删除了 uniform 行的 cleaned_src
 /// 2. 确定 binding（在 cleaned_src 上查找，避免与已有 binding 冲突）
 /// 3. 构建 UBO 声明（成员名用原始 name）并插入到 #version 之后
-fn convert_uniforms_to_ubo(src: &str) -> String {
+fn convert_uniforms_to_ubo(src: &str, stage: u32) -> String {
     // 匹配单行全局 uniform 声明（不包括块，不包括 sampler/image/atomic_uint）
     // 例如：uniform mat4 ModelViewMat;
     //        uniform vec4 ColorModulator;
@@ -423,10 +449,11 @@ fn convert_uniforms_to_ubo(src: &str) -> String {
     // 确定 binding（在 cleaned_src 上查找，避免与已有 UBO/SSBO/sampler binding 冲突）
     let binding = find_available_binding(&cleaned_src);
 
-    // 构建 UBO 声明（无实例名，成员全局可见）
+    // 构建 UBO 声明（无实例名，成员全局可见；块名按 stage 区分避免跨 stage冲突）
+    let block_name = uniform_block_name(stage);
     let mut ubo_decl = format!(
-        "layout(std140, binding = {}) uniform UniformBlock {{\n",
-        binding
+        "layout(std140, binding = {}) uniform {} {{\n",
+        binding, block_name
     );
     for (ty, name) in &uniforms {
         ubo_decl.push_str(&format!("    {} {};\n", ty, name));
@@ -612,7 +639,7 @@ mod tests {
     #[test]
     fn test_preprocess_full_pipeline() {
         let input = "#version 330\nlayout(std140) uniform MyBlock {\n    mat4 data;\n};\nin vec4 color;\nout vec4 fragColor;\nuniform mat4 MVP;\nvoid main() {\n    fragColor = color;\n}\n";
-        let result = preprocess(input);
+        let result = preprocess(input, 0x8B31);
         // 版本升级到 450 core（layout 限定符需要 420+）
         assert!(result.contains("#version 450 core"));
         // UBO 应有 binding。注意：独立 uniform MVP 被 convert_uniforms_to_ubo 包装成
@@ -633,7 +660,7 @@ mod tests {
     #[test]
     fn test_strip_mc_version_comment_in_preprocess() {
         let input = "#version 330\n#line 0 1\n/*#version 330*/\nvoid main() {}\n";
-        let result = preprocess(input);
+        let result = preprocess(input, 0x8B31);
         // /*#version 330*/ 应被移除
         assert!(
             !result.contains("/*#version"),
@@ -656,7 +683,7 @@ mod tests {
             void main() {\n\
                 gl_Position = ModelViewMat * vec4(Position, 1.0);\n\
             }\n";
-        let result = preprocess(input);
+        let result = preprocess(input, 0x8B31);
         // 版本升级到 450 core
         assert!(
             result.contains("#version 450 core"),
@@ -681,7 +708,7 @@ mod tests {
                 gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);\n\
                 vertexColor = vec4(1.0);\n\
             }\n";
-        let result = preprocess(input);
+        let result = preprocess(input, 0x8B31);
         // UBO 声明块内部成员名应保持原样（不带点号）
         assert!(
             result.contains("mat4 ModelViewMat;"),
@@ -711,7 +738,7 @@ mod tests {
             void main() {\n\
                 gl_Position = ModelViewMat * vec4(Position, 1.0);\n\
             }\n";
-        let result = preprocess(input);
+        let result = preprocess(input, 0x8B31);
         // 原始独立 uniform 声明行应被删除（不残留 `uniform mat4 ModelViewMat;`）
         // UBO 块内的成员声明不是 `uniform mat4`，是 `mat4 ModelViewMat;`
         assert!(
@@ -750,7 +777,7 @@ mod tests {
                 gl_Position = ModelViewMat * vec4(Position, 1.0);\n\
                 vertexColor = ColorModulator;\n\
             }\n";
-        let result = preprocess(input);
+        let result = preprocess(input, 0x8B31);
         // 两个 UBO 应有不同 binding
         // UniformBlock（独立 uniform 包装）和 DynamicTransforms（原生 UBO）
         // 验证两者 binding 编号不同
@@ -797,11 +824,11 @@ mod tests {
                 gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);\n\
                 vertexColor = Color;\n\
             }\n";
-        let result = preprocess(input);
+        let result = preprocess(input, 0x8B31);
         // 1. 版本升级
         assert!(result.contains("#version 450 core"));
-        // 2. UBO 包装：应有 UniformBlock 声明，成员名不带点号
-        assert!(result.contains("uniform UniformBlock"));
+        // 2. UBO 包装：应有 UniformBlockVS 声明（vertex stage），成员名不带点号
+        assert!(result.contains("uniform UniformBlockVS"));
         assert!(result.contains("mat4 ModelViewMat;"));
         assert!(result.contains("mat4 ProjMat;"));
         // 3. 原始 uniform 行已删除
@@ -833,7 +860,7 @@ mod tests {
                 vec2 uv = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);\n\
                 gl_Position = ProjMat * vec4(uv, 0.0, 1.0);\n\
             }\n";
-        let result = preprocess(input);
+        let result = preprocess(input, 0x8B31);
         assert!(
             result.contains("gl_VertexIndex"),
             "gl_VertexID 应重命名为 gl_VertexIndex，实际: {}",
@@ -859,7 +886,7 @@ mod tests {
             void main() {\n\
                 fragColor = sampleNearest(Tex, vUV);\n\
             }\n";
-        let result = preprocess(input);
+        let result = preprocess(input, 0x8B31);
         // sampler 作为参数名应被重命名为 u_sampler
         assert!(
             result.contains("u_sampler"),

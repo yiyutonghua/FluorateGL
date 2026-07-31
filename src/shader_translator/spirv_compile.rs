@@ -85,7 +85,8 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
     };
 
     // 预处理 GLSL：移除 #line、移除 /*#version*/ 注释、规范化版本、注入 location/binding
-    let preprocessed = crate::shader_translator::preprocess::preprocess(source);
+    // stage 用于给 UniformBlock 起唯一块名（UniformBlockVS/UniformBlockFS），避免跨 stage type mismatch
+    let preprocessed = crate::shader_translator::preprocess::preprocess(source, stage);
 
     log::debug!(
         "[ShaderTranslator] ENTERING shaderc compile for stage 0x{:04X} (source {} chars, preprocessed {} chars)",
