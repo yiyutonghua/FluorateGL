@@ -255,6 +255,31 @@ pub struct GlesDispatch {
     // Drawing
     pub multi_draw_arrays: unsafe extern "C" fn(u32, *const i32, *const i32, i32),
     pub multi_draw_elements: unsafe extern "C" fn(u32, *const i32, u32, *const *const c_void, i32),
+    // GLES 3.2 / EXT_draw_buffers_indexed base vertex & base instance 系列
+    pub draw_elements_base_vertex: unsafe extern "C" fn(u32, i32, u32, *const c_void, i32),
+    pub draw_range_elements_base_vertex:
+        unsafe extern "C" fn(u32, u32, u32, i32, u32, *const c_void, i32),
+    pub draw_elements_instanced_base_vertex:
+        unsafe extern "C" fn(u32, i32, u32, *const c_void, i32, i32),
+    pub draw_elements_instanced_base_instance:
+        unsafe extern "C" fn(u32, i32, u32, *const c_void, i32, u32),
+    pub draw_elements_instanced_base_vertex_base_instance:
+        unsafe extern "C" fn(u32, i32, u32, *const c_void, i32, i32, u32),
+    pub draw_arrays_instanced_base_instance: unsafe extern "C" fn(u32, i32, i32, i32, u32),
+    pub multi_draw_elements_base_vertex:
+        unsafe extern "C" fn(u32, *const i32, u32, *const *const c_void, i32, *const i32),
+    // GLES 3.1 indirect draw
+    pub draw_arrays_indirect: unsafe extern "C" fn(u32, *const c_void),
+    pub draw_elements_indirect: unsafe extern "C" fn(u32, u32, *const c_void),
+    // GLES 3.2 multi-draw indirect
+    pub multi_draw_arrays_indirect: unsafe extern "C" fn(u32, *const c_void, i32, isize),
+    pub multi_draw_elements_indirect: unsafe extern "C" fn(u32, u32, *const c_void, i32, isize),
+    // GL 4.6 / EXT_mesh_shader indirect count（GLES 几乎无支持，stub 时告警）
+    // drawcount 参数为 GLintptr（buffer offset），非指针
+    pub multi_draw_arrays_indirect_count:
+        unsafe extern "C" fn(u32, *const c_void, isize, i32, isize),
+    pub multi_draw_elements_indirect_count:
+        unsafe extern "C" fn(u32, u32, *const c_void, isize, i32, isize),
 
     // Query
     pub gen_queries: unsafe extern "C" fn(i32, *mut u32),
@@ -642,6 +667,25 @@ impl GlesDispatch {
 
             multi_draw_arrays: load_opt!("glMultiDrawArrays"),
             multi_draw_elements: load_opt!("glMultiDrawElements"),
+            // GLES 3.2 base vertex / base instance（Adreno 等老驱动多不支持，stub 时降级模拟）
+            draw_elements_base_vertex: load_opt!("glDrawElementsBaseVertex"),
+            draw_range_elements_base_vertex: load_opt!("glDrawRangeElementsBaseVertex"),
+            draw_elements_instanced_base_vertex: load_opt!("glDrawElementsInstancedBaseVertex"),
+            draw_elements_instanced_base_instance: load_opt!("glDrawElementsInstancedBaseInstance"),
+            draw_elements_instanced_base_vertex_base_instance: load_opt!(
+                "glDrawElementsInstancedBaseVertexBaseInstance"
+            ),
+            draw_arrays_instanced_base_instance: load_opt!("glDrawArraysInstancedBaseInstance"),
+            multi_draw_elements_base_vertex: load_opt!("glMultiDrawElementsBaseVertex"),
+            // GLES 3.1 indirect draw
+            draw_arrays_indirect: load_opt!("glDrawArraysIndirect"),
+            draw_elements_indirect: load_opt!("glDrawElementsIndirect"),
+            // GLES 3.2 multi-draw indirect
+            multi_draw_arrays_indirect: load_opt!("glMultiDrawArraysIndirect"),
+            multi_draw_elements_indirect: load_opt!("glMultiDrawElementsIndirect"),
+            // GL 4.6 / EXT indirect count（GLES 几乎无支持）
+            multi_draw_arrays_indirect_count: load_opt!("glMultiDrawArraysIndirectCount"),
+            multi_draw_elements_indirect_count: load_opt!("glMultiDrawElementsIndirectCount"),
 
             gen_queries: unsafe { std::mem::transmute(load!("glGenQueries")) },
             delete_queries: unsafe { std::mem::transmute(load!("glDeleteQueries")) },
