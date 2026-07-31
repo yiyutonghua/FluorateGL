@@ -60,7 +60,13 @@ pub extern "C" fn glAttachShader(program: u32, shader: u32) {
 pub extern "C" fn glLinkProgram(program: u32) {
     log::debug!("[FluorateGL] glLinkProgram({})", program);
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state(|s| {
+            // link/relink 后 uniform location 可能变化，清理该 program 的缓存，
+            // 避免 relink 后返回过期 location（与 glDeleteProgram 清理模式对称）。
+            // 在 link 前清理：即便 link 失败，清空缓存也只是让后续查询重新走 FFI，无副作用。
+            s.uniform_location_cache.retain(|k, _| k.0 != program);
+            s.programs.get_gles(program).unwrap_or(0)
+        });
         if gles_id == 0 {
             log::debug!(
                 "[FluorateGL] glLinkProgram({}) -> unknown desktop id, skipping",
