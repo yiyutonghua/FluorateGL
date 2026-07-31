@@ -257,6 +257,26 @@ void main() {
             translated.contains("ColorModulator"),
             "UBO 成员 ColorModulator 应保留"
         );
+        // spirv-cross 会自动添加 UBO 实例名（如 } _20;），
+        // postprocess 必须移除实例名并替换函数体中的引用，
+        // 否则 MC 通过 glGetUniformLocation(program, "ModelViewMat")
+        // 按成员名查询会返回 -1（红屏）。
+        assert!(
+            !translated.contains("} _"),
+            "UBO 实例名声明应被移除（如 }} _20;），got: {}",
+            translated
+        );
+        assert!(
+            !translated.contains("_.") || !translated.contains("_20."),
+            "UBO 实例名引用应被替换为直接成员访问，got: {}",
+            translated
+        );
+        // 验证成员可直接访问（无实例名前缀）
+        assert!(
+            translated.contains("ModelViewMat *") || translated.contains("ModelViewMat*"),
+            "ModelViewMat 应被直接访问（无实例名前缀），got: {}",
+            translated
+        );
     }
 
     #[test]

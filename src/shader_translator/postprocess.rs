@@ -13,6 +13,7 @@ use regex::Regex;
 /// 执行顺序：
 /// 0. 移除 in/out varying 的 layout(location=N)（解决跨 stage mismatch）
 /// 1. 移除非 image 的 layout(binding=X)（image 的 binding 不能移除）
+/// 1.5 移除 UBO/SSBO 实例名（spirv-cross 自动添加，导致 uniform 查询失败）
 /// 2. 修复 atomic counter binding（offset → binding，GLES 要求 binding）
 /// 3. 注入 image format 限定符（GLES 要求 image 必须有 format 和 binding）
 /// 4. 处理 outColorN 的 location
@@ -72,6 +73,14 @@ pub fn post_process(src: &str) -> String {
     if src.ends_with('\n') && !result.ends_with('\n') {
         result.push('\n');
     }
+
+    // 1.5 移除 UBO/SSBO 实例名（关键修复：解决 uniform 查询失败）
+    //    spirv-cross 默认为 UBO/SSBO 添加实例名（如 `} _20;`），导致成员访问
+    //    需要通过 `实例名.成员名`（如 `_20.ModelViewMat`）。MC 通过
+    //    glGetUniformLocation(program, "ModelViewMat") 按成员名查询时返回 -1，
+    //    因为带实例名的 UBO 成员必须用 "块名.成员名" 查询，直接按成员名查不到。
+    //    移除实例名后，UBO 成员变为全局可见，MC 可直接按成员名查询。
+    result = strip_ubo_instance_name(&result);
 
     // 2. 修复 atomic counter binding
     //    spirv-cross 输出 `layout(offset = N) uniform atomic_uint`，
@@ -184,6 +193,57 @@ fn strip_uniform_locations(src: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// 移除 UBO/SSBO 的实例名，使成员全局可见
+///
+/// spirv-cross 默认为 UBO/SSBO 添加实例名（如 `} _20;`），导致成员访问
+/// 需要通过 `实例名.成员名`（如 `_20.ModelViewMat`）。MC 通过
+/// `glGetUniformLocation(program, "ModelViewMat")` 按成员名查询时返回 -1，
+/// 因为带实例名的 UBO 成员必须用 "块名.成员名" 查询，直接按成员名查不到。
+///
+/// 修复：
+/// 1. 移除 UBO/SSBO 末尾的实例名：`} _20;` → `};`
+/// 2. 替换函数体中的实例名引用：`_20.ModelViewMat` → `ModelViewMat`
+///
+/// 这样 UBO 成员变为全局可见，`glGetUniformLocation` 可直接按成员名查询。
+///
+/// 仅处理 spirv-cross 生成的 `_N` 形式实例名（以 `_` 开头），
+/// 不会误伤 C 风格结构体变量声明（变量名不以 `_` 开头）。
+fn strip_ubo_instance_name(src: &str) -> String {
+    // 匹配 UBO/SSBO 块声明末尾的实例名
+    // 格式：} _N;  或  } _N = ...;（带初始化的罕见情况暂不支持）
+    // spirv-cross 生成的实例名都是 _N 形式（如 _20, _30, _52）
+    let re_instance = Regex::new(r"\}\s*(?P<inst>_\w+)\s*;").unwrap();
+
+    // 收集所有 UBO/SSBO 实例名
+    let instance_names: Vec<String> = re_instance
+        .captures_iter(src)
+        .filter_map(|c| c.name("inst").map(|m| m.as_str().to_string()))
+        .collect();
+
+    if instance_names.is_empty() {
+        return src.to_string();
+    }
+
+    // 1. 移除实例名声明：`} _20;` → `};`
+    let result = re_instance.replace_all(src, "};").to_string();
+
+    // 2. 替换函数体中的 `实例名.成员` → `成员`
+    //    用 \b 边界确保只匹配完整的实例名（避免误伤其他变量）
+    let mut result = result;
+    for inst in &instance_names {
+        let pattern = format!(r"\b{}\.", regex::escape(inst));
+        let re = Regex::new(&pattern).unwrap();
+        result = re.replace_all(&result, "").to_string();
+    }
+
+    log::debug!(
+        "[ShaderTranslator] postprocess 移除了 UBO/SSBO 实例名: {:?}",
+        instance_names
+    );
+
+    result
 }
 
 /// 修复 atomic counter 的 binding 限定符
@@ -490,5 +550,93 @@ mod tests {
         let result = post_process(input);
         assert!(result.contains("precision highp float;"));
         assert!(!result.contains("precision mediump float;"));
+    }
+
+    // ============ UBO 实例名移除 ============
+
+    #[test]
+    fn test_strip_ubo_instance_name_basic() {
+        // spirv-cross 输出带实例名的 UBO：} _20; → };
+        // 函数体中的 _20.ModelViewMat → ModelViewMat
+        let input = "layout(std140) uniform UniformBlockVS\n{\n    mat4 ModelViewMat;\n    mat4 ProjMat;\n} _20;\n\nvoid main()\n{\n    gl_Position = (_20.ProjMat * _20.ModelViewMat) * vec4(Position, 1.0);\n}\n";
+        let result = strip_ubo_instance_name(input);
+        assert!(
+            !result.contains("} _20;"),
+            "instance name should be removed from declaration, got: {}",
+            result
+        );
+        assert!(
+            result.contains("};"),
+            "declaration should end with }};, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("_20."),
+            "instance name reference should be replaced, got: {}",
+            result
+        );
+        assert!(
+            result.contains("ProjMat * ModelViewMat"),
+            "member access should be direct, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_strip_ubo_instance_name_multiple_blocks() {
+        // 多个 UBO 各自有实例名，应全部移除并替换引用
+        let input = "layout(std140) uniform BlockA\n{\n    mat4 m;\n} _10;\nlayout(std140) uniform BlockB\n{\n    vec4 v;\n} _20;\nvoid main()\n{\n    vec4 x = _10.m * _20.v;\n}\n";
+        let result = strip_ubo_instance_name(input);
+        assert!(!result.contains("} _10;"));
+        assert!(!result.contains("} _20;"));
+        assert!(!result.contains("_10."));
+        assert!(!result.contains("_20."));
+        assert!(result.contains("m * v"));
+    }
+
+    #[test]
+    fn test_strip_ubo_instance_name_preserves_struct_var() {
+        // C 风格结构体变量声明（变量名不以 _ 开头）不应被误处理
+        let input = "struct S { int x; } myVar;\nvoid main() { myVar.x = 1; }\n";
+        let result = strip_ubo_instance_name(input);
+        assert!(
+            result.contains("} myVar;"),
+            "struct variable should be preserved, got: {}",
+            result
+        );
+        assert!(
+            result.contains("myVar.x"),
+            "struct member access should be preserved, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_strip_ubo_instance_name_no_instance() {
+        // 无实例名的 UBO（} ;）应原样返回
+        let input = "layout(std140) uniform Block\n{\n    mat4 m;\n};\nvoid main() { }\n";
+        let result = strip_ubo_instance_name(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_post_process_strips_ubo_instance_name() {
+        // 端到端：spirv-cross 输出 → post_process → UBO 实例名被移除
+        // 模拟日志中的实际 VS 输出
+        let input = "#version 310 es\nprecision highp float;\nprecision highp int;\nlayout(std140) uniform UniformBlockVS\n{\n    mat4 ModelViewMat;\n    mat4 ProjMat;\n} _20;\nin vec3 Position;\nvoid main()\n{\n    gl_Position = (_20.ProjMat * _20.ModelViewMat) * vec4(Position, 1.0);\n}\n";
+        let result = post_process(input);
+        assert!(
+            !result.contains("} _20;"),
+            "instance name should be removed, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("_20."),
+            "instance reference should be replaced, got: {}",
+            result
+        );
+        // 成员名应保留（用于 glGetUniformLocation 查询）
+        assert!(result.contains("ModelViewMat"));
+        assert!(result.contains("ProjMat"));
     }
 }
