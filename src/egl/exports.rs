@@ -66,7 +66,9 @@ pub extern "C" fn eglGetConfigs(
     config_size: i32,
     num_config: *mut i32,
 ) -> u32 {
-    backend::with_egl_dispatch(|d| unsafe { (d.get_configs)(dpy, configs, config_size, num_config) })
+    backend::with_egl_dispatch(|d| unsafe {
+        (d.get_configs)(dpy, configs, config_size, num_config)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -102,7 +104,9 @@ pub extern "C" fn eglCreateWindowSurface(
     win: *mut c_void,
     attrib_list: *const i32,
 ) -> *mut c_void {
-    backend::with_egl_dispatch(|d| unsafe { (d.create_window_surface)(dpy, config, win, attrib_list) })
+    backend::with_egl_dispatch(|d| unsafe {
+        (d.create_window_surface)(dpy, config, win, attrib_list)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -137,7 +141,9 @@ pub extern "C" fn eglCreatePixmapSurface(
     pixmap: *mut c_void,
     attrib_list: *const i32,
 ) -> *mut c_void {
-    backend::with_egl_dispatch(|d| unsafe { (d.create_pixmap_surface)(dpy, config, pixmap, attrib_list) })
+    backend::with_egl_dispatch(|d| unsafe {
+        (d.create_pixmap_surface)(dpy, config, pixmap, attrib_list)
+    })
 }
 
 #[unsafe(no_mangle)]

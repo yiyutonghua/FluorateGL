@@ -28,6 +28,6 @@ mod util;
 // 对外公开的初始化与测试辅助 API（保持 crate 根路径兼容）
 pub use compile_check::gles_compile_check;
 pub use context::ensure_gles_context;
+pub use init::VERSION;
 pub use init::fluorategl_init;
 pub use init::get_self_handle;
-pub use init::VERSION;

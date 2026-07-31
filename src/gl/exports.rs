@@ -266,12 +266,8 @@ pub extern "C" fn glGetString(name: u32) -> *const c_char {
         // GL_VERSION：报告 3.2.0，MC 所有版本完全支持 OpenGL 3.2.0。
         // 末尾拼接 FluorateGL 版本号，MC F3 的 "OpenGL:" 行会显示
         // "3.2.0 FluorateGL v0.2.0"。"3.2.0" 前缀保持不变，不影响 MC 版本解析。
-        static VERSION: &[u8] = concat!(
-            "3.2.0 FluorateGL v",
-            env!("CARGO_PKG_VERSION"),
-            "\0"
-        )
-        .as_bytes();
+        static VERSION: &[u8] =
+            concat!("3.2.0 FluorateGL v", env!("CARGO_PKG_VERSION"), "\0").as_bytes();
         VERSION.as_ptr() as *const c_char
     } else if name == 0x8B8C {
         // GL_SHADING_LANGUAGE_VERSION
