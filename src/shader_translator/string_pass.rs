@@ -546,10 +546,11 @@ void main() {
             !result.contains("/*#version"),
             "/*#version N*/ 注释应被移除"
         );
-        // 应有正确的 GLES 版本
+        // 应有正确的 GLES 版本（string_pass 对桌面 GLSL 120..=460 输出 320 es，
+        // 与 SPIR-V 翻译管线输出一致，避免 VS/FS 混合链接时 version mismatch）
         assert!(
-            result.starts_with("#version 300 es"),
-            "应以 #version 300 es 开头"
+            result.starts_with("#version 320 es"),
+            "应以 #version 320 es 开头"
         );
         // precision 应被注入
         assert!(
@@ -572,8 +573,8 @@ void main() {
         let input = "#version 330\nvoid main() { gl_Position = vec4(1.0); }\n";
         let result = translate(input, GL_VERTEX_SHADER);
         assert!(
-            result.starts_with("#version 300 es"),
-            "版本应被替换为 300 es"
+            result.starts_with("#version 320 es"),
+            "版本应被替换为 320 es"
         );
         // 不应有 vec2() 包装（没有 lightmap 函数）
         assert!(

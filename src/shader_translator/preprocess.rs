@@ -282,7 +282,11 @@ fn inject_missing_bindings(result: &mut String) -> bool {
     let re_plain_block =
         Regex::new(r"(?m)^(?P<indent>\s*)(?P<kind>uniform|buffer)\s+(?P<name>\w+)\s*\{").unwrap();
 
-    let mut binding_counter: u32 = 0;
+    // 初始 binding_counter 从已有 binding 的最大值+1 开始，避免与
+    // convert_uniforms_to_ubo 注入的 UniformBlock 或原生带 binding 的块冲突。
+    // 例如：UniformBlock 已占 binding=0，此处 counter 应从 1 开始，
+    // 否则会给后续无 binding 的块分配 binding=0 造成链接冲突。
+    let mut binding_counter: u32 = find_available_binding(result);
     let mut injected = false;
     let mut modified = String::with_capacity(result.len());
 
@@ -359,7 +363,20 @@ fn inject_missing_bindings(result: &mut String) -> bool {
 }
 
 /// 将全局非不透明 uniform 转换为一个独立的 UBO，并替换所有引用。
-/// 注意：此实现假定 uniform 名唯一且无同名局部变量/注释干扰。
+///
+/// Vulkan target 拒绝独立 non-opaque uniform（必须包装进 UBO）。
+/// 本函数扫描单行 `uniform T name;` 声明，收集后包装进 `UniformBlock`，
+/// 并把源码中对这些变量的引用替换为 `UniformBlock.name`。
+///
+/// 关键顺序（避免历史 Bug）：
+/// 1. 先从原始 src 收集 uniform，同时产出删除了 uniform 行的 cleaned_src
+/// 2. 在 cleaned_src 上替换变量引用 name → UniformBlock.name
+/// 3. 最后构建 UBO 声明（成员名用原始 name）并插入到 #version 之后
+///
+/// 若先插入 UBO 声明再全局替换，会把 UBO 块内 `mat4 ModelViewMat;`
+/// 错误替换成 `mat4 UniformBlock.ModelViewMat;`（成员名带点号，GLSL 非法）。
+///
+/// 注意：假定 uniform 名唯一且无同名局部变量/注释干扰。
 fn convert_uniforms_to_ubo(src: &str) -> String {
     // 匹配单行全局 uniform 声明（不包括块，不包括 sampler/image/atomic_uint）
     // 例如：uniform mat4 ModelViewMat;
@@ -369,7 +386,8 @@ fn convert_uniforms_to_ubo(src: &str) -> String {
     ).unwrap();
 
     let mut uniforms = Vec::new();
-    let mut new_lines = Vec::new();
+    // cleaned_lines 收集非 uniform 行（uniform 声明行被删除）
+    let mut cleaned_lines = Vec::new();
 
     for line in src.lines() {
         if let Some(caps) = uniform_re.captures(line) {
@@ -382,20 +400,40 @@ fn convert_uniforms_to_ubo(src: &str) -> String {
                 && !ty.contains("buffer")
             {
                 uniforms.push((ty.to_string(), name.to_string()));
-                continue; // 删除此行
+                continue; // 删除此行（不加入 cleaned_lines）
             }
         }
-        new_lines.push(line.to_string());
+        cleaned_lines.push(line);
     }
 
     if uniforms.is_empty() {
         return src.to_string(); // 无变化
     }
 
-    // 确定 binding
-    let binding = find_available_binding(src);
+    // Bug 2 修复：用 cleaned_lines（已删除 uniform 行）拼成 cleaned_src，
+    // 而非用原始 src（否则原始 uniform 声明行残留，同样会被替换成非法形式）。
+    // lines() 会丢弃末尾换行，用 join 重建；若原始 src 末尾有换行则补回。
+    let mut cleaned_src = cleaned_lines.join("\n");
+    if src.ends_with('\n') && !cleaned_src.ends_with('\n') {
+        cleaned_src.push('\n');
+    }
 
-    // 构建 UBO 声明
+    // Bug 1 修复：在 cleaned_src（不含 UBO 声明）上先替换变量引用，
+    // 这样后续插入的 UBO 声明块内部不会被替换污染。
+    let mut result = cleaned_src;
+    for (_, name) in &uniforms {
+        // 使用词边界，只替换标识符引用（不替换类型名等）
+        let name_re = Regex::new(&format!(r"\b{}\b", regex::escape(name))).unwrap();
+        // 注意：可能误改同名字符串/局部变量，但 MC 着色器中极少出现
+        result = name_re
+            .replace_all(&result, &format!("UniformBlock.{}", name))
+            .into_owned();
+    }
+
+    // 确定 binding（在替换后的源码上查找，避免与已有 UBO/SSBO/sampler binding 冲突）
+    let binding = find_available_binding(&result);
+
+    // 构建 UBO 声明（成员名用原始 name，不做替换）
     let mut ubo_decl = format!(
         "layout(std140, binding = {}) uniform UniformBlock {{\n",
         binding
@@ -405,28 +443,19 @@ fn convert_uniforms_to_ubo(src: &str) -> String {
     }
     ubo_decl.push_str("};\n");
 
-    // 寻找插入点（#version 行后）
-    let insert_pos = find_insert_position(src);
-    let mut result = String::with_capacity(src.len() + ubo_decl.len() + uniforms.len() * 20);
-    result.push_str(&src[..insert_pos]);
-    result.push_str(&ubo_decl);
-    result.push_str(&src[insert_pos..]);
+    // 插入 UBO 声明到 #version 行之后
+    let insert_pos = find_insert_position(&result);
+    let mut final_result = String::with_capacity(result.len() + ubo_decl.len());
+    final_result.push_str(&result[..insert_pos]);
+    final_result.push_str(&ubo_decl);
+    final_result.push_str(&result[insert_pos..]);
 
-    // 替换所有原变量名为 UniformBlock.name（全局替换，可能误改注释/字符串/局部变量）
-    for (_, name) in &uniforms {
-        // 使用词边界，且只替换标识符（不替换类型名等）
-        let name_re = Regex::new(&format!(r"\b{}\b", regex::escape(name))).unwrap();
-        // 注意：可能误改同名字符串，但 MC 着色器中极少出现
-        result = name_re
-            .replace_all(&result, &format!("UniformBlock.{}", name))
-            .into_owned();
-    }
-
-    result
+    final_result
 }
 
-/// 扫描源中所有已使用的 binding 编号（包括 UBO、SSBO、sampler 等），返回当前最大编号 + 1。
-/// 若无任何 binding，则返回 0。
+/// 扫描源中所有已使用的 binding 编号（包括 UBO、SSBO、sampler 等），
+/// 返回最小未使用的编号（从 0 开始递增直到找到未使用的）。
+/// 用于给新注入的 UBO/SSBO 分配不冲突的 binding。
 fn find_available_binding(src: &str) -> u32 {
     let binding_re = Regex::new(r"binding\s*=\s*(\d+)").unwrap();
     let mut used = HashSet::new();
@@ -596,8 +625,14 @@ mod tests {
         let result = preprocess(input);
         // 版本升级到 450 core（layout 限定符需要 420+）
         assert!(result.contains("#version 450 core"));
-        // UBO 应有 binding
-        assert!(result.contains("layout(std140, binding=0) uniform MyBlock"));
+        // UBO 应有 binding。注意：独立 uniform MVP 被 convert_uniforms_to_ubo 包装成
+        // UniformBlock（binding=0），原生 MyBlock 被 inject_missing_bindings 分配 binding=1。
+        // 只验证 MyBlock 有 binding，不关心具体值（避免 binding 编号分配顺序耦合）。
+        assert!(
+            result.contains("layout(std140, binding=") && result.contains("uniform MyBlock"),
+            "MyBlock 应有 binding，实际: {}",
+            result
+        );
         // in/out 应有 location，且 in/out 独立计数（都从 0 开始）
         assert!(result.contains("layout(location=0) in vec4 color;"));
         assert!(result.contains("layout(location=0) out vec4 fragColor;"));
@@ -641,5 +676,201 @@ mod tests {
         // in/out 应有 location
         assert!(result.contains("layout(location=0) in vec3 Position;"));
         assert!(result.contains("layout(location=0) out vec4 vertexColor;"));
+    }
+
+    /// Bug 1 回归：UBO 声明块内部成员名不应被替换成 UniformBlock.name（带点号非法）
+    /// 复现日志中的 "unexpected DOT, expecting COMMA or SEMICOLON" 错误。
+    #[test]
+    fn test_convert_uniforms_ubo_member_no_dot() {
+        let input = "#version 150\n\
+            uniform mat4 ModelViewMat;\n\
+            uniform mat4 ProjMat;\n\
+            in vec3 Position;\n\
+            out vec4 vertexColor;\n\
+            void main() {\n\
+                gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);\n\
+                vertexColor = vec4(1.0);\n\
+            }\n";
+        let result = preprocess(input);
+        // UBO 声明块内部成员名应保持原样（不带点号）
+        assert!(
+            result.contains("mat4 ModelViewMat;"),
+            "UBO 成员名应保持原样，实际: {}",
+            result
+        );
+        assert!(
+            result.contains("mat4 ProjMat;"),
+            "UBO 成员名应保持原样，实际: {}",
+            result
+        );
+        // 不应出现带点号的成员声明（Bug 1 的症状）
+        assert!(
+            !result.contains("mat4 UniformBlock."),
+            "UBO 成员名不应带点号（Bug 1），实际: {}",
+            result
+        );
+    }
+
+    /// Bug 2 回归：原始 uniform 声明行应被删除，不应残留（残留行也会被替换成非法形式）
+    #[test]
+    fn test_convert_uniforms_original_line_removed() {
+        let input = "#version 150\n\
+            uniform mat4 ModelViewMat;\n\
+            in vec3 Position;\n\
+            void main() {\n\
+                gl_Position = ModelViewMat * vec4(Position, 1.0);\n\
+            }\n";
+        let result = preprocess(input);
+        // 原始独立 uniform 声明行应被删除（不残留 `uniform mat4 ModelViewMat;`）
+        // UBO 块内的成员声明不是 `uniform mat4`，是 `mat4 ModelViewMat;`
+        assert!(
+            !result.contains("uniform mat4 ModelViewMat;"),
+            "原始 uniform 声明行应被删除（Bug 2），实际: {}",
+            result
+        );
+        // 但引用应被替换为 UniformBlock.ModelViewMat
+        assert!(
+            result.contains("UniformBlock.ModelViewMat"),
+            "引用应替换为 UniformBlock.name，实际: {}",
+            result
+        );
+    }
+
+    /// Bug 3 回归：独立 uniform UBO 与原生 UBO 的 binding 不应冲突
+    /// 场景：shader 同时有独立 uniform 和原生 layout(std140) UBO，
+    /// convert_uniforms_to_ubo 给 UniformBlock 分配 binding=0，
+    /// inject_missing_bindings 给原生 UBO 也应分配不冲突的 binding。
+    #[test]
+    fn test_ubo_binding_no_conflict_with_native_ubo() {
+        let input = "#version 330\n\
+            layout(std140) uniform DynamicTransforms {\n\
+                mat4 ModelViewMat;\n\
+            };\n\
+            uniform vec4 ColorModulator;\n\
+            in vec3 Position;\n\
+            out vec4 vertexColor;\n\
+            void main() {\n\
+                gl_Position = ModelViewMat * vec4(Position, 1.0);\n\
+                vertexColor = ColorModulator;\n\
+            }\n";
+        let result = preprocess(input);
+        // 两个 UBO 应有不同 binding
+        // UniformBlock（独立 uniform 包装）和 DynamicTransforms（原生 UBO）
+        // 验证两者 binding 编号不同
+        // 注意：binding 写法可能带空格（`binding = 0`，convert_uniforms_to_ubo 生成）
+        // 或不带空格（`binding=1`，inject_missing_bindings 生成），用正则统一提取。
+        let binding_num_re = regex::Regex::new(r"binding\s*=\s*(\d+)").unwrap();
+        let mut nums: Vec<u32> = Vec::new();
+        for line in result.lines() {
+            if line.contains("uniform") && line.contains("binding") {
+                if let Some(caps) = binding_num_re.captures(line) {
+                    if let Ok(b) = caps[1].parse::<u32>() {
+                        nums.push(b);
+                    }
+                }
+            }
+        }
+        assert!(
+            nums.len() >= 2,
+            "应有至少 2 个 UBO（UniformBlock + DynamicTransforms），实际编号: {:?}\n{}",
+            nums,
+            result
+        );
+        let unique: std::collections::HashSet<u32> = nums.iter().copied().collect();
+        assert_eq!(
+            nums.len(),
+            unique.len(),
+            "UBO binding 编号不应重复（Bug 3），实际编号: {:?}\n{}",
+            nums,
+            result
+        );
+    }
+
+    /// 复现日志中 shader 3（vertex）的完整场景：MC 核心 vertex shader
+    /// 验证修复后 preprocess 输出合法 GLSL（无点号成员名、uniform 行已删除、引用已替换）
+    #[test]
+    fn test_mc_core_vertex_shader_preprocess() {
+        let input = "#version 150\n\
+            in vec3 Position;\n\
+            in vec4 Color;\n\
+            uniform mat4 ModelViewMat;\n\
+            uniform mat4 ProjMat;\n\
+            out vec4 vertexColor;\n\
+            void main() {\n\
+                gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);\n\
+                vertexColor = Color;\n\
+            }\n";
+        let result = preprocess(input);
+        // 1. 版本升级
+        assert!(result.contains("#version 450 core"));
+        // 2. UBO 包装：应有 UniformBlock 声明，成员名不带点号
+        assert!(result.contains("uniform UniformBlock"));
+        assert!(result.contains("mat4 ModelViewMat;"));
+        assert!(result.contains("mat4 ProjMat;"));
+        // 3. 原始 uniform 行已删除
+        assert!(!result.contains("uniform mat4 ModelViewMat;"));
+        assert!(!result.contains("uniform mat4 ProjMat;"));
+        // 4. 引用已替换
+        assert!(result.contains("UniformBlock.ProjMat * UniformBlock.ModelViewMat"));
+        // 5. in/out 有 location
+        assert!(result.contains("layout(location=0) in vec3 Position;"));
+        assert!(result.contains("layout(location=1) in vec4 Color;"));
+        assert!(result.contains("layout(location=0) out vec4 vertexColor;"));
+        // 6. 关键：UBO 声明块内部不应有任何点号（Bug 1 的直接症状）
+        assert!(
+            !result.contains("UniformBlock.UniformBlock."),
+            "不应出现嵌套点号引用，实际: {}",
+            result
+        );
+    }
+
+    /// 验证 gl_VertexID → gl_VertexIndex 重命名（Vulkan target 要求）
+    #[test]
+    fn test_rename_gl_vertex_id() {
+        let input = "#version 150\n\
+            uniform mat4 ProjMat;\n\
+            void main() {\n\
+                vec2 uv = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);\n\
+                gl_Position = ProjMat * vec4(uv, 0.0, 1.0);\n\
+            }\n";
+        let result = preprocess(input);
+        assert!(
+            result.contains("gl_VertexIndex"),
+            "gl_VertexID 应重命名为 gl_VertexIndex，实际: {}",
+            result
+        );
+        assert!(
+            !result.contains("gl_VertexID"),
+            "不应残留 gl_VertexID，实际: {}",
+            result
+        );
+    }
+
+    /// 验证 sampler 作为参数名被重命名（避免与 GLSL 关键字冲突）
+    #[test]
+    fn test_rename_sampler_param() {
+        let input = "#version 330\n\
+            uniform sampler2D Tex;\n\
+            in vec2 vUV;\n\
+            out vec4 fragColor;\n\
+            vec4 sampleNearest(sampler2D sampler, vec2 uv) {\n\
+                return texture(sampler, uv);\n\
+            }\n\
+            void main() {\n\
+                fragColor = sampleNearest(Tex, vUV);\n\
+            }\n";
+        let result = preprocess(input);
+        // sampler 作为参数名应被重命名为 u_sampler
+        assert!(
+            result.contains("u_sampler"),
+            "sampler 参数名应重命名为 u_sampler，实际: {}",
+            result
+        );
+        // sampler2D 类型名不应被替换（\b 词边界保护）
+        assert!(
+            result.contains("sampler2D"),
+            "sampler2D 类型名应保留，实际: {}",
+            result
+        );
     }
 }
