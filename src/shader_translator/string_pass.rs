@@ -80,38 +80,53 @@ fn replace_version(source: &str) -> String {
 fn replace_legacy_syntax(source: &str, stage: u32) -> String {
     let mut result = source.to_string();
 
+    // 预构造 attribute/varying 的词匹配正则（静态缓存，避免每次调用重编译）
+    static RE_ATTRIBUTE: OnceLock<Regex> = OnceLock::new();
+    static RE_VARYING: OnceLock<Regex> = OnceLock::new();
+    let re_attribute = RE_ATTRIBUTE.get_or_init(|| word_regex("attribute"));
+    let re_varying = RE_VARYING.get_or_init(|| word_regex("varying"));
+
     // Only legacy GLSL (<=1.30) uses attribute/varying.
     if stage == GL_VERTEX_SHADER {
-        result = replace_word(&result, "attribute", "in");
-        result = replace_word(&result, "varying", "out");
+        result = replace_word(&result, re_attribute, "in");
+        result = replace_word(&result, re_varying, "out");
     } else if stage == GL_FRAGMENT_SHADER {
-        result = replace_word(&result, "varying", "in");
+        result = replace_word(&result, re_varying, "in");
     }
 
     // Legacy texture lookup functions. Order matters: longer names first.
-    let replacements: &[(&str, &str)] = &[
-        ("texture1DProjLod", "textureLod"),
-        ("texture2DProjLod", "textureLod"),
-        ("texture3DProjLod", "textureLod"),
-        ("texture1DLod", "textureLod"),
-        ("texture2DLod", "textureLod"),
-        ("texture3DLod", "textureLod"),
-        ("textureCubeLod", "textureLod"),
-        ("shadow1DProj", "texture"),
-        ("shadow2DProj", "texture"),
-        ("shadow1D", "texture"),
-        ("shadow2D", "texture"),
-        ("texture1DProj", "texture"),
-        ("texture2DProj", "texture"),
-        ("texture3DProj", "texture"),
-        ("texture1D", "texture"),
-        ("texture2D", "texture"),
-        ("texture3D", "texture"),
-        ("textureCube", "texture"),
-    ];
+    // 预构造所有 (from, to, Regex) 三元组（静态缓存），消除循环内 18 次重编译开销
+    static TEXTURE_REPLACEMENTS: OnceLock<Vec<(&'static str, &'static str, Regex)>> =
+        OnceLock::new();
+    let replacements = TEXTURE_REPLACEMENTS.get_or_init(|| {
+        let pairs: &[(&str, &str)] = &[
+            ("texture1DProjLod", "textureLod"),
+            ("texture2DProjLod", "textureLod"),
+            ("texture3DProjLod", "textureLod"),
+            ("texture1DLod", "textureLod"),
+            ("texture2DLod", "textureLod"),
+            ("texture3DLod", "textureLod"),
+            ("textureCubeLod", "textureLod"),
+            ("shadow1DProj", "texture"),
+            ("shadow2DProj", "texture"),
+            ("shadow1D", "texture"),
+            ("shadow2D", "texture"),
+            ("texture1DProj", "texture"),
+            ("texture2DProj", "texture"),
+            ("texture3DProj", "texture"),
+            ("texture1D", "texture"),
+            ("texture2D", "texture"),
+            ("texture3D", "texture"),
+            ("textureCube", "texture"),
+        ];
+        pairs
+            .iter()
+            .map(|&(from, to)| (from, to, word_regex(from)))
+            .collect()
+    });
 
-    for (from, to) in replacements {
-        result = replace_word(&result, from, to);
+    for &(_, to, ref re) in replacements {
+        result = replace_word(&result, re, to);
     }
 
     result
@@ -206,7 +221,9 @@ fn replace_builtin_names(source: &str) -> String {
     let mut result = source.to_string();
 
     // gl_FragDepthEXT -> gl_FragDepth (GLES 3.0 has gl_FragDepth built-in).
-    result = replace_word(&result, "gl_FragDepthEXT", "gl_FragDepth");
+    static RE_FRAG_DEPTH_EXT: OnceLock<Regex> = OnceLock::new();
+    let re_frag_depth_ext = RE_FRAG_DEPTH_EXT.get_or_init(|| word_regex("gl_FragDepthEXT"));
+    result = replace_word(&result, re_frag_depth_ext, "gl_FragDepth");
 
     // ftransform() cannot be accurately translated without a full parser.
     if result.contains("ftransform()") {
@@ -222,8 +239,13 @@ fn replace_builtin_names(source: &str) -> String {
     result
 }
 
-fn replace_word(source: &str, from: &str, to: &str) -> String {
-    let re = Regex::new(&format!(r"\b{}\b", regex::escape(from))).unwrap();
+/// 构造匹配整个单词的正则 `\b{name}\b`（对 name 做 regex::escape）。
+/// 供 replace_word 调用方预构造静态 Regex 时使用。
+fn word_regex(name: &str) -> Regex {
+    Regex::new(&format!(r"\b{}\b", regex::escape(name))).unwrap()
+}
+
+fn replace_word(source: &str, re: &Regex, to: &str) -> String {
     re.replace_all(source, to).into_owned()
 }
 

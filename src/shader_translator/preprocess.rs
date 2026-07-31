@@ -15,6 +15,7 @@
 
 use regex::Regex;
 use rustc_hash::FxHashSet;
+use std::sync::OnceLock;
 
 /// GLSL stage 常量（与 GL_VERTEX_SHADER/GL_FRAGMENT_SHADER 对齐）
 pub const GL_VERTEX_SHADER: u32 = 0x8B31;
@@ -62,12 +63,14 @@ fn uniform_block_name(stage: u32) -> &'static str {
 /// 将桌面 GLSL 的内置变量重命名为 Vulkan GLSL 对应的名称
 fn rename_vulkan_builtin_variables(result: &mut String) {
     // 1. gl_VertexID -> gl_VertexIndex
-    let re_vertex = Regex::new(r"\bgl_VertexID\b").unwrap();
+    static RE_VERTEX: OnceLock<Regex> = OnceLock::new();
+    let re_vertex = RE_VERTEX.get_or_init(|| Regex::new(r"\bgl_VertexID\b").unwrap());
     *result = re_vertex.replace_all(result, "gl_VertexIndex").into_owned();
 
     // 2. 变量名 sampler -> u_sampler (避免与关键字冲突)
     // \b 保证了 sampler2D 中的 sampler 不会被替换
-    let re_sampler = Regex::new(r"\bsampler\b").unwrap();
+    static RE_SAMPLER: OnceLock<Regex> = OnceLock::new();
+    let re_sampler = RE_SAMPLER.get_or_init(|| Regex::new(r"\bsampler\b").unwrap());
     let new_result = re_sampler.replace_all(result, "u_sampler").into_owned();
     if new_result.len() != result.len() {
         log::debug!("[ShaderTranslator] preprocess 重命名了变量 sampler -> u_sampler");
@@ -84,7 +87,8 @@ pub fn extract_version(source: &str) -> Option<&str> {
 
 /// 移除 #line 指令（对齐 MobileGlues replace_line_starting_with("#line")）
 fn remove_line_directives(source: &str) -> String {
-    let re = Regex::new(r"(?m)^\s*#line\s+.*$(\n|$)?").unwrap();
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"(?m)^\s*#line\s+.*$(\n|$)?").unwrap());
     re.replace_all(source, "").to_string()
 }
 
@@ -98,7 +102,8 @@ fn remove_line_directives(source: &str) -> String {
 ///
 /// 正则与 string_pass::strip_mc_version_comment 保持一致。
 fn strip_mc_version_comment(result: &mut String) {
-    let re = Regex::new(r"/\*#version\s+\d+\s*\*/").unwrap();
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"/\*#version\s+\d+\s*\*/").unwrap());
     let new_result = re.replace_all(result, "").into_owned();
     if new_result.len() != result.len() {
         log::debug!(
@@ -122,6 +127,7 @@ fn strip_mc_version_comment(result: &mut String) {
 /// - #version == 460 且非 ES → 保持 460，规范化为 core
 /// - ES 版本 → 保持不变
 fn force_glsl_version(result: &mut String) {
+    static RE: OnceLock<Regex> = OnceLock::new();
     let version = extract_version(result);
     match version {
         None => {
@@ -134,7 +140,7 @@ fn force_glsl_version(result: &mut String) {
                     // ES 版本保持不变（语法不兼容，升级无意义）
                     return;
                 }
-                let re = Regex::new(r"(?m)^#version\s+\d+.*$").unwrap();
+                let re = RE.get_or_init(|| Regex::new(r"(?m)^#version\s+\d+.*$").unwrap());
                 if ver < 460 {
                     // 桌面 GLSL < 460 升级到 450 core
                     // （支持 layout(binding/location)，移除 compatibility，Vulkan 接受 >= 140）
@@ -170,7 +176,8 @@ fn is_es_version(version_line: &str) -> bool {
 /// 从 layout 限定符字符串中解析 binding 值
 /// 输入如 "std140, binding=3" 或 "binding = 5" → 返回 3 或 5
 fn parse_binding(qualifiers: &str) -> Option<u32> {
-    let re = Regex::new(r"binding\s*=\s*(\d+)").unwrap();
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"binding\s*=\s*(\d+)").unwrap());
     re.captures(qualifiers)
         .and_then(|c| c[1].parse::<u32>().ok())
 }
@@ -191,9 +198,12 @@ fn inject_missing_locations(result: &mut String) {
     // 匹配带可选前导 layout 和插值修饰符的 in/out 声明
     // 情况1: [layout(...)] [修饰符] in/out type name[;];
     // 情况2: [修饰符] in/out type name;
-    let re = Regex::new(
-        r"(?m)^(?P<indent>\s*)(?:layout\s*\(\s*(?P<layout_qual>[^)]*)\s*\)\s*)?(?P<prefix>(?:(?:flat|smooth|noperspective|centroid|patch|precise|invariant)\s+)*)(?P<qualifier>in|out)\s+(?P<rest>.+?;[^\n]*)$"
-    ).unwrap();
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(
+            r"(?m)^(?P<indent>\s*)(?:layout\s*\(\s*(?P<layout_qual>[^)]*)\s*\)\s*)?(?P<prefix>(?:(?:flat|smooth|noperspective|centroid|patch|precise|invariant)\s+)*)(?P<qualifier>in|out)\s+(?P<rest>.+?;[^\n]*)$"
+        ).unwrap()
+    });
 
     // in 和 out 独立计数，分别从 0 开始（不同接口空间，不冲突）
     let mut in_counter: u32 = 0;
@@ -260,7 +270,8 @@ fn inject_missing_locations(result: &mut String) {
 /// 从 layout 限定符字符串中解析 location 值
 /// 输入如 "std140, location=3" 或 "location = 5" → 返回 3 或 5
 fn parse_layout_location(layout_qual: &str) -> Option<u32> {
-    let re = Regex::new(r"location\s*=\s*(\d+)").unwrap();
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"location\s*=\s*(\d+)").unwrap());
     re.captures(layout_qual)
         .and_then(|c| c[1].parse::<u32>().ok())
 }
@@ -294,16 +305,20 @@ fn inject_missing_bindings(result: &mut String) -> bool {
     //   layout(std140) uniform DynamicTransforms {
     //   layout(std430) buffer MyBuffer {
     //   uniform MyBlock {
-    let re_layout_block = Regex::new(
-        r"(?m)^(?P<indent>\s*)layout\s*\(\s*(?P<qualifiers>[^)]*)\s*\)\s*(?P<kind>uniform|buffer)\s+(?P<name>\w+)\s*\{",
-    )
-    .unwrap();
+    static RE_LAYOUT_BLOCK: OnceLock<Regex> = OnceLock::new();
+    let re_layout_block = RE_LAYOUT_BLOCK.get_or_init(|| {
+        Regex::new(
+            r"(?m)^(?P<indent>\s*)layout\s*\(\s*(?P<qualifiers>[^)]*)\s*\)\s*(?P<kind>uniform|buffer)\s+(?P<name>\w+)\s*\{",
+        )
+        .unwrap()
+    });
 
     // 匹配无 layout 的 uniform/buffer 块声明
     // 例如：
     //   uniform MyBlock {
-    let re_plain_block =
-        Regex::new(r"(?m)^(?P<indent>\s*)(?P<kind>uniform|buffer)\s+(?P<name>\w+)\s*\{").unwrap();
+    static RE_PLAIN_BLOCK: OnceLock<Regex> = OnceLock::new();
+    let re_plain_block = RE_PLAIN_BLOCK
+        .get_or_init(|| Regex::new(r"(?m)^(?P<indent>\s*)(?P<kind>uniform|buffer)\s+(?P<name>\w+)\s*\{").unwrap());
 
     // 初始 binding_counter 从已有 binding 的最大值+1 开始，避免与
     // convert_uniforms_to_ubo 注入的 UniformBlock 或原生带 binding 的块冲突。
@@ -410,9 +425,12 @@ fn convert_uniforms_to_ubo(src: &str, stage: u32) -> String {
     // 匹配单行全局 uniform 声明（不包括块，不包括 sampler/image/atomic_uint）
     // 例如：uniform mat4 ModelViewMat;
     //        uniform vec4 ColorModulator;
-    let uniform_re = Regex::new(
-        r"(?m)^\s*uniform\s+(?P<type>[a-zA-Z_][\w]*(\s*\*\s*)?(?:[a-zA-Z_][\w]*\s*)?)\s+(?P<name>[a-zA-Z_][\w]*)\s*;"
-    ).unwrap();
+    static UNIFORM_RE: OnceLock<Regex> = OnceLock::new();
+    let uniform_re = UNIFORM_RE.get_or_init(|| {
+        Regex::new(
+            r"(?m)^\s*uniform\s+(?P<type>[a-zA-Z_][\w]*(\s*\*\s*)?(?:[a-zA-Z_][\w]*\s*)?)\s+(?P<name>[a-zA-Z_][\w]*)\s*;"
+        ).unwrap()
+    });
 
     let mut uniforms = Vec::new();
     // cleaned_lines 收集非 uniform 行（uniform 声明行被删除）
@@ -474,7 +492,8 @@ fn convert_uniforms_to_ubo(src: &str, stage: u32) -> String {
 /// 返回最小未使用的编号（从 0 开始递增直到找到未使用的）。
 /// 用于给新注入的 UBO/SSBO 分配不冲突的 binding。
 fn find_available_binding(src: &str) -> u32 {
-    let binding_re = Regex::new(r"binding\s*=\s*(\d+)").unwrap();
+    static BINDING_RE: OnceLock<Regex> = OnceLock::new();
+    let binding_re = BINDING_RE.get_or_init(|| Regex::new(r"binding\s*=\s*(\d+)").unwrap());
     let mut used = FxHashSet::default();
     for caps in binding_re.captures_iter(src) {
         if let Some(m) = caps.get(1) {

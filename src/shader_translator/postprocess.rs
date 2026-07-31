@@ -7,6 +7,7 @@
 //! - forceSupporterOutput：确保 precision highp float/int 声明
 
 use regex::Regex;
+use std::sync::OnceLock;
 
 /// GLSL ES 后处理主入口
 ///
@@ -46,11 +47,27 @@ pub fn post_process(src: &str) -> String {
     //    glBindImageTexture(unit,...) 的 unit 对应。移除后 image 无法正确绑定。
     //    MC 的 sampler/UBO binding 可以移除（MC 通过 glUniform1i/glBindBufferBase 设置）。
     //    策略：按行处理，跳过 image 声明行，对其余行移除 binding。
-    let re_is_image = Regex::new(r"(?i)\bimage\w*\s+\w+\s*;").unwrap();
-    let re_binding = Regex::new(r"(?i)layout\s*\(\s*binding\s*=\s*\d+\s*\)\s*").unwrap();
-    let re_binding_leading = Regex::new(r"(?i)layout\s*\(\s*binding\s*=\s*\d+\s*,\s*").unwrap();
-    let re_binding_middle = Regex::new(r"(?i),\s*binding\s*=\s*\d+").unwrap();
-    let re_empty_layout = Regex::new(r"(?i)layout\s*\(\s*\)\s*").unwrap();
+    let re_is_image = {
+        static RE_IS_IMAGE: OnceLock<Regex> = OnceLock::new();
+        RE_IS_IMAGE.get_or_init(|| Regex::new(r"(?i)\bimage\w*\s+\w+\s*;").unwrap())
+    };
+    let re_binding = {
+        static RE_BINDING: OnceLock<Regex> = OnceLock::new();
+        RE_BINDING.get_or_init(|| Regex::new(r"(?i)layout\s*\(\s*binding\s*=\s*\d+\s*\)\s*").unwrap())
+    };
+    let re_binding_leading = {
+        static RE_BINDING_LEADING: OnceLock<Regex> = OnceLock::new();
+        RE_BINDING_LEADING
+            .get_or_init(|| Regex::new(r"(?i)layout\s*\(\s*binding\s*=\s*\d+\s*,\s*").unwrap())
+    };
+    let re_binding_middle = {
+        static RE_BINDING_MIDDLE: OnceLock<Regex> = OnceLock::new();
+        RE_BINDING_MIDDLE.get_or_init(|| Regex::new(r"(?i),\s*binding\s*=\s*\d+").unwrap())
+    };
+    let re_empty_layout = {
+        static RE_EMPTY_LAYOUT: OnceLock<Regex> = OnceLock::new();
+        RE_EMPTY_LAYOUT.get_or_init(|| Regex::new(r"(?i)layout\s*\(\s*\)\s*").unwrap())
+    };
 
     result = result
         .lines()
@@ -104,10 +121,15 @@ pub fn post_process(src: &str) -> String {
 
     // 4. 处理 outColorN 的 location（对齐 MobileGlues processOutColorLocations）
     //    正则容忍前导插值修饰符（flat/smooth/noperspective 等）
-    let re_out_color = Regex::new(
-        r"(?m)^(?P<prefix>(?:(?:flat|smooth|noperspective|centroid|invariant)\s+)*)out\s+(?P<type>(?:highp\s+|mediump\s+|lowp\s+)?\w+)\s+outColor(?P<num>\d+)\s*;",
-    )
-    .unwrap();
+    let re_out_color = {
+        static RE_OUT_COLOR: OnceLock<Regex> = OnceLock::new();
+        RE_OUT_COLOR.get_or_init(|| {
+            Regex::new(
+                r"(?m)^(?P<prefix>(?:(?:flat|smooth|noperspective|centroid|invariant)\s+)*)out\s+(?P<type>(?:highp\s+|mediump\s+|lowp\s+)?\w+)\s+outColor(?P<num>\d+)\s*;",
+            )
+            .unwrap()
+        })
+    };
     result = re_out_color
         .replace_all(&result, |caps: &regex::Captures| {
             let prefix = caps.name("prefix").map(|m| m.as_str()).unwrap_or("");
@@ -142,29 +164,39 @@ fn strip_varying_locations(src: &str) -> String {
     let interp = r"(?:(?:flat|smooth|noperspective|centroid|patch|invariant)\s+)*";
 
     // 情况1: layout(location = N) [修饰符] in/out → [修饰符] in/out
-    let re_loc_only = Regex::new(&format!(
-        r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*\)\s*({})(in|out)\b",
-        interp
-    ))
-    .unwrap();
+    // interp 为常量字符串，pattern 实际静态，结果缓存到 OnceLock
+    static RE_LOC_ONLY: OnceLock<Regex> = OnceLock::new();
+    let re_loc_only = RE_LOC_ONLY.get_or_init(|| {
+        Regex::new(&format!(
+            r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*\)\s*({})(in|out)\b",
+            interp
+        ))
+        .unwrap()
+    });
     let result = re_loc_only.replace_all(src, "$1$2").to_string();
 
     // 情况2: layout(location = N, X) [修饰符] in/out → layout(X) [修饰符] in/out
-    let re_loc_leading = Regex::new(&format!(
-        r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*,\s*([^)]*)\)\s*({})(in|out)\b",
-        interp
-    ))
-    .unwrap();
+    static RE_LOC_LEADING: OnceLock<Regex> = OnceLock::new();
+    let re_loc_leading = RE_LOC_LEADING.get_or_init(|| {
+        Regex::new(&format!(
+            r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*,\s*([^)]*)\)\s*({})(in|out)\b",
+            interp
+        ))
+        .unwrap()
+    });
     let result = re_loc_leading
         .replace_all(&result, "layout($1) $2$3")
         .to_string();
 
     // 情况3: layout(X, location = N) [修饰符] in/out → layout(X) [修饰符] in/out
-    let re_loc_trailing = Regex::new(&format!(
-        r"(?i)layout\s*\(\s*([^)]*?),\s*location\s*=\s*\d+\s*\)\s*({})(in|out)\b",
-        interp
-    ))
-    .unwrap();
+    static RE_LOC_TRAILING: OnceLock<Regex> = OnceLock::new();
+    let re_loc_trailing = RE_LOC_TRAILING.get_or_init(|| {
+        Regex::new(&format!(
+            r"(?i)layout\s*\(\s*([^)]*?),\s*location\s*=\s*\d+\s*\)\s*({})(in|out)\b",
+            interp
+        ))
+        .unwrap()
+    });
     re_loc_trailing
         .replace_all(&result, "layout($1) $2$3")
         .to_string()
@@ -182,10 +214,20 @@ fn strip_varying_locations(src: &str) -> String {
 /// - `layout(location = N, X) uniform ...` → `layout(X) uniform ...`
 /// - `layout(X, location = N) uniform ...` → `layout(X) uniform ...`
 fn strip_uniform_locations(src: &str) -> String {
-    let re_loc_only =
-        Regex::new(r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*\)\s*(uniform\b)").unwrap();
-    let re_loc_leading = Regex::new(r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*,\s*").unwrap();
-    let re_loc_trailing = Regex::new(r"(?i),\s*location\s*=\s*\d+").unwrap();
+    let re_loc_only = {
+        static RE_LOC_ONLY: OnceLock<Regex> = OnceLock::new();
+        RE_LOC_ONLY
+            .get_or_init(|| Regex::new(r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*\)\s*(uniform\b)").unwrap())
+    };
+    let re_loc_leading = {
+        static RE_LOC_LEADING: OnceLock<Regex> = OnceLock::new();
+        RE_LOC_LEADING
+            .get_or_init(|| Regex::new(r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*,\s*").unwrap())
+    };
+    let re_loc_trailing = {
+        static RE_LOC_TRAILING: OnceLock<Regex> = OnceLock::new();
+        RE_LOC_TRAILING.get_or_init(|| Regex::new(r"(?i),\s*location\s*=\s*\d+").unwrap())
+    };
 
     src.lines()
         .map(|line| {
@@ -221,7 +263,8 @@ fn strip_ubo_instance_name(src: &str) -> String {
     // 匹配 UBO/SSBO 块声明末尾的实例名
     // 格式：} _N;  或  } _N = ...;（带初始化的罕见情况暂不支持）
     // spirv-cross 生成的实例名都是 _N 形式（如 _20, _30, _52）
-    let re_instance = Regex::new(r"\}\s*(?P<inst>_\w+)\s*;").unwrap();
+    static RE_INSTANCE: OnceLock<Regex> = OnceLock::new();
+    let re_instance = RE_INSTANCE.get_or_init(|| Regex::new(r"\}\s*(?P<inst>_\w+)\s*;").unwrap());
 
     // 收集所有 UBO/SSBO 实例名
     let instance_names: Vec<String> = re_instance
@@ -240,6 +283,8 @@ fn strip_ubo_instance_name(src: &str) -> String {
     //    用 \b 边界确保只匹配完整的实例名（避免误伤其他变量）
     let mut result = result;
     for inst in &instance_names {
+        // 动态构造的 Regex：pattern 依赖运行时解析到的实例名 inst（如 _20、_30），
+        // 无法静态缓存。实例名来自 spirv-cross 输出，数量有限且每次 shader 不同，保留原样。
         let pattern = format!(r"\b{}\.", regex::escape(inst));
         let re = Regex::new(&pattern).unwrap();
         result = re.replace_all(&result, "").to_string();
@@ -268,15 +313,17 @@ fn strip_ubo_instance_name(src: &str) -> String {
 fn unwrap_generated_ubo(src: &str) -> String {
     // 匹配我们生成的 UBO 块：layout(...) uniform UniformBlock(VS|FS|Other) { members };
     // (?s) 让 . 匹配换行，成员是多行的
-    let re_ubo = Regex::new(
-        r"(?s)layout\s*\([^)]*\)\s*uniform\s+(UniformBlock(?:VS|FS|Other))\s*\{([^}]*)\}\s*;",
-    )
-    .unwrap();
+    static RE_UBO: OnceLock<Regex> = OnceLock::new();
+    let re_ubo = RE_UBO.get_or_init(|| {
+        Regex::new(
+            r"(?s)layout\s*\([^)]*\)\s*uniform\s+(UniformBlock(?:VS|FS|Other))\s*\{([^}]*)\}\s*;",
+        )
+        .unwrap()
+    });
 
     let mut unwrapped_count = 0;
     let result = re_ubo
         .replace_all(src, |caps: &regex::Captures| {
-            let block_name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
             let members = caps.get(2).map(|m| m.as_str()).unwrap_or("");
             unwrapped_count += 1;
 
@@ -317,20 +364,30 @@ fn unwrap_generated_ubo(src: &str) -> String {
 /// - `layout(offset = N, X) uniform atomic_uint` → `layout(binding = N, X) uniform atomic_uint`
 fn fix_atomic_counter_binding(src: &str) -> String {
     // offset 是唯一限定符: layout(offset = N) → layout(binding = N)
-    let re_offset_only =
-        Regex::new(r"(?i)layout\s*\(\s*offset\s*=\s*(\d+)\s*\)\s*(uniform\s+atomic_uint)").unwrap();
+    let re_offset_only = {
+        static RE_OFFSET_ONLY: OnceLock<Regex> = OnceLock::new();
+        RE_OFFSET_ONLY
+            .get_or_init(|| Regex::new(r"(?i)layout\s*\(\s*offset\s*=\s*(\d+)\s*\)\s*(uniform\s+atomic_uint)").unwrap())
+    };
     let result = re_offset_only
         .replace_all(src, "layout(binding = $1) $2")
         .to_string();
 
     // offset 在开头: layout(offset = N, X) → layout(binding = N, X)
-    let re_offset_leading = Regex::new(r"(?i)layout\s*\(\s*offset\s*=\s*(\d+)\s*,\s*").unwrap();
+    let re_offset_leading = {
+        static RE_OFFSET_LEADING: OnceLock<Regex> = OnceLock::new();
+        RE_OFFSET_LEADING
+            .get_or_init(|| Regex::new(r"(?i)layout\s*\(\s*offset\s*=\s*(\d+)\s*,\s*").unwrap())
+    };
     let result = re_offset_leading
         .replace_all(&result, "layout(binding = $1, ")
         .to_string();
 
     // offset 在中间/末尾: layout(X, offset = N) → layout(X, binding = N)
-    let re_offset_middle = Regex::new(r"(?i),\s*offset\s*=\s*(\d+)").unwrap();
+    let re_offset_middle = {
+        static RE_OFFSET_MIDDLE: OnceLock<Regex> = OnceLock::new();
+        RE_OFFSET_MIDDLE.get_or_init(|| Regex::new(r"(?i),\s*offset\s*=\s*(\d+)").unwrap())
+    };
     re_offset_middle
         .replace_all(&result, ", binding = $1")
         .to_string()
@@ -347,10 +404,13 @@ fn fix_atomic_counter_binding(src: &str) -> String {
 /// writeonly image 默认 r32f，可读写 image 默认 r32ui。
 fn inject_image_format(src: &str) -> String {
     // 情况1：无 layout 前缀的裸 image 声明 → 注入 binding + format
-    let re_bare_image = Regex::new(
-        r"(?m)^(?P<indent>\s*)uniform\s+(?P<quals>(?:writeonly\s+|readonly\s+)?(?:highp\s+|mediump\s+|lowp\s+)?)(?P<type>image\w+)\s+(?P<name>\w+)\s*;",
-    )
-    .unwrap();
+    static RE_BARE_IMAGE: OnceLock<Regex> = OnceLock::new();
+    let re_bare_image = RE_BARE_IMAGE.get_or_init(|| {
+        Regex::new(
+            r"(?m)^(?P<indent>\s*)uniform\s+(?P<quals>(?:writeonly\s+|readonly\s+)?(?:highp\s+|mediump\s+|lowp\s+)?)(?P<type>image\w+)\s+(?P<name>\w+)\s*;",
+        )
+        .unwrap()
+    });
 
     let mut binding: u32 = 0;
     let result = re_bare_image
@@ -375,10 +435,13 @@ fn inject_image_format(src: &str) -> String {
         .to_string();
 
     // 情况2：有 layout(binding=N) 但无 format 的 image → 补充 format
-    let re_bound_no_format = Regex::new(
-        r"(?m)^(?P<indent>\s*)layout\s*\(\s*binding\s*=\s*(?P<binding>\d+)\s*\)\s*(?P<quals>(?:writeonly\s+|readonly\s+)?(?:highp\s+|mediump\s+|lowp\s+)?)(?P<type>image\w+)\s+(?P<name>\w+)\s*;",
-    )
-    .unwrap();
+    static RE_BOUND_NO_FORMAT: OnceLock<Regex> = OnceLock::new();
+    let re_bound_no_format = RE_BOUND_NO_FORMAT.get_or_init(|| {
+        Regex::new(
+            r"(?m)^(?P<indent>\s*)layout\s*\(\s*binding\s*=\s*(?P<binding>\d+)\s*\)\s*(?P<quals>(?:writeonly\s+|readonly\s+)?(?:highp\s+|mediump\s+|lowp\s+)?)(?P<type>image\w+)\s+(?P<name>\w+)\s*;",
+        )
+        .unwrap()
+    });
 
     let result = re_bound_no_format
         .replace_all(&result, |caps: &regex::Captures| {
@@ -401,10 +464,13 @@ fn inject_image_format(src: &str) -> String {
         .to_string();
 
     // 情况3：有 layout(format) 但无 binding 的 image → 补充 binding
-    let re_format_no_binding = Regex::new(
-        r"(?m)^(?P<indent>\s*)layout\s*\(\s*(?P<format>\w+)\s*\)\s*(?P<quals>(?:writeonly\s+|readonly\s+)?(?:highp\s+|mediump\s+|lowp\s+)?)(?P<type>image\w+)\s+(?P<name>\w+)\s*;",
-    )
-    .unwrap();
+    static RE_FORMAT_NO_BINDING: OnceLock<Regex> = OnceLock::new();
+    let re_format_no_binding = RE_FORMAT_NO_BINDING.get_or_init(|| {
+        Regex::new(
+            r"(?m)^(?P<indent>\s*)layout\s*\(\s*(?P<format>\w+)\s*\)\s*(?P<quals>(?:writeonly\s+|readonly\s+)?(?:highp\s+|mediump\s+|lowp\s+)?)(?P<type>image\w+)\s+(?P<name>\w+)\s*;",
+        )
+        .unwrap()
+    });
 
     re_format_no_binding
         .replace_all(&result, |caps: &regex::Captures| {
@@ -430,7 +496,9 @@ fn ensure_precision(source: &str) -> String {
     let mut result = source.to_string();
 
     // 移除所有已有的 precision 声明
-    let re_precision = Regex::new(r"(?m)^\s*precision\s+\w+\s+(?:float|int)\s*;.*$(\n)?").unwrap();
+    static RE_PRECISION: OnceLock<Regex> = OnceLock::new();
+    let re_precision = RE_PRECISION
+        .get_or_init(|| Regex::new(r"(?m)^\s*precision\s+\w+\s+(?:float|int)\s*;.*$(\n)?").unwrap());
     result = re_precision.replace_all(&result, "").to_string();
 
     let precision_decl = "precision highp float;\nprecision highp int;\n";

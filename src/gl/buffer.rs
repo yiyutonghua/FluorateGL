@@ -108,9 +108,6 @@ pub extern "C" fn glBufferSubData(
     });
 }
 
-const GL_MAP_PERSISTENT_BIT: u32 = 0x0040;
-const GL_MAP_COHERENT_BIT: u32 = 0x0080;
-
 fn is_stub(dispatch: &backend::dispatch::GlesDispatch, f: *const ()) -> bool {
     f == dispatch.stub as *const ()
 }

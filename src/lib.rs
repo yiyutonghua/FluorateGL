@@ -189,7 +189,7 @@ pub fn ensure_gles_context() -> bool {
         //   - 某些旧 Android: 只有 GLES2_BIT 但仍可创建 GLES3 context
         //   - ANGLE: 通常两者都支持
         let mut cfg = std::ptr::null_mut();
-        let mut nc = 0i32;
+        let mut nc: i32;
         let mut chosen = false;
 
         let filters: &[(&str, &[i32])] = &[

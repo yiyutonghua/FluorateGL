@@ -19,9 +19,10 @@ pub extern "C" fn glCreateShader(shader_type: u32) -> u32 {
             );
             return 0;
         }
-        let desktop_id = state::with_state(|s| s.shaders.alloc(gles_id));
-        state::with_state(|s| {
-            s.shader_types.insert(desktop_id, shader_type);
+        let desktop_id = state::with_state(|s| {
+            let id = s.shaders.alloc(gles_id);
+            s.shader_types.insert(id, shader_type);
+            id
         });
         desktop_id
     })
@@ -31,13 +32,13 @@ pub extern "C" fn glCreateShader(shader_type: u32) -> u32 {
 #[allow(non_snake_case)]
 pub extern "C" fn glDeleteShader(shader: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        state::with_state(|s| {
+        let gles_id = state::with_state(|s| {
             s.shader_types.remove(&shader);
             s.shader_sources.remove(&shader);
             s.shader_original_sources.remove(&shader);
-            s.shader_translated_sources.remove(&shader);
+            s.shaders.delete(shader)
         });
-        if let Some(gles_id) = state::with_state(|s| s.shaders.delete(shader)) {
+        if let Some(gles_id) = gles_id {
             (dispatch.delete_shader)(gles_id);
         }
     });
@@ -52,7 +53,11 @@ pub extern "C" fn glShaderSource(
     length: *const i32,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.shaders.get_gles(shader).unwrap_or(0));
+        let (gles_id, stage) = state::with_state_ref(|s| {
+            let gles_id = s.shaders.get_gles(shader).unwrap_or(0);
+            let stage = s.shader_types.get(&shader).copied().unwrap_or(0);
+            (gles_id, stage)
+        });
         if gles_id == 0 {
             return;
         }
@@ -66,8 +71,6 @@ pub extern "C" fn glShaderSource(
             );
             return;
         }
-
-        let stage = state::with_state(|s| s.shader_types.get(&shader).copied().unwrap_or(0));
 
         // Concatenate all source strings.
         let mut source = String::new();
@@ -92,52 +95,72 @@ pub extern "C" fn glShaderSource(
             source.push_str(&piece);
         }
 
-        use crate::shader_translator::spirv_pass::TranslationResult;
-        let translate_start = std::time::Instant::now();
-        let (upload_source, translated) = match crate::shader_translator::spirv_pass::translate(
-            &source, stage,
-        ) {
-            TranslationResult::Translated(translated) => {
+        // 计算源码哈希用于翻译缓存
+        use std::hash::{Hash, Hasher};
+        let mut hasher = rustc_hash::FxHasher::default();
+        source.hash(&mut hasher);
+        let source_hash = hasher.finish();
+
+        // 查翻译缓存，命中则跳过完整翻译管线（shaderc + spirv-cross）
+        let (upload_source, translated) =
+            if let Some(cached) = state::with_state_ref(|s| {
+                s.shader_translation_cache.get(&(source_hash, stage)).cloned()
+            }) {
                 log::debug!(
-                    "[ShaderTranslator] shader {} stage 0x{:04X} translated via SPIR-V ({} chars, took {:?})",
-                    shader,
-                    stage,
-                    translated.len(),
-                    translate_start.elapsed()
+                    "[ShaderTranslator] shader {} stage 0x{:04X} cache hit ({} chars)",
+                    shader, stage, cached.len()
                 );
-                (translated, true)
-            }
-            TranslationResult::PassThrough => {
-                log::debug!(
-                    "[ShaderTranslator] shader {} stage 0x{:04X} passed through unchanged (driver extension supported)",
-                    shader,
-                    stage
-                );
-                // ✅ 修复：使用 clone，避免 source 被 move
-                (source.clone(), false)
-            }
-            TranslationResult::Failed => {
-                log::warn!(
-                    "[ShaderTranslator] SPIR-V pipeline failed for shader {}; passing original source ({} chars, took {:?})",
-                    shader,
-                    source.len(),
-                    translate_start.elapsed()
-                );
-                // ✅ 修复：使用 clone，避免 source 被 move
-                (source.clone(), false)
-            }
-        };
+                (cached, true)
+            } else {
+                use crate::shader_translator::spirv_pass::TranslationResult;
+                let translate_start = std::time::Instant::now();
+                let (upload, trans) = match crate::shader_translator::spirv_pass::translate(
+                    &source, stage,
+                ) {
+                    TranslationResult::Translated(translated) => {
+                        log::debug!(
+                            "[ShaderTranslator] shader {} stage 0x{:04X} translated via SPIR-V ({} chars, took {:?})",
+                            shader,
+                            stage,
+                            translated.len(),
+                            translate_start.elapsed()
+                        );
+                        (translated, true)
+                    }
+                    TranslationResult::PassThrough => {
+                        log::debug!(
+                            "[ShaderTranslator] shader {} stage 0x{:04X} passed through unchanged (driver extension supported)",
+                            shader,
+                            stage
+                        );
+                        (source.clone(), false)
+                    }
+                    TranslationResult::Failed => {
+                        log::warn!(
+                            "[ShaderTranslator] SPIR-V pipeline failed for shader {}; passing original source ({} chars, took {:?})",
+                            shader,
+                            source.len(),
+                            translate_start.elapsed()
+                        );
+                        (source.clone(), false)
+                    }
+                };
+                // 翻译成功则缓存结果，后续相同源码可直接复用
+                if trans {
+                    state::with_state(|s| {
+                        s.shader_translation_cache.insert((source_hash, stage), upload.clone());
+                    });
+                }
+                (upload, trans)
+            };
 
         state::with_state(|s| {
             if translated {
                 s.shader_sources.insert(shader, upload_source.clone());
-                s.shader_translated_sources
-                    .insert(shader, upload_source.clone());
             } else {
                 s.shader_sources.remove(&shader);
-                s.shader_translated_sources.remove(&shader);
             }
-            // ✅ 修复：将真正的原始源码 source 移入 original_sources
+            // 将真正的原始源码 source 移入 original_sources
             s.shader_original_sources.insert(shader, source);
         });
 
@@ -165,7 +188,7 @@ const GL_SHADER_SOURCE_LENGTH: u32 = 0x8B88;
 pub extern "C" fn glCompileShader(shader: u32) {
     log::debug!("[FluorateGL] glCompileShader({})", shader);
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.shaders.get_gles(shader).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.shaders.get_gles(shader).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
@@ -203,7 +226,7 @@ pub extern "C" fn glCompileShader(shader: u32) {
                 );
             }
 
-            if let Some(src) = state::with_state(|s| s.shader_sources.get(&shader).cloned()) {
+            if let Some(src) = state::with_state_ref(|s| s.shader_sources.get(&shader).cloned()) {
                 log::error!(
                     "[FluorateGL] Translated source for shader {} ({} chars):\n{}",
                     shader,
@@ -212,7 +235,7 @@ pub extern "C" fn glCompileShader(shader: u32) {
                 );
             }
             if let Some(src) =
-                state::with_state(|s| s.shader_original_sources.get(&shader).cloned())
+                state::with_state_ref(|s| s.shader_original_sources.get(&shader).cloned())
             {
                 log::error!(
                     "[FluorateGL] Original source for shader {} ({} chars):\n{}",
@@ -232,7 +255,7 @@ pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
         return;
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.shaders.get_gles(shader).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.shaders.get_gles(shader).unwrap_or(0));
         if gles_id == 0 {
             // shader 不在 IdMap 中：可能是跨线程查询（异步线程创建、Render 线程查询）
             // 或 GLES 创建失败（gles_id=0 被 alloc）。此时不设置 *params，调用方看到 0（GL_FALSE）。
@@ -246,7 +269,7 @@ pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
 
         // Return the length of the original source for GL_SHADER_SOURCE_LENGTH.
         if pname == GL_SHADER_SOURCE_LENGTH {
-            let len = state::with_state(|s| {
+            let len = state::with_state_ref(|s| {
                 s.shader_original_sources
                     .get(&shader)
                     .map(|src| src.len() as i32 + 1)
@@ -278,8 +301,8 @@ pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
                 "(empty)".to_string()
             };
             // 输出翻译后源码前 500 字符，便于定位编译错误位置
-            let translated_preview: String = state::with_state(|s| {
-                s.shader_translated_sources
+            let translated_preview: String = state::with_state_ref(|s| {
+                s.shader_sources
                     .get(&shader)
                     .map(|src| src.chars().take(500).collect::<String>())
                     .unwrap_or_default()
@@ -304,7 +327,7 @@ pub extern "C" fn glGetShaderInfoLog(
     info_log: *mut c_char,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.shaders.get_gles(shader).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.shaders.get_gles(shader).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
@@ -324,7 +347,7 @@ pub extern "C" fn glGetShaderSource(
         return;
     }
 
-    let original = state::with_state(|s| s.shader_original_sources.get(&shader).cloned());
+    let original = state::with_state_ref(|s| s.shader_original_sources.get(&shader).cloned());
     let Some(src) = original else {
         unsafe {
             *source = 0;
@@ -357,7 +380,7 @@ pub extern "C" fn glGetShaderSource(
 #[allow(non_snake_case)]
 pub extern "C" fn glIsShader(shader: u32) -> u8 {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.shaders.get_gles(shader).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.shaders.get_gles(shader).unwrap_or(0));
         if gles_id == 0 {
             return 0;
         }

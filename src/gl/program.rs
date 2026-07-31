@@ -1,6 +1,7 @@
 use crate::backend;
 use crate::state;
 use libc::c_char;
+use std::ffi::CStr;
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -23,7 +24,14 @@ pub extern "C" fn glCreateProgram() -> u32 {
 #[allow(non_snake_case)]
 pub extern "C" fn glDeleteProgram(program: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        if let Some(gles_id) = state::with_state(|s| s.programs.delete(program)) {
+        let gles_id = state::with_state(|s| {
+            let gles_id = s.programs.delete(program);
+            // 清理该 program 的 uniform location 缓存，
+            // 避免 program id 复用后返回过期 location
+            s.uniform_location_cache.retain(|k, _| k.0 != program);
+            gles_id
+        });
+        if let Some(gles_id) = gles_id {
             (dispatch.delete_program)(gles_id);
         }
     });
@@ -34,8 +42,12 @@ pub extern "C" fn glDeleteProgram(program: u32) {
 pub extern "C" fn glAttachShader(program: u32, shader: u32) {
     log::debug!("[FluorateGL] glAttachShader({}, {})", program, shader);
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_program = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
-        let gles_shader = state::with_state(|s| s.shaders.get_gles(shader).unwrap_or(0));
+        let (gles_program, gles_shader) = state::with_state_ref(|s| {
+            (
+                s.programs.get_gles(program).unwrap_or(0),
+                s.shaders.get_gles(shader).unwrap_or(0),
+            )
+        });
         if gles_program == 0 || gles_shader == 0 {
             return;
         }
@@ -48,7 +60,7 @@ pub extern "C" fn glAttachShader(program: u32, shader: u32) {
 pub extern "C" fn glLinkProgram(program: u32) {
     log::debug!("[FluorateGL] glLinkProgram({})", program);
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             log::debug!(
                 "[FluorateGL] glLinkProgram({}) -> unknown desktop id, skipping",
@@ -100,7 +112,7 @@ pub extern "C" fn glUseProgram(program: u32) {
         let gles_id = if program == 0 {
             0
         } else {
-            state::with_state(|s| s.programs.get_gles(program).unwrap_or(0))
+            state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0))
         };
         (dispatch.use_program)(gles_id);
         state::with_state(|s| s.bound_program = program);
@@ -114,7 +126,7 @@ pub extern "C" fn glGetProgramiv(program: u32, pname: u32, params: *mut i32) {
         return;
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             // program 不在 IdMap 中：可能是跨线程查询或 GLES 创建失败。
             // 此时不设置 *params，调用方看到 0（GL_FALSE），可能误判链接失败。
@@ -155,7 +167,7 @@ pub extern "C" fn glGetProgramInfoLog(
     info_log: *mut c_char,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
@@ -166,12 +178,29 @@ pub extern "C" fn glGetProgramInfoLog(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetUniformLocation(program: u32, name: *const c_char) -> i32 {
+    if name.is_null() {
+        return -1;
+    }
+    // MC 渲染循环中可能反复查询同一 uniform（如 F3 重载 shader 后），
+    // 用 (program, name) 缓存 location，避免重复 FFI 查询。
+    let name_str = unsafe { CStr::from_ptr(name) }
+        .to_string_lossy()
+        .into_owned();
+    if let Some(loc) = state::with_state_ref(|s| {
+        s.uniform_location_cache.get(&(program, name_str.clone())).copied()
+    }) {
+        return loc;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return -1;
         }
-        (dispatch.get_uniform_location)(gles_id, name)
+        let loc = (dispatch.get_uniform_location)(gles_id, name);
+        state::with_state(|s| {
+            s.uniform_location_cache.insert((program, name_str), loc);
+        });
+        loc
     })
 }
 
@@ -179,7 +208,7 @@ pub extern "C" fn glGetUniformLocation(program: u32, name: *const c_char) -> i32
 #[allow(non_snake_case)]
 pub extern "C" fn glGetAttribLocation(program: u32, name: *const c_char) -> i32 {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return -1;
         }
@@ -215,8 +244,12 @@ pub extern "C" fn glUniformMatrix4fv(location: i32, count: i32, transpose: u8, v
 #[allow(non_snake_case)]
 pub extern "C" fn glDetachShader(program: u32, shader: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_program = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
-        let gles_shader = state::with_state(|s| s.shaders.get_gles(shader).unwrap_or(0));
+        let (gles_program, gles_shader) = state::with_state_ref(|s| {
+            (
+                s.programs.get_gles(program).unwrap_or(0),
+                s.shaders.get_gles(shader).unwrap_or(0),
+            )
+        });
         if gles_program == 0 || gles_shader == 0 {
             return;
         }
@@ -228,7 +261,7 @@ pub extern "C" fn glDetachShader(program: u32, shader: u32) {
 #[allow(non_snake_case)]
 pub extern "C" fn glValidateProgram(program: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
@@ -248,7 +281,7 @@ pub extern "C" fn glGetActiveUniform(
     name: *mut c_char,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
@@ -268,7 +301,7 @@ pub extern "C" fn glGetActiveAttrib(
     name: *mut c_char,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
@@ -280,7 +313,7 @@ pub extern "C" fn glGetActiveAttrib(
 #[allow(non_snake_case)]
 pub extern "C" fn glGetUniformfv(program: u32, location: i32, params: *mut f32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
@@ -292,7 +325,7 @@ pub extern "C" fn glGetUniformfv(program: u32, location: i32, params: *mut f32) 
 #[allow(non_snake_case)]
 pub extern "C" fn glGetUniformiv(program: u32, location: i32, params: *mut i32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
@@ -309,13 +342,27 @@ pub extern "C" fn glGetAttachedShaders(
     shaders: *mut u32,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
 
         if max_count > 0 && !shaders.is_null() {
-            let mut gles_shaders = vec![0u32; max_count as usize];
+            // MC program 通常 attach ≤2 个 shader（VS+FS），用栈上 buffer 避免堆分配；
+            // 超过 16 个（理论极限 VS+TCS+TES+GS+FS+额外）才回退堆。
+            let mut stack_buf = [0u32; 16];
+            let need_heap = (max_count as usize) > stack_buf.len();
+            let mut heap_buf = if need_heap {
+                vec![0u32; max_count as usize]
+            } else {
+                Vec::new()
+            };
+            let gles_shaders: &mut [u32] = if need_heap {
+                &mut heap_buf
+            } else {
+                &mut stack_buf[..max_count as usize]
+            };
+
             (dispatch.get_attached_shaders)(gles_id, max_count, count, gles_shaders.as_mut_ptr());
 
             let returned_count = if count.is_null() {
@@ -324,13 +371,15 @@ pub extern "C" fn glGetAttachedShaders(
                 (*count).clamp(0, max_count)
             };
 
-            for i in 0..returned_count as isize {
-                let gles_shader = *gles_shaders.as_ptr().offset(i);
-                let desktop_shader = state::with_state(|s| {
-                    s.shaders.get_desktop(gles_shader).unwrap_or(gles_shader)
-                });
-                *shaders.offset(i) = desktop_shader;
-            }
+            // 一次 with_state_ref 持有 borrow，批量把 GLES shader id 翻译回 desktop id，
+            // 避免循环内每次迭代都访问 thread_local。
+            state::with_state_ref(|s| {
+                for i in 0..returned_count as isize {
+                    let gles_shader = *gles_shaders.as_ptr().offset(i);
+                    let desktop_shader = s.shaders.get_desktop(gles_shader).unwrap_or(gles_shader);
+                    *shaders.offset(i) = desktop_shader;
+                }
+            });
         } else {
             (dispatch.get_attached_shaders)(gles_id, max_count, count, shaders);
         }
@@ -341,7 +390,7 @@ pub extern "C" fn glGetAttachedShaders(
 #[allow(non_snake_case)]
 pub extern "C" fn glBindAttribLocation(program: u32, index: u32, name: *const c_char) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
@@ -358,7 +407,7 @@ pub extern "C" fn glTransformFeedbackVaryings(
     buffer_mode: u32,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
@@ -378,7 +427,7 @@ pub extern "C" fn glGetTransformFeedbackVarying(
     name: *mut c_char,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
@@ -396,7 +445,7 @@ pub extern "C" fn glUniformBlockBinding(
     uniform_block_binding: u32,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
@@ -408,7 +457,7 @@ pub extern "C" fn glUniformBlockBinding(
 #[allow(non_snake_case)]
 pub extern "C" fn glGetUniformBlockIndex(program: u32, uniform_block_name: *const c_char) -> u32 {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return u32::MAX;
         }
@@ -428,7 +477,7 @@ pub extern "C" fn glGetActiveUniformBlockiv(
         return;
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
@@ -446,7 +495,7 @@ pub extern "C" fn glGetActiveUniformBlockName(
     uniform_block_name: *mut c_char,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
@@ -469,7 +518,7 @@ pub extern "C" fn glGetUniformIndices(
     uniform_indices: *mut u32,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
@@ -490,7 +539,7 @@ pub extern "C" fn glGetActiveUniformsiv(
         return;
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return;
         }
@@ -502,7 +551,7 @@ pub extern "C" fn glGetActiveUniformsiv(
 #[allow(non_snake_case)]
 pub extern "C" fn glIsProgram(program: u32) -> u8 {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.programs.get_gles(program).unwrap_or(0));
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             return 0;
         }
