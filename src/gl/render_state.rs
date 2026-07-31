@@ -1,6 +1,14 @@
 use crate::backend;
 use crate::gl::exports::is_unsupported_gles_cap;
 
+/// 判断 dispatch 函数指针是否为共享的未实现 stub。
+///
+/// `load_opt!` 把缺失的可选函数替换为同一个 stub 函数，故 GlesDispatch 中所有 stub
+/// 字段地址相同。与 `dispatch.stub` 比较即可判定该 GLES 函数是否被驱动支持。
+fn is_stub(dispatch: &backend::dispatch::GlesDispatch, ptr: *const ()) -> bool {
+    ptr == dispatch.stub as *const ()
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glEnablei(cap: u32, index: u32) {
@@ -184,10 +192,25 @@ pub extern "C" fn glPolygonOffset(factor: f32, units: f32) {
     });
 }
 
+// GL_FILL = 0x1B02（GLES 唯一支持的光栅化模式）；GL_LINE(0x1B01)/GL_POINT(0x1B00) 不支持
+const GL_FILL: u32 = 0x1B02;
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glPolygonMode(face: u32, mode: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
+        if is_stub(dispatch, dispatch.polygon_mode as *const ()) {
+            // GLES 不支持 glPolygonMode，光栅化模式固定为 GL_FILL。
+            // GL_LINE/GL_POINT 需 geometry shader 才能模拟，翻译层无法实现，仅告警并忽略。
+            if mode != GL_FILL {
+                log::warn!(
+                    "[FluorateGL] glPolygonMode(0x{:04X}, 0x{:04X}): GLES 仅支持 GL_FILL，非 FILL 模式已忽略",
+                    face,
+                    mode
+                );
+            }
+            return;
+        }
         (dispatch.polygon_mode)(face, mode);
     });
 }
@@ -196,6 +219,12 @@ pub extern "C" fn glPolygonMode(face: u32, mode: u32) {
 #[allow(non_snake_case)]
 pub extern "C" fn glPixelStoref(pname: u32, param: f32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.pixel_store_f)(pname, param);
+        if is_stub(dispatch, dispatch.pixel_store_f as *const ()) {
+            // GLES 没有 glPixelStoref，只有 glPixelStorei。
+            // pixel store 参数（如 UNPACK_ALIGNMENT）均为小整数，f→i 截断无损。
+            (dispatch.pixel_store_i)(pname, param as i32);
+        } else {
+            (dispatch.pixel_store_f)(pname, param);
+        }
     });
 }

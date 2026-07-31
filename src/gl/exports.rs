@@ -34,9 +34,20 @@ pub(crate) fn is_unsupported_gles_cap(cap: u32) -> bool {
     )
 }
 
+// GL_DEBUG_OUTPUT：MC(blaze3d) 会启用 KHR_debug 回调抓驱动消息，但 Adreno 驱动会刷出
+// 大量 PERFORMANCE 噪声（glDebugMessageControl 对 HIGH 级 PERFORMANCE 过滤无效）。
+// suppress_debug_noise 已 glDisable(GL_DEBUG_OUTPUT)，这里吞掉 MC 的重新启用，保持彻底关闭。
+const GL_DEBUG_OUTPUT: u32 = 0x9146;
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glEnable(cap: u32) {
+    if cap == GL_DEBUG_OUTPUT {
+        log::debug!(
+            "[FluorateGL] glEnable(GL_DEBUG_OUTPUT) swallowed (driver debug noise suppressed)"
+        );
+        return;
+    }
     if is_unsupported_gles_cap(cap) {
         log::debug!(
             "[FluorateGL] glEnable(0x{:04X}) ignored (unsupported in GLES)",

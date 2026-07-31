@@ -104,9 +104,18 @@ fn log_gpu_info() {
 
 /// 屏蔽 GLES 驱动的 PERFORMANCE / OTHER 类型 Debug 消息，
 /// 避免 "Packing allocations" / "high level of unsubmitted work" 等刷屏。
-/// 只保留 ERROR 类型消息用于诊断。
+///
+/// 两道防线：
+/// 1. glDebugMessageControl 关闭 PERFORMANCE / OTHER 类型（保留 ERROR 用于诊断）；
+/// 2. glDisable(GL_DEBUG_OUTPUT) 彻底关闭 KHR_debug 回调输出。
+///
+/// 部分Adreno 驱动无视 glDebugMessageControl 对 HIGH 级 PERFORMANCE 消息的过滤，
+/// 故必须配合 glDisable(GL_DEBUG_OUTPUT)。MC(blaze3d) 会在上下文初始化后自行
+/// glEnable(GL_DEBUG_OUTPUT) 注册回调，因此拦截层 exports::glEnable 也会吞掉
+/// GL_DEBUG_OUTPUT，防止其被重新启用（见 exports.rs）。
 fn suppress_debug_noise() {
     const GL_DONT_CARE: u32 = 0x1100;
+    const GL_DEBUG_OUTPUT: u32 = 0x9146;
     const GL_DEBUG_TYPE_PERFORMANCE: u32 = 0x8250;
     const GL_DEBUG_TYPE_OTHER: u32 = 0x8251;
     const GL_FALSE: u8 = 0;
@@ -116,31 +125,37 @@ fn suppress_debug_noise() {
         STUB.get_or_init(dispatch::GlesDispatch::all_stub)
     });
 
-    // 如果 debug_message_control 是 stub（GLES 驱动不支持），则静默跳过
-    if dispatch.debug_message_control as *const () == dispatch.stub as *const () {
-        return;
+    // 防线 1：按类型屏蔽（仅当驱动支持 glDebugMessageControl 时）
+    if dispatch.debug_message_control as *const () != dispatch.stub as *const () {
+        unsafe {
+            (dispatch.debug_message_control)(
+                GL_DONT_CARE,
+                GL_DEBUG_TYPE_PERFORMANCE,
+                GL_DONT_CARE,
+                0,
+                std::ptr::null(),
+                GL_FALSE,
+            );
+            (dispatch.debug_message_control)(
+                GL_DONT_CARE,
+                GL_DEBUG_TYPE_OTHER,
+                GL_DONT_CARE,
+                0,
+                std::ptr::null(),
+                GL_FALSE,
+            );
+        }
     }
 
+    // 防线 2：彻底关闭 GL_DEBUG_OUTPUT，阻止驱动通过 KHR_debug 回调输出任何消息。
+    // 直接走 dispatch（绕过拦截层 exports::glDisable），避免被任何上层逻辑拦截。
     unsafe {
-        (dispatch.debug_message_control)(
-            GL_DONT_CARE,
-            GL_DEBUG_TYPE_PERFORMANCE,
-            GL_DONT_CARE,
-            0,
-            std::ptr::null(),
-            GL_FALSE,
-        );
-        (dispatch.debug_message_control)(
-            GL_DONT_CARE,
-            GL_DEBUG_TYPE_OTHER,
-            GL_DONT_CARE,
-            0,
-            std::ptr::null(),
-            GL_FALSE,
-        );
+        (dispatch.disable)(GL_DEBUG_OUTPUT);
     }
 
-    log::info!("[FluorateGL] 已屏蔽 GLES Debug PERFORMANCE/OTHER 消息");
+    log::info!(
+        "[FluorateGL] 已屏蔽 GLES Debug 消息（PERFORMANCE/OTHER 过滤 + GL_DEBUG_OUTPUT 关闭）"
+    );
 }
 
 pub fn with_egl_dispatch<F, R>(f: F) -> R

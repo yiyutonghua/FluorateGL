@@ -261,7 +261,7 @@ fn strip_line_directives(source: &str) -> String {
     });
     let result = re.replace_all(source, "").into_owned();
     if result.len() != source.len() {
-        log::info!("[StringPass] 已移除 #line 指令");
+        log::debug!("[StringPass] 已移除 #line 指令");
     }
     result
 }
@@ -275,7 +275,7 @@ fn strip_mc_version_comment(source: &str) -> String {
     let re = RE.get_or_init(|| Regex::new(r"/\*#version\s+\d+\s*\*/").unwrap());
     let result = re.replace_all(source, "").into_owned();
     if result.len() != source.len() {
-        log::info!("[StringPass] 已移除 /*#version N*/ 注释");
+        log::debug!("[StringPass] 已移除 /*#version N*/ 注释");
     }
     result
 }
@@ -340,7 +340,7 @@ fn fix_minecraft_lightmap(source: &str) -> String {
             });
 
             if new_body.as_ref() != body {
-                log::info!(
+                log::debug!(
                     "[StringPass] 已修复 minecraft_sample_lightmap 中 ivec2/float 除法，参数: {}",
                     param
                 );

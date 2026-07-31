@@ -62,16 +62,17 @@ pub fn compile(spv: &[u32], version: u16) -> Result<String, SpirvCrossError> {
     options.common.emit_line_directives = false;
 
     // spirv-cross compile 是 FFI 调用（C++ 代码），native 崩溃无法被 catch_unwind 捕获。
-    // info 级日志标记进入/退出，精确定位是否 spirv-cross 崩溃。
-    // log::Logger 已在每条日志后 flush（见 util/log.rs），无需显式 flush。
-    log::info!(
+    // debug 级日志标记进入/退出，便于按需开启精确定位是否 spirv-cross 崩溃；
+    // 默认 debug 关闭，避免每个 shader 翻译都刷屏。
+    // log::Logger 已在每条日志后 flush（见 util/log.rs），开启 debug 时仍能落盘。
+    log::debug!(
         "[ShaderTranslator] ENTERING spirv-cross compile for ES{} (SPIR-V {} words)",
         version,
         spv.len()
     );
     let artifact: CompiledArtifact<Glsl> = compiler.compile(&options)?;
     let src = artifact.to_string();
-    log::info!(
+    log::debug!(
         "[ShaderTranslator] EXITED spirv-cross compile OK for ES{} ({} chars)",
         version,
         src.len()

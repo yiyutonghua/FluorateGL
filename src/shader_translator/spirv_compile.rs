@@ -135,7 +135,7 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
     match result {
         Ok(artifact) => {
             let spv: Vec<u32> = artifact.as_binary().to_vec();
-            log::info!(
+            log::debug!(
                 "[ShaderTranslator] EXITED shaderc compile OK for stage 0x{:04X} (SPIR-V {} words)",
                 stage,
                 spv.len()

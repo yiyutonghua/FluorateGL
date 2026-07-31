@@ -1,6 +1,14 @@
 use crate::backend;
 use crate::state;
 
+/// 判断 dispatch 函数指针是否为共享的未实现 stub。
+///
+/// `load_opt!` 把缺失的可选函数替换为同一个 stub 函数，故 GlesDispatch 中所有 stub
+/// 字段地址相同。与 `dispatch.stub` 比较即可判定该 GLES 函数是否被驱动支持。
+fn is_stub(dispatch: &backend::dispatch::GlesDispatch, ptr: *const ()) -> bool {
+    ptr == dispatch.stub as *const ()
+}
+
 // Texture internal format mappings: desktop OpenGL -> GLES 3.x
 // GLES 3.x supports sized internal formats, but some legacy desktop-only
 // formats (e.g. GL_RGB16, GL_DEPTH_COMPONENT32) need to be emulated.
@@ -592,9 +600,167 @@ pub extern "C" fn glGetTexImage(
     type_: u32,
     pixels: *mut std::ffi::c_void,
 ) {
+    if pixels.is_null() {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
+        if is_stub(dispatch, dispatch.get_tex_image as *const ()) {
+            // GLES 没有 glGetTexImage，用 FBO + glReadPixels 模拟
+            emulate_get_tex_image(dispatch, target, level, format, type_, pixels);
+            return;
+        }
         (dispatch.get_tex_image)(target, level, format, type_, pixels);
     });
+}
+
+/// 用 FBO + glReadPixels 模拟 glGetTexImage。
+///
+/// 流程：
+/// 1. 查询当前绑定到 target 的 GLES 纹理 ID 及该 level 宽高；
+/// 2. 保存当前 FBO / 读缓冲绑定；
+/// 3. 创建临时 FBO，把纹理该 level 挂到 COLOR_ATTACHMENT0；
+/// 4. glReadPixels 读回像素；
+/// 5. 删除临时 FBO，恢复 FBO / 读缓冲绑定。
+///
+/// 仅支持 2D 纹理与立方体贴理各面（MC 实际场景）。3D/2D_ARRAY 需按 layer 循环，
+/// 而 glGetTexImage 不带 layer 参数，无法精确模拟，告警并跳过。
+///
+/// 局限：GLES glReadPixels 的 format/type 组合受限（如 GL_RGB 非必备读回格式），
+/// 驱动不支持时像素数据未定义——这是模拟的固有约束，完整 CPU 格式转换超出范围。
+unsafe fn emulate_get_tex_image(
+    dispatch: &backend::dispatch::GlesDispatch,
+    target: u32,
+    level: i32,
+    format: u32,
+    type_: u32,
+    pixels: *mut std::ffi::c_void,
+) {
+    // Rust 2024 edition：unsafe fn 内调用 unsafe 操作需显式 unsafe 块。
+    unsafe {
+        const GL_FRAMEBUFFER: u32 = 0x8D40;
+        const GL_COLOR_ATTACHMENT0: u32 = 0x8CE0;
+        const GL_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
+        const GL_READ_BUFFER: u32 = 0x0C02;
+        const GL_TEXTURE_BINDING_2D: u32 = 0x8069;
+        const GL_TEXTURE_BINDING_CUBE_MAP: u32 = 0x8514;
+        const GL_TEXTURE_BINDING_3D: u32 = 0x806A;
+        const GL_TEXTURE_BINDING_2D_ARRAY: u32 = 0x9108;
+        const GL_TEXTURE_WIDTH: u32 = 0x1000;
+        const GL_TEXTURE_HEIGHT: u32 = 0x1001;
+        const GL_TEXTURE_2D: u32 = 0x0DE1;
+        const GL_TEXTURE_CUBE_MAP_POSITIVE_X: u32 = 0x8515;
+        const GL_TEXTURE_CUBE_MAP_NEGATIVE_Z: u32 = 0x851A;
+        const GL_TEXTURE_3D: u32 = 0x806F;
+        const GL_TEXTURE_2D_ARRAY: u32 = 0x8C03;
+        const GL_FRAMEBUFFER_COMPLETE: u32 = 0x8CD5;
+
+        // 1. 解析 target → 绑定查询 pname + 归类
+        let (binding_pname, is_3d_like) = match target {
+            GL_TEXTURE_2D => (GL_TEXTURE_BINDING_2D, false),
+            t if t >= GL_TEXTURE_CUBE_MAP_POSITIVE_X && t <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z => {
+                (GL_TEXTURE_BINDING_CUBE_MAP, false)
+            }
+            GL_TEXTURE_3D => (GL_TEXTURE_BINDING_3D, true),
+            GL_TEXTURE_2D_ARRAY => (GL_TEXTURE_BINDING_2D_ARRAY, true),
+            _ => {
+                log::warn!(
+                    "[FluorateGL] glGetTexImage: 不支持的 target 0x{:04X}，已跳过",
+                    target
+                );
+                return;
+            }
+        };
+
+        if is_3d_like {
+            log::warn!(
+                "[FluorateGL] glGetTexImage: 3D/2D_ARRAY (target 0x{:04X}) 无 layer 参数无法精确模拟，已跳过",
+                target
+            );
+            return;
+        }
+
+        // 深度格式纹理走 COLOR 附件不正确，告警跳过
+        if format == GL_DEPTH_COMPONENT {
+            log::warn!(
+                "[FluorateGL] glGetTexImage: 深度格式读取未模拟，已跳过 (target 0x{:04X})",
+                target
+            );
+            return;
+        }
+
+        let mut tex = 0i32;
+        (dispatch.get_integerv)(binding_pname, &mut tex);
+        if tex <= 0 {
+            log::warn!(
+                "[FluorateGL] glGetTexImage: target 0x{:04X} 当前无绑定纹理，已跳过",
+                target
+            );
+            return;
+        }
+
+        // 2. 查询该 level 宽高
+        let mut width = 0i32;
+        let mut height = 0i32;
+        (dispatch.get_tex_level_parameter_iv)(target, level, GL_TEXTURE_WIDTH, &mut width);
+        (dispatch.get_tex_level_parameter_iv)(target, level, GL_TEXTURE_HEIGHT, &mut height);
+        if width <= 0 || height <= 0 {
+            log::debug!(
+                "[FluorateGL] glGetTexImage: level {} 纹理尺寸 {}x{} 无效，已跳过",
+                level,
+                width,
+                height
+            );
+            return;
+        }
+
+        // 3. 保存当前 FBO / 读缓冲
+        let mut prev_fbo = 0i32;
+        let mut prev_read_buffer = 0i32;
+        (dispatch.get_integerv)(GL_FRAMEBUFFER_BINDING, &mut prev_fbo);
+        (dispatch.get_integerv)(GL_READ_BUFFER, &mut prev_read_buffer);
+
+        // 4. 创建临时 FBO 并挂载纹理该 level
+        let mut fbo = 0u32;
+        (dispatch.gen_framebuffers)(1, &mut fbo);
+        (dispatch.bind_framebuffer)(GL_FRAMEBUFFER, fbo);
+        (dispatch.framebuffer_texture_2d)(
+            GL_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            target,
+            tex as u32,
+            level,
+        );
+
+        let status = (dispatch.check_framebuffer_status)(GL_FRAMEBUFFER);
+        if status != GL_FRAMEBUFFER_COMPLETE {
+            log::warn!(
+                "[FluorateGL] glGetTexImage: FBO 不完整 (status=0x{:04X})，无法读回纹理，已跳过",
+                status
+            );
+            (dispatch.delete_framebuffers)(1, &fbo);
+            (dispatch.bind_framebuffer)(GL_FRAMEBUFFER, prev_fbo as u32);
+            return;
+        }
+
+        // 5. 读回像素
+        (dispatch.read_buffer)(GL_COLOR_ATTACHMENT0);
+        (dispatch.read_pixels)(0, 0, width, height, format, type_, pixels);
+
+        // 6. 清理并恢复
+        (dispatch.delete_framebuffers)(1, &fbo);
+        (dispatch.bind_framebuffer)(GL_FRAMEBUFFER, prev_fbo as u32);
+        (dispatch.read_buffer)(prev_read_buffer as u32);
+
+        log::debug!(
+            "[FluorateGL] glGetTexImage 模拟完成: target=0x{:04X} level={} {}x{} format=0x{:04X} type=0x{:04X}",
+            target,
+            level,
+            width,
+            height,
+            format,
+            type_
+        );
+    } // unsafe
 }
 
 #[unsafe(no_mangle)]

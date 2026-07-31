@@ -342,8 +342,10 @@ impl GlesDispatch {
             ($name:expr) => {{
                 let ptr = loader.get_proc($name);
                 if ptr.is_null() {
-                    log::warn!(
-                        "[GlesDispatch] warning: optional function not available: {}",
+                    // GLES 驱动未导出的可选函数：降为 debug，避免启动期刷屏。
+                    // 这些函数在拦截层会通过 is_stub 检测后走模拟或占位逻辑。
+                    log::debug!(
+                        "[GlesDispatch] optional function not available: {} (will emulate/stub)",
                         $name
                     );
                     unsafe { std::mem::transmute::<unsafe extern "C" fn(), _>(unimplemented_stub) }
