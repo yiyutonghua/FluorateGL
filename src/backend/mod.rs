@@ -209,13 +209,14 @@ pub fn capabilities() -> &'static capabilities::GlesCapabilities {
 }
 
 /// 兜底能力表，GLES 库加载失败时使用
-/// indirect_draw 恒 true：GLES 3.1 core 特性，项目前提
+/// multi_draw / indirect_draw 恒 true：GLES 3.1 core 特性，项目前提
 static FALLBACK_CAPS: capabilities::GlesCapabilities = capabilities::GlesCapabilities {
     version: capabilities::GlesVersion(0),
     draw_elements_base_vertex: false,
     base_instance: false,
     multi_draw_elements_base_vertex: false,
     multi_draw_indirect: false,
+    multi_draw: true,
     indirect_draw: true,
     indirect_count: false,
 };

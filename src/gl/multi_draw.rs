@@ -16,6 +16,20 @@
 
 use crate::backend;
 use crate::backend::dispatch::GlesDispatch;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// IndirectCount 不支持时的首次告警标志（避免每帧刷屏）
+static INDIRECT_COUNT_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// 首次告警：IndirectCount 无法模拟，仅首次调用时输出 warn，后续静默跳过。
+fn warn_indirect_count_unsupported(fname: &str) {
+    if !INDIRECT_COUNT_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] {}: GLES 不支持 indirect count，无法模拟，后续调用将静默跳过",
+            fname
+        );
+    }
+}
 
 /// 判断 dispatch 函数指针是否为共享的未实现 stub。
 fn is_stub(dispatch: &GlesDispatch, ptr: *const ()) -> bool {
@@ -70,9 +84,13 @@ pub extern "C" fn glMultiDrawArrays(
     if drawcount <= 0 {
         return;
     }
+    // GLES 3.1 core（项目前提），恒可用，caps 仅作风格统一的双层判断
+    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        if is_stub(dispatch, dispatch.multi_draw_arrays as *const ()) {
-            // 降级：循环 glDrawArrays
+        let supported =
+            caps.multi_draw && !is_stub(dispatch, dispatch.multi_draw_arrays as *const ());
+        if !supported {
+            // 降级：循环 glDrawArrays（GLES 2.0 core，恒可用）
             for i in 0..drawcount as isize {
                 (dispatch.draw_arrays)(mode, *first.offset(i), *count.offset(i));
             }
@@ -94,9 +112,13 @@ pub extern "C" fn glMultiDrawElements(
     if drawcount <= 0 {
         return;
     }
+    // GLES 3.1 core（项目前提），恒可用，caps 仅作风格统一的双层判断
+    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        if is_stub(dispatch, dispatch.multi_draw_elements as *const ()) {
-            // 降级：循环 glDrawElements
+        let supported =
+            caps.multi_draw && !is_stub(dispatch, dispatch.multi_draw_elements as *const ());
+        if !supported {
+            // 降级：循环 glDrawElements（GLES 2.0 core，恒可用）
             for i in 0..drawcount as isize {
                 (dispatch.draw_elements)(mode, *count.offset(i), type_, *indices.offset(i));
             }
@@ -233,11 +255,9 @@ pub extern "C" fn glMultiDrawArraysIndirectCount(
             );
         if !supported {
             // IndirectCount 需从 GPU buffer 读取实际 drawcount，无法在 CPU 侧可靠模拟。
-            // 仅当 maxdrawcount<=0 时可安全跳过，否则告警。
+            // 仅当 maxdrawcount<=0 时可安全跳过，否则首次告警后静默。
             if maxdrawcount > 0 {
-                log::warn!(
-                    "[FluorateGL] glMultiDrawArraysIndirectCount: GLES 不支持 indirect count，无法模拟，已跳过"
-                );
+                warn_indirect_count_unsupported("glMultiDrawArraysIndirectCount");
             }
             return;
         }
@@ -270,9 +290,7 @@ pub extern "C" fn glMultiDrawElementsIndirectCount(
             );
         if !supported {
             if maxdrawcount > 0 {
-                log::warn!(
-                    "[FluorateGL] glMultiDrawElementsIndirectCount: GLES 不支持 indirect count，无法模拟，已跳过"
-                );
+                warn_indirect_count_unsupported("glMultiDrawElementsIndirectCount");
             }
             return;
         }

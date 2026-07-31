@@ -47,6 +47,9 @@ pub struct GlesCapabilities {
     /// 覆盖：glMultiDrawArraysIndirect, glMultiDrawElementsIndirect
     pub multi_draw_indirect: bool,
     /// GLES 3.1+（core，无扩展）
+    /// 覆盖：glMultiDrawArrays, glMultiDrawElements
+    pub multi_draw: bool,
+    /// GLES 3.1+（core，无扩展）
     /// 覆盖：glDrawArraysIndirect, glDrawElementsIndirect
     pub indirect_draw: bool,
     /// GL_ARB_indirect_compute / GL 4.6（GLES 几乎无支持）
@@ -64,6 +67,7 @@ impl GlesCapabilities {
             base_instance: false,
             multi_draw_elements_base_vertex: false,
             multi_draw_indirect: false,
+            multi_draw: false,
             indirect_draw: false,
             indirect_count: false,
         }
@@ -102,18 +106,21 @@ impl GlesCapabilities {
             multi_draw_indirect: is_32
                 || extensions.iter().any(|e| e == "GL_EXT_multi_draw_indirect"),
             // GLES 3.1 core 特性，项目前提，恒为 true
+            multi_draw: true,
+            // GLES 3.1 core 特性，项目前提，恒为 true
             indirect_draw: true,
             // GLES 无标准 indirect count 扩展
             indirect_count: false,
         };
 
         log::info!(
-            "[FluorateGL] GLES 能力检测: version={} base_vertex={} base_instance={} multi_base_vertex={} multi_indirect={} indirect_draw={} indirect_count={}",
+            "[FluorateGL] GLES 能力检测: version={} base_vertex={} base_instance={} multi_base_vertex={} multi_indirect={} multi_draw={} indirect_draw={} indirect_count={}",
             version.0,
             caps.draw_elements_base_vertex,
             caps.base_instance,
             caps.multi_draw_elements_base_vertex,
             caps.multi_draw_indirect,
+            caps.multi_draw,
             caps.indirect_draw,
             caps.indirect_count
         );
