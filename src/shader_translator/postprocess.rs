@@ -686,8 +686,6 @@ mod tests {
         assert!(!result.contains("precision mediump float;"));
     }
 
-    // ============ UBO 实例名移除 ============
-
     #[test]
     fn test_strip_ubo_instance_name_basic() {
         // spirv-cross 输出带实例名的 UBO：} _20; → };
@@ -773,8 +771,6 @@ mod tests {
         assert!(result.contains("ModelViewMat"));
         assert!(result.contains("ProjMat"));
     }
-
-    // ============ UBO 拆解为 standalone uniform ============
 
     #[test]
     fn test_unwrap_generated_ubo_basic() {

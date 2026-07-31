@@ -6,7 +6,7 @@ pub struct GlesDispatch {
     /// Address of the shared no-op stub used for missing optional functions.
     pub stub: unsafe extern "C" fn(),
 
-    // A类
+    // Direct pass-through functions
     pub clear: unsafe extern "C" fn(u32),
     pub get_string: unsafe extern "C" fn(u32) -> *const c_char,
     pub enable: unsafe extern "C" fn(u32),
@@ -31,14 +31,14 @@ pub struct GlesDispatch {
     pub generate_mipmap: unsafe extern "C" fn(u32),
     pub get_error: unsafe extern "C" fn() -> u32,
 
-    // B类：Buffer
+    // Buffer
     pub gen_buffers: unsafe extern "C" fn(i32, *mut u32),
     pub delete_buffers: unsafe extern "C" fn(i32, *const u32),
     pub bind_buffer: unsafe extern "C" fn(u32, u32),
     pub buffer_data: unsafe extern "C" fn(u32, isize, *const c_void, u32),
     pub buffer_sub_data: unsafe extern "C" fn(u32, isize, isize, *const c_void),
 
-    // B类：Buffer 高级
+    // Buffer 高级
     pub map_buffer_range: unsafe extern "C" fn(u32, isize, isize, u32) -> *mut c_void,
     pub unmap_buffer: unsafe extern "C" fn(u32) -> u8,
     pub flush_mapped_buffer_range: unsafe extern "C" fn(u32, isize, isize),
@@ -51,14 +51,14 @@ pub struct GlesDispatch {
     pub get_buffer_pointer_v: unsafe extern "C" fn(u32, u32, *mut *mut c_void),
     pub is_buffer: unsafe extern "C" fn(u32) -> u8,
 
-    // B类：Buffer → Texture 绑定（GL_EXT_texture_buffer / GLES 3.2）
+    // Buffer → Texture 绑定（GL_EXT_texture_buffer / GLES 3.2）
     pub tex_buffer: unsafe extern "C" fn(u32, u32, u32),
     pub tex_buffer_range: unsafe extern "C" fn(u32, u32, u32, isize, isize),
 
-    // B类：Debug 输出控制
+    // Debug 输出控制
     pub debug_message_control: unsafe extern "C" fn(u32, u32, u32, i32, *const u32, u8),
 
-    // B类：VAO
+    // VAO
     pub gen_vertex_arrays: unsafe extern "C" fn(i32, *mut u32),
     pub delete_vertex_arrays: unsafe extern "C" fn(i32, *const u32),
     pub bind_vertex_array: unsafe extern "C" fn(u32),
@@ -91,20 +91,20 @@ pub struct GlesDispatch {
     pub vertex_attrib_i_3uiv: unsafe extern "C" fn(u32, *const u32),
     pub vertex_attrib_i_4uiv: unsafe extern "C" fn(u32, *const u32),
 
-    // B类：VAO/Draw 高级（ARB_vertex_attrib_binding / GLES 3.1）
+    // VAO/Draw 高级（ARB_vertex_attrib_binding / GLES 3.1）
     pub bind_vertex_buffer: unsafe extern "C" fn(u32, u32, isize, i32),
     pub vertex_attrib_format: unsafe extern "C" fn(u32, i32, u32, u8, u32),
     pub vertex_attrib_i_format: unsafe extern "C" fn(u32, i32, u32, u32),
     pub vertex_attrib_binding: unsafe extern "C" fn(u32, u32),
 
-    // B类：VAO/Draw 高级
+    // VAO/Draw 高级
     pub vertex_attrib_divisor: unsafe extern "C" fn(u32, u32),
     pub draw_arrays_instanced: unsafe extern "C" fn(u32, i32, i32, i32),
     pub draw_elements_instanced: unsafe extern "C" fn(u32, i32, u32, *const c_void, i32),
     pub draw_range_elements: unsafe extern "C" fn(u32, u32, u32, i32, u32, *const c_void),
     pub primitive_restart_index: unsafe extern "C" fn(u32),
 
-    // B类：Shader
+    // Shader
     pub create_shader: unsafe extern "C" fn(u32) -> u32,
     pub delete_shader: unsafe extern "C" fn(u32),
     pub shader_source: unsafe extern "C" fn(u32, i32, *const *const c_char, *const i32),
@@ -113,7 +113,7 @@ pub struct GlesDispatch {
     pub get_shader_info_log: unsafe extern "C" fn(u32, i32, *mut i32, *mut c_char),
     pub gl_create_shader_programv: unsafe extern "C" fn(u32, i32, *const *const c_char) -> u32,
 
-    // B类：Program
+    // Program
     pub create_program: unsafe extern "C" fn() -> u32,
     pub delete_program: unsafe extern "C" fn(u32),
     pub attach_shader: unsafe extern "C" fn(u32, u32),
@@ -143,7 +143,7 @@ pub struct GlesDispatch {
     pub uniform_matrix_3fv: unsafe extern "C" fn(i32, i32, u8, *const f32),
     pub uniform_matrix_4fv: unsafe extern "C" fn(i32, i32, u8, *const f32),
 
-    // B类：Shader/Program 高级
+    // Shader/Program 高级
     pub detach_shader: unsafe extern "C" fn(u32, u32),
     pub validate_program: unsafe extern "C" fn(u32),
     pub get_active_uniform:
@@ -168,7 +168,7 @@ pub struct GlesDispatch {
     pub is_program: unsafe extern "C" fn(u32) -> u8,
     pub release_shader_compiler: unsafe extern "C" fn(),
 
-    // B类：Texture
+    // Texture
     pub gen_textures: unsafe extern "C" fn(i32, *mut u32),
     pub delete_textures: unsafe extern "C" fn(i32, *const u32),
     pub bind_texture: unsafe extern "C" fn(u32, u32),
@@ -177,7 +177,7 @@ pub struct GlesDispatch {
         unsafe extern "C" fn(u32, i32, i32, i32, i32, i32, u32, u32, *const c_void),
     pub tex_parameter_i: unsafe extern "C" fn(u32, u32, i32),
 
-    // B类：Texture 高级
+    // Texture 高级
     pub tex_image_3d:
         unsafe extern "C" fn(u32, i32, i32, i32, i32, i32, i32, u32, u32, *const c_void),
     pub tex_sub_image_3d:
@@ -293,7 +293,7 @@ pub struct GlesDispatch {
     pub sampler_parameter_fv: unsafe extern "C" fn(u32, u32, *const f32),
     pub is_sampler: unsafe extern "C" fn(u32) -> u8,
 
-    // B类：其他
+    // 其他
     pub get_integerv: unsafe extern "C" fn(u32, *mut i32),
     pub get_string_i: unsafe extern "C" fn(u32, u32) -> *const c_char,
 

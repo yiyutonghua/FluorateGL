@@ -2,7 +2,6 @@ use crate::backend;
 use libc::c_char;
 use std::ffi::c_void;
 
-// EGL enum constants
 const EGL_NONE: i32 = 0x3038;
 const EGL_CONTEXT_CLIENT_VERSION: i32 = 0x3098;
 const EGL_CONTEXT_OPENGL_PROFILE_MASK: i32 = 0x3093;
@@ -28,10 +27,10 @@ pub extern "C" fn eglInitialize(
     let result = backend::with_egl_dispatch(|d| unsafe { (d.initialize)(dpy, major, minor) });
     if result == EGL_SUCCESS {
         if !major.is_null() {
-            unsafe { *major = 1 };
+            unsafe { *major = crate::config::REPORTED_EGL_MAJOR };
         }
         if !minor.is_null() {
-            unsafe { *minor = 4 };
+            unsafe { *minor = crate::config::REPORTED_EGL_MINOR };
         }
     }
     result
@@ -214,9 +213,7 @@ pub extern "C" fn eglCreateContext(
             EGL_CONTEXT_OPENGL_PROFILE_MASK => {
                 // GLES 没有 profile，跳过
             }
-            EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY => {
-                // 跳过
-            }
+            EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY => {}
             _ => {
                 new_attribs.push(attr);
                 new_attribs.push(value);
@@ -266,7 +263,7 @@ pub extern "C" fn eglQueryContext(
     value: *mut i32,
 ) -> u32 {
     if attribute == EGL_CONTEXT_CLIENT_VERSION {
-        unsafe { *value = 3 }; // Report GLES 3.x
+        unsafe { *value = crate::config::REPORTED_GL_MAJOR };
         return EGL_SUCCESS;
     }
     backend::with_egl_dispatch(|d| unsafe { (d.query_context)(dpy, ctx, attribute, value) })

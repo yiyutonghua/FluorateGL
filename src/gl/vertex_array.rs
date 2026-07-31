@@ -362,8 +362,7 @@ pub extern "C" fn glVertexAttribI4uiv(index: u32, v: *const u32) {
     });
 }
 
-// === ARB_vertex_attrib_binding / GLES 3.1 DSA API ===
-// MC 使用这套 API 替代 glVertexAttribPointer 来设置 VAO 属性。
+// MC 使用 ARB_vertex_attrib_binding / GLES 3.1 DSA API 替代 glVertexAttribPointer 来设置 VAO 属性。
 // glBindVertexBuffer 是其中唯一传递 buffer ID 的函数，需要做 ID 翻译。
 // 其余函数直接透传。
 

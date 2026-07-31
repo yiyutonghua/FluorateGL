@@ -92,14 +92,7 @@ pub extern "C" fn fluorategl_init() -> i32 {
 
     crate::backend::set_config(cfg);
 
-    // FLUORATEGL_SKIP_BACKEND=1 时跳过 EGL/GLES 库加载。
-    // 用于 fork worker 等只需翻译管线（纯 CPU）的场景，避免重复 dlopen/dlsym 开销。
-    // MC 运行时不设置此变量，正常加载 EGL/GLES。
-    let skip_backend = std::env::var("FLUORATEGL_SKIP_BACKEND")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-
-    if skip_backend {
+    if cfg.skip_backend {
         log::info!("[FluorateGL] FLUORATEGL_SKIP_BACKEND=1, skip EGL/GLES loading");
     } else {
         // 注意：EGL/GLES 加载失败时不返回错误，只发出警告。

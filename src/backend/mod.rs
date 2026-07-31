@@ -67,7 +67,6 @@ where
         log_gpu_info();
     }
 
-    //ensure_initialized();
     let dispatch = GLES_DISPATCH.get().unwrap_or_else(|| {
         static STUB: OnceLock<dispatch::GlesDispatch> = OnceLock::new();
         STUB.get_or_init(dispatch::GlesDispatch::all_stub)
@@ -153,7 +152,6 @@ where
         log::info!("[FluorateGL] === 首次 EGL 调用 ===");
     }
 
-    //ensure_initialized();
     let dispatch = EGL_DISPATCH.get().unwrap_or_else(|| {
         static STUB: OnceLock<crate::egl_sys::dispatch::EglDispatch> = OnceLock::new();
         STUB.get_or_init(crate::egl_sys::dispatch::EglDispatch::all_stub)

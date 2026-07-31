@@ -121,12 +121,10 @@ pub extern "C" fn glBufferStorage(
     flags: u32,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        // 注意：这里 is_stub 的签名请确保和 drawing.rs 里一致（推荐用 *const ()）
         if is_stub(dispatch, dispatch.buffer_storage as *const ()) {
-            // 如果底层真的没有 glBufferStorage，只能降级为 glBufferData
             (dispatch.buffer_data)(target, size, data, 0x88E8); // GL_DYNAMIC_DRAW
         } else {
-            // ✅ 修复：原样传入 flags！不要剥离 PERSISTENT 和 COHERENT！
+            // 原样传入 flags，不要剥离 PERSISTENT 和 COHERENT：
             // MC 的顶点流式上传完全依赖这两个 Bit。
             (dispatch.buffer_storage)(target, size, data, flags);
         }
@@ -176,7 +174,6 @@ pub extern "C" fn glMapBufferRange(
     access: u32,
 ) -> *mut std::ffi::c_void {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        // ✅ 修复：原样传入 access！不要剥离 PERSISTENT 和 COHERENT！
         (dispatch.map_buffer_range)(target, offset, length, access)
     })
 }
@@ -266,7 +263,6 @@ pub extern "C" fn glGetBufferSubData(
     size: isize,
     data: *mut std::ffi::c_void,
 ) {
-    // size/offset 为负或 data 为空时无意义，直接返回
     if data.is_null() || size <= 0 || offset < 0 {
         return;
     }
@@ -327,7 +323,6 @@ pub extern "C" fn glIsBuffer(buffer: u32) -> u8 {
     })
 }
 
-// === GL_EXT_texture_buffer / GLES 3.2 ===
 // glTexBuffer 将 buffer 绑定到纹理，buffer ID 需要从 desktop 翻译为 GLES。
 
 #[unsafe(no_mangle)]

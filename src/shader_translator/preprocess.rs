@@ -503,7 +503,6 @@ fn find_available_binding(src: &str) -> u32 {
             }
         }
     }
-    // 从 0 开始找最小未使用编号（但通常递增分配更简单）
     let mut candidate = 0;
     while used.contains(&candidate) {
         candidate += 1;

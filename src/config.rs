@@ -26,6 +26,8 @@ pub enum LogLevel {
 pub struct Config {
     pub backend: Backend,
     pub log_level: LogLevel,
+    /// 跳过 EGL/GLES 库加载（用于 fork worker 等只需翻译管线的纯 CPU 场景）
+    pub skip_backend: bool,
 }
 
 impl Config {
@@ -46,7 +48,15 @@ impl Config {
             _ => LogLevel::Info,
         };
 
-        Self { backend, log_level }
+        let skip_backend = env::var("FLUORATEGL_SKIP_BACKEND")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+        Self {
+            backend,
+            log_level,
+            skip_backend,
+        }
     }
 
     pub fn egl_lib_name(&self) -> &'static str {
@@ -67,3 +77,34 @@ impl Config {
         }
     }
 }
+
+// ===== 报告给宿主的 GL/EGL 版本信息 =====
+//
+// 这些常量是 FluorateGL 对外伪装的桌面 OpenGL 版本。MC 会根据这些值判断可用的
+// GL 特性与渲染路径。三者必须保持一致：
+//   REPORTED_GL_VERSION_PREFIX 的 "主.次" 必须等于 REPORTED_GL_MAJOR.REPORTED_GL_MINOR
+// 集中定义避免散落在多处因改动遗漏导致不一致。
+
+/// 报告的 GL 版本前缀（glGetString(GL_VERSION) 返回 "3.2.0 FluorateGL v{ver}"）
+pub const REPORTED_GL_VERSION_PREFIX: &str = "3.2.0 FluorateGL";
+
+// 编译期断言：版本字符串前缀 "主.次" 必须与 MAJOR/MINOR 常量一致，
+// 防止改动一处遗漏另一处导致 MC 版本解析异常。
+const _: () = {
+    let prefix = REPORTED_GL_VERSION_PREFIX.as_bytes();
+    let major_digit = prefix[0];
+    let minor_digit = prefix[2];
+    assert!(major_digit == b'0' + REPORTED_GL_MAJOR as u8);
+    assert!(minor_digit == b'0' + REPORTED_GL_MINOR as u8);
+};
+/// 报告的 GL 主版本号（glGetIntegerv(GL_MAJOR_VERSION)）
+pub const REPORTED_GL_MAJOR: i32 = 3;
+/// 报告的 GL 次版本号（glGetIntegerv(GL_MINOR_VERSION)）
+pub const REPORTED_GL_MINOR: i32 = 2;
+/// 报告的 GLSL 版本字符串（glGetString(GL_SHADING_LANGUAGE_VERSION)）
+pub const REPORTED_GLSL_VERSION: &str = "1.50";
+
+/// 报告的 EGL 主版本号
+pub const REPORTED_EGL_MAJOR: i32 = 1;
+/// 报告的 EGL 次版本号
+pub const REPORTED_EGL_MINOR: i32 = 4;

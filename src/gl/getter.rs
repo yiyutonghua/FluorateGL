@@ -107,7 +107,6 @@ pub extern "C" fn glGetIntegeri_v(target: u32, index: u32, data: *mut i32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_integeri_v)(target, index, data);
     });
-    // 将 GLES 驱动返回的原始 GLES ID 翻译为桌面 ID
     translate_indexed_binding_to_desktop(target, data);
 }
 

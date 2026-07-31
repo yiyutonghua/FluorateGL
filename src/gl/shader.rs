@@ -72,7 +72,6 @@ pub extern "C" fn glShaderSource(
             return;
         }
 
-        // Concatenate all source strings.
         let mut source = String::new();
         for i in 0..count as isize {
             let ptr = *string.offset(i);
@@ -412,19 +411,16 @@ pub extern "C" fn glCreateShaderProgramv(
         shader_type
     );
 
-    // 1. 手动创建 Shader
     let shader_id = glCreateShader(shader_type);
     if shader_id == 0 {
         return 0;
     }
 
-    // 2. 手动上传源码（这里会触发我们的 SPIR-V 翻译管线！）
+    // 手动上传源码（这里会触发我们的 SPIR-V 翻译管线！）
     glShaderSource(shader_id, count, strings, std::ptr::null());
 
-    // 3. 手动编译
     glCompileShader(shader_id);
 
-    // 4. 检查编译状态
     let mut status = 0i32;
     glGetShaderiv(shader_id, 0x8B81 /* GL_COMPILE_STATUS */, &mut status);
 
@@ -433,7 +429,6 @@ pub extern "C" fn glCreateShaderProgramv(
         // 即使失败也要创建 program 返回，否则 MC 会崩溃
     }
 
-    // 5. 创建 Program 并链接
     let program_id = backend::with_gles_dispatch(|dispatch| unsafe {
         let prog = (dispatch.create_program)();
         if prog == 0 {

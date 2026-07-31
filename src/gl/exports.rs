@@ -5,8 +5,6 @@ use libc::c_char;
 use std::ffi::CString;
 use std::sync::OnceLock;
 
-// === A类：直接透传 ===
-
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glClear(mask: u32) {
@@ -15,12 +13,10 @@ pub extern "C" fn glClear(mask: u32) {
     });
 }
 
-// glAlphaFunc 是桌面 GL 固定功能，GLES 2.0+ 不支持，直接忽略
+// glAlphaFunc 是桌面 GL 固定功能，GLES 2.0+ 不支持，alpha test 在 shader 中通过 discard 实现
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glAlphaFunc(_func: u32, _ref: f32) {
-    // no-op: GLES 不支持固定功能 alpha test，alpha test 在 shader 中通过 discard 实现
-}
+pub extern "C" fn glAlphaFunc(_func: u32, _ref: f32) {}
 
 // Capabilities that exist in desktop GL but are unsupported (or always on)
 // in OpenGL ES. Passing them to GLES produces `GL_INVALID_ENUM`.
@@ -34,7 +30,7 @@ pub(crate) fn is_unsupported_gles_cap(cap: u32) -> bool {
         0x0B41 | // GL_POLYGON_SMOOTH
         0x809D | // GL_MULTISAMPLE
         0x0B21 | // GL_LINE_STIPPLE
-        0x0BC0 // GL_ALPHA_TEST (GLES 2.0+ 不支持，alpha test 在 shader 中通过 discard 实现)
+        0x0BC0 // GL_ALPHA_TEST
     )
 }
 
@@ -250,8 +246,6 @@ pub extern "C" fn glGetError() -> u32 {
     err
 }
 
-// === 特殊处理 ===
-
 fn get_fake_extensions_string() -> *const c_char {
     static EXT_STRING: OnceLock<CString> = OnceLock::new();
     let s = EXT_STRING.get_or_init(|| {
@@ -269,19 +263,21 @@ fn get_fake_extensions_string() -> *const c_char {
 #[allow(non_snake_case)]
 pub extern "C" fn glGetString(name: u32) -> *const c_char {
     let result = if name == 0x1F02 {
-        // GL_VERSION
-        // 报告 3.2.0：MC 所有版本（含最新 1.21.x）完全支持 OpenGL 3.2.0。
-        // GLSL ES 3.2（翻译目标）功能集覆盖 3.2 需求，报告 3.2 避免触发高版本特性检查。
+        // GL_VERSION：报告 3.2.0，MC 所有版本完全支持 OpenGL 3.2.0。
         // 末尾拼接 FluorateGL 版本号，MC F3 的 "OpenGL:" 行会显示
         // "3.2.0 FluorateGL v0.2.0"。"3.2.0" 前缀保持不变，不影响 MC 版本解析。
-        // 版本号来自 Cargo.toml（CARGO_PKG_VERSION），与 lib.rs::VERSION 共用同一来源。
-        static VERSION: &[u8] =
-            concat!("3.2.0 FluorateGL v", env!("CARGO_PKG_VERSION"), "\0").as_bytes();
+        static VERSION: &[u8] = concat!(
+            "3.2.0 FluorateGL v",
+            env!("CARGO_PKG_VERSION"),
+            "\0"
+        )
+        .as_bytes();
         VERSION.as_ptr() as *const c_char
     } else if name == 0x8B8C {
         // GL_SHADING_LANGUAGE_VERSION
-        static GLSL: &[u8] = b"1.50\0";
-        GLSL.as_ptr() as *const c_char
+        static GLSL: OnceLock<CString> = OnceLock::new();
+        let s = GLSL.get_or_init(|| CString::new(crate::config::REPORTED_GLSL_VERSION).unwrap());
+        s.as_ptr() as *const c_char
     } else if name == 0x1F03 {
         // GL_EXTENSIONS
         get_fake_extensions_string()
@@ -438,12 +434,12 @@ pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
             unsafe { *data = FAKE_EXTENSIONS.len() as i32 };
         }
         0x821B => {
-            // GL_MAJOR_VERSION（报告 3，与 GL_VERSION "3.2.0" 一致）
-            unsafe { *data = 3 };
+            // GL_MAJOR_VERSION
+            unsafe { *data = crate::config::REPORTED_GL_MAJOR };
         }
         0x821C => {
             // GL_MINOR_VERSION
-            unsafe { *data = 2 };
+            unsafe { *data = crate::config::REPORTED_GL_MINOR };
         }
         0x9126 => {
             // GL_CONTEXT_PROFILE_MASK
@@ -451,7 +447,6 @@ pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
         }
         _ => {
             getter::get_integerv(pname, data);
-            // 将 GLES 驱动返回的原始 GLES ID 翻译为桌面 ID
             translate_binding_to_desktop(pname, data);
         }
     }

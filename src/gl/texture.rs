@@ -4,7 +4,6 @@ use crate::state;
 // Texture internal format mappings: desktop OpenGL -> GLES 3.x
 // GLES 3.x supports sized internal formats, but some legacy desktop-only
 // formats (e.g. GL_RGB16, GL_DEPTH_COMPONENT32) need to be emulated.
-// ================= 补充完整的常量映射 =================
 const GL_RED: u32 = 0x1903;
 const GL_ALPHA: u32 = 0x1906;
 const GL_RGB: u32 = 0x1907;
@@ -23,7 +22,6 @@ const GL_DEPTH_COMPONENT16: u32 = 0x81A5;
 const GL_DEPTH_COMPONENT24: u32 = 0x81A6;
 const GL_DEPTH24_STENCIL8: u32 = 0x88F0;
 
-// 你原有的常量保留...
 const GL_R3_G3_B2: u32 = 0x2A10;
 const GL_RGB4: u32 = 0x804F;
 const GL_RGB5: u32 = 0x8050;
@@ -65,7 +63,7 @@ fn normalize_internal_format(internalformat: u32) -> u32 {
         GL_DEPTH_COMPONENT => GL_DEPTH_COMPONENT24,
         GL_DEPTH_STENCIL => GL_DEPTH24_STENCIL8,
 
-        // 3. 你原有的 Legacy Desktop 格式映射
+        // 3. Legacy Desktop 格式映射
         GL_R3_G3_B2 | GL_RGB4 | GL_RGB5 | GL_RGB12 => GL_RGB8,
         GL_RGB10 => GL_RGB10_A2,
         GL_RGB16 => GL_RGBA16,
@@ -79,7 +77,6 @@ fn normalize_internal_format(internalformat: u32) -> u32 {
         GL_COMPRESSED_RGBA => GL_RGBA8,
         GL_COMPRESSED_RGB => GL_RGB8,
 
-        // 5. 其他情况（已经是 Sized Format）原样返回
         _ => internalformat,
     }
 }
@@ -629,7 +626,6 @@ pub extern "C" fn glIsTexture(texture: u32) -> u8 {
         return 0;
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
-        // texture 是 desktop id，需要先转回 gles id
         let gles_id = state::with_state(|s| s.textures.get_gles(texture).unwrap_or(0));
         if gles_id == 0 {
             return 0;
