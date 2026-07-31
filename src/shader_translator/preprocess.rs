@@ -14,7 +14,7 @@
 //! 分别从 0 计数，保证 VS out 和 FS in 的同名 varying location 一致。
 
 use regex::Regex;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 /// GLSL stage 常量（与 GL_VERTEX_SHADER/GL_FRAGMENT_SHADER 对齐）
 pub const GL_VERTEX_SHADER: u32 = 0x8B31;
@@ -475,7 +475,7 @@ fn convert_uniforms_to_ubo(src: &str, stage: u32) -> String {
 /// 用于给新注入的 UBO/SSBO 分配不冲突的 binding。
 fn find_available_binding(src: &str) -> u32 {
     let binding_re = Regex::new(r"binding\s*=\s*(\d+)").unwrap();
-    let mut used = HashSet::new();
+    let mut used = FxHashSet::default();
     for caps in binding_re.captures_iter(src) {
         if let Some(m) = caps.get(1) {
             if let Ok(val) = m.as_str().parse::<u32>() {
@@ -800,7 +800,7 @@ mod tests {
             nums,
             result
         );
-        let unique: std::collections::HashSet<u32> = nums.iter().copied().collect();
+        let unique: rustc_hash::FxHashSet<u32> = nums.iter().copied().collect();
         assert_eq!(
             nums.len(),
             unique.len(),

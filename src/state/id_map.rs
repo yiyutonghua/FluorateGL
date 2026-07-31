@@ -1,17 +1,17 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 pub struct IdMap {
     next_id: u32,
-    desktop_to_gles: HashMap<u32, u32>,
-    gles_to_desktop: HashMap<u32, u32>,
+    desktop_to_gles: FxHashMap<u32, u32>,
+    gles_to_desktop: FxHashMap<u32, u32>,
 }
 
 impl IdMap {
     pub fn new() -> Self {
         Self {
             next_id: 1,
-            desktop_to_gles: HashMap::new(),
-            gles_to_desktop: HashMap::new(),
+            desktop_to_gles: FxHashMap::default(),
+            gles_to_desktop: FxHashMap::default(),
         }
     }
 

@@ -1,17 +1,17 @@
 pub mod id_map;
 
 use id_map::IdMap;
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 
 pub struct State {
     pub buffers: IdMap,
     pub vertex_arrays: IdMap,
     pub shaders: IdMap,
-    pub shader_types: HashMap<u32, u32>,
-    pub shader_sources: HashMap<u32, String>,
-    pub shader_original_sources: HashMap<u32, String>,
-    pub shader_translated_sources: HashMap<u32, String>,
+    pub shader_types: FxHashMap<u32, u32>,
+    pub shader_sources: FxHashMap<u32, String>,
+    pub shader_original_sources: FxHashMap<u32, String>,
+    pub shader_translated_sources: FxHashMap<u32, String>,
     pub programs: IdMap,
     pub textures: IdMap,
     pub framebuffers: IdMap,
@@ -32,10 +32,10 @@ impl State {
             buffers: IdMap::new(),
             vertex_arrays: IdMap::new(),
             shaders: IdMap::new(),
-            shader_types: HashMap::new(),
-            shader_sources: HashMap::new(),
-            shader_original_sources: HashMap::new(),
-            shader_translated_sources: HashMap::new(),
+            shader_types: FxHashMap::default(),
+            shader_sources: FxHashMap::default(),
+            shader_original_sources: FxHashMap::default(),
+            shader_translated_sources: FxHashMap::default(),
             programs: IdMap::new(),
             textures: IdMap::new(),
             framebuffers: IdMap::new(),
