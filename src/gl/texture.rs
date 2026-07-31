@@ -1,5 +1,35 @@
 use crate::backend;
 use crate::state;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// texture desktop ID 查找失败首次告警标志
+static TEXTURE_ID_MISS_WARNED: AtomicBool = AtomicBool::new(false);
+/// glCompressedTexImage 收到非压缩格式首次告警标志
+static COMPRESSED_FORMAT_MISMATCH_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// 首次告警：texture desktop ID 未在 IdMap 中找到。
+fn warn_texture_id_miss(fname: &str, target: u32, desktop_id: u32) {
+    if !TEXTURE_ID_MISS_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] {}: target 0x{:04X} desktop ID {} not found in IdMap, unbinding (跨线程或资源已释放，后续将静默降级)",
+            fname,
+            target,
+            desktop_id
+        );
+    }
+}
+
+/// 首次告警：glCompressedTexImage 收到非压缩格式，已降级为 glTexImage2D。
+fn warn_compressed_format_mismatch(fname: &str, internalformat: u32, normalized: u32) {
+    if !COMPRESSED_FORMAT_MISMATCH_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] {}: internalformat 0x{:04X} is not a compressed format, normalizing to 0x{:04X} and using glTexImage2D instead (后续调用将静默降级)",
+            fname,
+            internalformat,
+            normalized
+        );
+    }
+}
 
 /// 判断 dispatch 函数指针是否为共享的未实现 stub。
 ///
@@ -190,10 +220,7 @@ pub extern "C" fn glBindTexture(target: u32, texture: u32) {
         } else {
             state::with_state(|s| {
                 s.textures.get_gles(texture).unwrap_or_else(|| {
-                log::warn!(
-                    "[FluorateGL] glBindTexture(0x{:04X}, {}): desktop ID not found in IdMap, unbinding",
-                    target, texture
-                );
+                warn_texture_id_miss("glBindTexture", target, texture);
                 0
             })
             })
@@ -465,11 +492,7 @@ pub extern "C" fn glCompressedTexImage2D(
     // 防止将非压缩格式透传给 GLES 导致 GL_INVALID_ENUM 崩溃
     if !is_compressed_format(internalformat) {
         let normalized = normalize_internal_format(internalformat);
-        log::warn!(
-            "[FluorateGL] glCompressedTexImage2D: internalformat 0x{:04X} is not a compressed format, normalizing to 0x{:04X} and using glTexImage2D instead",
-            internalformat,
-            normalized
-        );
+        warn_compressed_format_mismatch("glCompressedTexImage2D", internalformat, normalized);
         // 对非压缩格式降级为 glTexImage2D（data 指针直接复用，格式兼容）
         backend::with_gles_dispatch(|dispatch| unsafe {
             (dispatch.tex_image_2d)(
@@ -547,10 +570,7 @@ pub extern "C" fn glCompressedTexImage3D(
     );
 
     if !is_compressed_format(internalformat) {
-        log::warn!(
-            "[FluorateGL] glCompressedTexImage3D: internalformat 0x{:04X} is not a compressed format, skipping",
-            internalformat
-        );
+        warn_compressed_format_mismatch("glCompressedTexImage3D", internalformat, normalize_internal_format(internalformat));
         return;
     }
 

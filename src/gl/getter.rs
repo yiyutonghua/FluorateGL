@@ -1,5 +1,20 @@
 use crate::backend;
 use crate::state;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// glGetIntegeri_v 索引绑定查询时 GLES ID 未在 IdMap 中找到首次告警标志
+static INDEXED_BINDING_ID_MISS_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// 首次告警：glGetIntegeri_v 索引绑定查询 GLES ID 未在 IdMap 中找到。
+fn warn_indexed_binding_id_miss(target: u32, gles_id: u32) {
+    if !INDEXED_BINDING_ID_MISS_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glGetIntegeri_v(0x{:04X}): GLES ID {} not found in IdMap, returning raw GLES ID (跨线程或资源已释放，后续将静默返回原始 GLES ID)",
+            target,
+            gles_id
+        );
+    }
+}
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -90,11 +105,7 @@ fn translate_indexed_binding_to_desktop(target: u32, data: *mut i32) {
             unsafe { *data = desktop_id as i32 };
         }
     } else {
-        log::warn!(
-            "[FluorateGL] glGetIntegeri_v(0x{:04X}): GLES ID {} not found in IdMap, returning raw GLES ID",
-            target,
-            gles_id
-        );
+        warn_indexed_binding_id_miss(target, gles_id);
     }
 }
 

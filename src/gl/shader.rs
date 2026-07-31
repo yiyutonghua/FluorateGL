@@ -2,6 +2,49 @@ use crate::backend;
 use crate::state;
 use libc::c_char;
 use std::ffi::{CStr, CString};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// glCreateShader 返回 0（无 EGL 上下文）首次告警标志
+/// 触发场景：异步加载线程在 EGL 上下文创建前调用 GL
+static SHADER_NO_CONTEXT_WARNED: AtomicBool = AtomicBool::new(false);
+/// glShaderSource 参数非法首次告警标志
+static SHADER_INVALID_ARGS_WARNED: AtomicBool = AtomicBool::new(false);
+/// glGetShaderiv shader 不在 IdMap 中首次告警标志
+/// 触发场景：跨线程查询或 shader 已被释放
+static SHADER_ID_MISS_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// 首次告警：glCreateShader GLES 返回 0（无 EGL 上下文）。
+fn warn_shader_no_context(shader_type: u32) {
+    if !SHADER_NO_CONTEXT_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glCreateShader(0x{:04X}) -> GLES returned 0 (no context on tid={}, 后续调用将静默返回 0)",
+            shader_type,
+            state::thread_id_u64()
+        );
+    }
+}
+
+/// 首次告警：glShaderSource 参数非法。
+fn warn_shader_invalid_args(string: *const *const c_char, count: i32) {
+    if !SHADER_INVALID_ARGS_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glShaderSource: invalid args (string={:?}, count={}, 后续调用将静默跳过)",
+            string,
+            count
+        );
+    }
+}
+
+/// 首次告警：glGetShaderiv shader 不在 IdMap 中。
+fn warn_shader_id_miss(shader: u32) {
+    if !SHADER_ID_MISS_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glGetShaderiv: shader {} not found in IdMap (tid={}, params untouched, caller sees GL_FALSE, 后续将静默降级)",
+            shader,
+            state::thread_id_u64()
+        );
+    }
+}
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -12,11 +55,7 @@ pub extern "C" fn glCreateShader(shader_type: u32) -> u32 {
         if gles_id == 0 {
             // GLES 返回 0 表示当前线程无 EGL 上下文（如异步加载线程）。
             // 直接返回 0，不分配 desktop_id，避免后续操作映射到无效的 gles_id=0。
-            log::warn!(
-                "[FluorateGL] glCreateShader(0x{:04X}) -> GLES returned 0 (no context on tid={})",
-                shader_type,
-                state::thread_id_u64()
-            );
+            warn_shader_no_context(shader_type);
             return 0;
         }
         let desktop_id = state::with_state(|s| {
@@ -64,11 +103,7 @@ pub extern "C" fn glShaderSource(
 
         // string 为 null 或 count <= 0 时无源码可上传，直接返回
         if string.is_null() || count <= 0 {
-            log::warn!(
-                "[FluorateGL] glShaderSource: invalid args (string={:?}, count={})",
-                string,
-                count
-            );
+            warn_shader_invalid_args(string, count);
             return;
         }
 
@@ -262,11 +297,7 @@ pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
         if gles_id == 0 {
             // shader 不在 IdMap 中：可能是跨线程查询（异步线程创建、Render 线程查询）
             // 或 GLES 创建失败（gles_id=0 被 alloc）。此时不设置 *params，调用方看到 0（GL_FALSE）。
-            log::warn!(
-                "[FluorateGL] glGetShaderiv: shader {} not found in IdMap (tid={}), params untouched (caller sees GL_FALSE)",
-                shader,
-                state::thread_id_u64()
-            );
+            warn_shader_id_miss(shader);
             return;
         }
 

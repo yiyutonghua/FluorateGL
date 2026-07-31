@@ -1,5 +1,49 @@
 use crate::backend;
 use crate::state;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// VAO 相关资源 desktop ID 查找失败首次告警标志
+/// glBindVertexArray：VAO ID 未在 IdMap 中找到
+static VAO_ID_MISS_WARNED: AtomicBool = AtomicBool::new(false);
+/// glBindVertexBuffer：buffer ID 未在 IdMap 中找到
+static VERTEX_BUFFER_ID_MISS_WARNED: AtomicBool = AtomicBool::new(false);
+/// ARB_vertex_attrib_binding 系列（GLES 3.1 core）函数为 stub 时的首次告警标志
+/// 覆盖：glBindVertexBuffer / glVertexAttribFormat / glVertexAttribIFormat / glVertexAttribBinding
+static VERTEX_ATTRIB_BINDING_STUB_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// 首次告警：glBindVertexArray 的 VAO desktop ID 未在 IdMap 中找到。
+fn warn_vao_id_miss(array: u32) {
+    if !VAO_ID_MISS_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glBindVertexArray({}): desktop ID not found in IdMap, unbinding (跨线程或资源已释放，后续将静默降级)",
+            array
+        );
+    }
+}
+
+/// 首次告警：glBindVertexBuffer 的 buffer desktop ID 未在 IdMap 中找到。
+fn warn_vertex_buffer_id_miss(bindingindex: u32, buffer: u32) {
+    if !VERTEX_BUFFER_ID_MISS_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glBindVertexBuffer(binding={}, buffer={}): desktop ID not found in IdMap, unbinding (跨线程或资源已释放，后续将静默降级)",
+            bindingindex,
+            buffer
+        );
+    }
+}
+
+/// 首次告警：ARB_vertex_attrib_binding 系列函数为 stub，已忽略。
+///
+/// 这些函数是 GLES 3.1 core 特性（项目前提），stub 表示驱动未导出符号，
+/// 属于驱动边界情况。后续调用将静默跳过。
+fn warn_vertex_attrib_binding_stub(fname: &str) {
+    if !VERTEX_ATTRIB_BINDING_STUB_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] {}: GLES 3.1 ARB_vertex_attrib_binding 函数为 stub，已忽略 (驱动边界情况，后续将静默跳过)",
+            fname
+        );
+    }
+}
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -37,10 +81,7 @@ pub extern "C" fn glBindVertexArray(array: u32) {
         } else {
             state::with_state(|s| {
                 s.vertex_arrays.get_gles(array).unwrap_or_else(|| {
-                log::warn!(
-                    "[FluorateGL] glBindVertexArray({}): desktop ID not found in IdMap, unbinding",
-                    array
-                );
+                warn_vao_id_miss(array);
                 0
             })
             })
@@ -371,7 +412,7 @@ pub extern "C" fn glVertexAttribI4uiv(index: u32, v: *const u32) {
 pub extern "C" fn glBindVertexBuffer(bindingindex: u32, buffer: u32, offset: isize, stride: i32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.bind_vertex_buffer as *const ()) {
-            log::warn!("[FluorateGL] glBindVertexBuffer: stub, ignored");
+            warn_vertex_attrib_binding_stub("glBindVertexBuffer");
             return;
         }
 
@@ -380,10 +421,7 @@ pub extern "C" fn glBindVertexBuffer(bindingindex: u32, buffer: u32, offset: isi
         } else {
             state::with_state(|s| {
                 s.buffers.get_gles(buffer).unwrap_or_else(|| {
-                    log::warn!(
-                        "[FluorateGL] glBindVertexBuffer(binding={}, buffer={}): desktop ID not found in IdMap, unbinding",
-                        bindingindex, buffer
-                    );
+                    warn_vertex_buffer_id_miss(bindingindex, buffer);
                     0
                 })
             })
@@ -415,7 +453,7 @@ pub extern "C" fn glVertexAttribFormat(
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.vertex_attrib_format as *const ()) {
-            log::warn!("[FluorateGL] glVertexAttribFormat: stub, ignored");
+            warn_vertex_attrib_binding_stub("glVertexAttribFormat");
             return;
         }
         (dispatch.vertex_attrib_format)(attribindex, size, type_, normalized, relativeoffset);
@@ -432,7 +470,7 @@ pub extern "C" fn glVertexAttribIFormat(
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.vertex_attrib_i_format as *const ()) {
-            log::warn!("[FluorateGL] glVertexAttribIFormat: stub, ignored");
+            warn_vertex_attrib_binding_stub("glVertexAttribIFormat");
             return;
         }
         (dispatch.vertex_attrib_i_format)(attribindex, size, type_, relativeoffset);
@@ -444,7 +482,7 @@ pub extern "C" fn glVertexAttribIFormat(
 pub extern "C" fn glVertexAttribBinding(attribindex: u32, bindingindex: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.vertex_attrib_binding as *const ()) {
-            log::warn!("[FluorateGL] glVertexAttribBinding: stub, ignored");
+            warn_vertex_attrib_binding_stub("glVertexAttribBinding");
             return;
         }
         (dispatch.vertex_attrib_binding)(attribindex, bindingindex);

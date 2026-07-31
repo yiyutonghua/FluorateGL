@@ -1,5 +1,20 @@
 use crate::backend;
 use crate::gl::exports::is_unsupported_gles_cap;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// glPolygonMode 非 FILL 模式首次告警标志
+static POLYGON_MODE_NON_FILL_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// 首次告警：glPolygonMode 非 FILL 模式被忽略。
+fn warn_polygon_mode_non_fill(face: u32, mode: u32) {
+    if !POLYGON_MODE_NON_FILL_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glPolygonMode(0x{:04X}, 0x{:04X}): GLES 仅支持 GL_FILL，非 FILL 模式已忽略 (后续调用将静默跳过)",
+            face,
+            mode
+        );
+    }
+}
 
 /// 判断 dispatch 函数指针是否为共享的未实现 stub。
 ///
@@ -203,11 +218,7 @@ pub extern "C" fn glPolygonMode(face: u32, mode: u32) {
             // GLES 不支持 glPolygonMode，光栅化模式固定为 GL_FILL。
             // GL_LINE/GL_POINT 需 geometry shader 才能模拟，翻译层无法实现，仅告警并忽略。
             if mode != GL_FILL {
-                log::warn!(
-                    "[FluorateGL] glPolygonMode(0x{:04X}, 0x{:04X}): GLES 仅支持 GL_FILL，非 FILL 模式已忽略",
-                    face,
-                    mode
-                );
+                warn_polygon_mode_non_fill(face, mode);
             }
             return;
         }

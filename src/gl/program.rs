@@ -2,6 +2,35 @@ use crate::backend;
 use crate::state;
 use libc::c_char;
 use std::ffi::CStr;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// glCreateProgram 返回 0（无 EGL 上下文）首次告警标志
+/// 触发场景：异步加载线程在 EGL 上下文创建前调用 GL
+static PROGRAM_NO_CONTEXT_WARNED: AtomicBool = AtomicBool::new(false);
+/// glGetProgramiv program 不在 IdMap 中首次告警标志
+/// 触发场景：跨线程查询或 program 已被释放
+static PROGRAM_ID_MISS_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// 首次告警：glCreateProgram GLES 返回 0（无 EGL 上下文）。
+fn warn_program_no_context() {
+    if !PROGRAM_NO_CONTEXT_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glCreateProgram() -> GLES returned 0 (no context on tid={}, 后续调用将静默返回 0)",
+            state::thread_id_u64()
+        );
+    }
+}
+
+/// 首次告警：glGetProgramiv program 不在 IdMap 中。
+fn warn_program_id_miss(program: u32) {
+    if !PROGRAM_ID_MISS_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glGetProgramiv: program {} not found in IdMap (tid={}, params untouched, caller sees GL_FALSE, 后续将静默降级)",
+            program,
+            state::thread_id_u64()
+        );
+    }
+}
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -11,10 +40,7 @@ pub extern "C" fn glCreateProgram() -> u32 {
         let gles_id = (dispatch.create_program)();
         if gles_id == 0 {
             // GLES 返回 0 通常表示当前线程无 EGL 上下文（如异步加载线程）
-            log::warn!(
-                "[FluorateGL] glCreateProgram() -> GLES returned 0 (no context on tid={})",
-                state::thread_id_u64()
-            );
+            warn_program_no_context();
         }
         state::with_state(|s| s.programs.alloc(gles_id))
     })
@@ -136,17 +162,15 @@ pub extern "C" fn glGetProgramiv(program: u32, pname: u32, params: *mut i32) {
         if gles_id == 0 {
             // program 不在 IdMap 中：可能是跨线程查询或 GLES 创建失败。
             // 此时不设置 *params，调用方看到 0（GL_FALSE），可能误判链接失败。
-            log::warn!(
-                "[FluorateGL] glGetProgramiv: program {} not found in IdMap (tid={}), params untouched (caller sees GL_FALSE)",
-                program,
-                state::thread_id_u64()
-            );
+            warn_program_id_miss(program);
             return;
         }
         (dispatch.get_program_iv)(gles_id, pname, params);
 
         // fail-fast: 真实返回 link/validate 状态，不欺骗为 GL_TRUE。
         // 保留 error 级诊断日志，让失败有迹可循，便于定位 SPIR-V 翻译根因。
+        // 注意：此处不采用首次告警模式。MC 正常运行时 link 状态恒为 GL_TRUE，
+        // 仅在翻译失败时返回 GL_FALSE，属于异常路径，需要每次可见以便诊断。
         const GL_LINK_STATUS: u32 = 0x8B82;
         const GL_VALIDATE_STATUS: u32 = 0x8B8B;
         if (pname == GL_LINK_STATUS || pname == GL_VALIDATE_STATUS) && *params == 0 {

@@ -35,7 +35,7 @@ pub fn translate(source: &str, stage: u32) -> TranslationResult {
                 stage
             );
             let fallback = string_pass::translate(source, stage);
-            log::info!(
+            log::debug!(
                 "[ShaderTranslator] string_pass fallback produced {} chars for stage 0x{:04X}",
                 fallback.len(),
                 stage
@@ -141,7 +141,7 @@ fn translate_internal(source: &str, stage: u32) -> TranslationResult {
     // 回退到字符串级翻译（string_pass），而非直接透传桌面 GLSL 给 GLES（几乎必然编译失败）。
     // string_pass 做版本替换、legacy 语法迁移、precision 注入等，作为 SPIR-V 管线失败的兜底。
     let fallback = string_pass::translate(source, stage);
-    log::info!(
+    log::debug!(
         "[ShaderTranslator] string_pass fallback produced {} chars for stage {} (0x{:04X})",
         fallback.len(),
         stage_name,

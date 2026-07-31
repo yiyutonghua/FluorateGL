@@ -4,6 +4,21 @@ use crate::state;
 use libc::c_char;
 use std::ffi::CString;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// glGetIntegerv 绑定查询时 GLES ID 未在 IdMap 中找到首次告警标志
+static BINDING_ID_MISS_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// 首次告警：glGetIntegerv 绑定查询 GLES ID 未在 IdMap 中找到。
+fn warn_binding_id_miss(pname: u32, gles_id: u32) {
+    if !BINDING_ID_MISS_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glGetIntegerv(0x{:04X}): GLES ID {} not found in IdMap, returning raw GLES ID (跨线程或资源已释放，后续将静默返回原始 GLES ID)",
+            pname,
+            gles_id
+        );
+    }
+}
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -252,7 +267,9 @@ pub extern "C" fn glGenerateMipmap(target: u32) {
 pub extern "C" fn glGetError() -> u32 {
     let err = backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.get_error)() });
     if err != 0 {
-        log::warn!("[FluorateGL] glGetError() -> 0x{:04X} (GL error)", err);
+        // MC blaze3d 每帧轮询 glGetError，驱动偶发 GL_INVALID_ENUM 会刷屏，降为 debug。
+        // 真正的错误（如 shader 编译失败）会通过 fail-fast error 日志体现。
+        log::debug!("[FluorateGL] glGetError() -> 0x{:04X} (GL error)", err);
     }
     err
 }
@@ -421,11 +438,7 @@ fn translate_binding_to_desktop(pname: u32, data: *mut i32) {
             unsafe { *data = desktop_id as i32 };
         }
     } else {
-        log::warn!(
-            "[FluorateGL] glGetIntegerv(0x{:04X}): GLES ID {} not found in IdMap, returning raw GLES ID",
-            pname,
-            gles_id
-        );
+        warn_binding_id_miss(pname, gles_id);
     }
 }
 

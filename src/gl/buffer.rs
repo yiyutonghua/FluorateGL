@@ -1,5 +1,72 @@
 use crate::backend;
 use crate::state;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// buffer stub 降级相关首次告警标志（避免每帧刷屏）
+/// glMapBuffer：GLES 无此函数，用 glMapBufferRange 模拟
+static MAP_BUFFER_WARNED: AtomicBool = AtomicBool::new(false);
+/// glGetBufferSubData：GLES 无此函数，用 glMapBufferRange 模拟
+static GET_BUFFER_SUB_DATA_WARNED: AtomicBool = AtomicBool::new(false);
+/// glTexBuffer/glTexBufferRange：GLES 3.2 core，项目 3.1 前提下可能 stub
+static TEX_BUFFER_STUB_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// buffer desktop ID 查找失败首次告警标志
+/// 触发场景：跨线程绑定或资源已释放
+static BUFFER_ID_MISS_WARNED: AtomicBool = AtomicBool::new(false);
+/// glTexBuffer/glTexBufferRange 的 buffer ID 查找失败首次告警标志
+static TEX_BUFFER_ID_MISS_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// 首次告警：glMapBuffer 不可用，降级为 glMapBufferRange。
+fn warn_map_buffer_unavailable() {
+    if !MAP_BUFFER_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glMapBuffer: glMapBufferRange not available, returning null (后续调用将静默返回 null)"
+        );
+    }
+}
+
+/// 首次告警：glGetBufferSubData 不可用，降级为 glMapBufferRange。
+fn warn_get_buffer_sub_data_unavailable() {
+    if !GET_BUFFER_SUB_DATA_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glGetBufferSubData: both sub_data and map_range unavailable (后续调用将静默跳过)"
+        );
+    }
+}
+
+/// 首次告警：glTexBuffer/glTexBufferRange 为 stub，已忽略。
+fn warn_tex_buffer_stub(fname: &str) {
+    if !TEX_BUFFER_STUB_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] {}: GLES 不支持 GL_EXT_texture_buffer，已忽略 (后续调用将静默跳过)",
+            fname
+        );
+    }
+}
+
+/// 首次告警：buffer desktop ID 未在 IdMap 中找到。
+fn warn_buffer_id_miss(fname: &str, target: u32, desktop_id: u32) {
+    if !BUFFER_ID_MISS_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] {}: target 0x{:04X} desktop ID {} not found in IdMap, unbinding (跨线程或资源已释放，后续将静默降级)",
+            fname,
+            target,
+            desktop_id
+        );
+    }
+}
+
+/// 首次告警：glTexBuffer/glTexBufferRange 的 buffer desktop ID 未在 IdMap 中找到。
+fn warn_tex_buffer_id_miss(fname: &str, target: u32, desktop_id: u32) {
+    if !TEX_BUFFER_ID_MISS_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] {}: target 0x{:04X} desktop ID {} not found in IdMap, unbinding (跨线程或资源已释放，后续将静默降级)",
+            fname,
+            target,
+            desktop_id
+        );
+    }
+}
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -54,10 +121,7 @@ pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
         } else {
             state::with_state(|s| {
                 s.buffers.get_gles(buffer).unwrap_or_else(|| {
-                log::warn!(
-                    "[FluorateGL] glBindBuffer(0x{:04X}, {}): desktop ID not found in IdMap, unbinding",
-                    target, buffer
-                );
+                warn_buffer_id_miss("glBindBuffer", target, buffer);
                 0
             })
             })
@@ -138,7 +202,7 @@ pub extern "C" fn glMapBuffer(target: u32, access: u32) -> *mut std::ffi::c_void
         // GLES 不提供 glMapBuffer（仅 glMapBufferRange），用 glMapBufferRange 模拟。
         // 若 map_buffer_range 也是 stub（驱动不支持），返回 null 避免后续 UB。
         if is_stub(dispatch, dispatch.map_buffer_range as *const ()) {
-            log::warn!("[FluorateGL] glMapBuffer: glMapBufferRange not available, returning null");
+            warn_map_buffer_unavailable();
             return std::ptr::null_mut();
         }
 
@@ -214,10 +278,7 @@ pub extern "C" fn glBindBufferBase(target: u32, index: u32, buffer: u32) {
         } else {
             state::with_state(|s| {
                 s.buffers.get_gles(buffer).unwrap_or_else(|| {
-                log::warn!(
-                    "[FluorateGL] glBindBufferBase(0x{:04X}, {}): desktop ID {} not found in IdMap, unbinding",
-                    target, index, buffer
-                );
+                warn_buffer_id_miss("glBindBufferBase", target, buffer);
                 0
             })
             })
@@ -242,10 +303,7 @@ pub extern "C" fn glBindBufferRange(
         } else {
             state::with_state(|s| {
                 s.buffers.get_gles(buffer).unwrap_or_else(|| {
-                log::warn!(
-                    "[FluorateGL] glBindBufferRange(0x{:04X}, {}): desktop ID {} not found in IdMap, unbinding",
-                    target, index, buffer
-                );
+                warn_buffer_id_miss("glBindBufferRange", target, buffer);
                 0
             })
             })
@@ -270,9 +328,7 @@ pub extern "C" fn glGetBufferSubData(
         if is_stub(dispatch, dispatch.get_buffer_sub_data as *const ()) {
             // GLES 没有 glGetBufferSubData，用 MapBufferRange 模拟
             if is_stub(dispatch, dispatch.map_buffer_range as *const ()) {
-                log::warn!(
-                    "[FluorateGL] glGetBufferSubData: both sub_data and map_range unavailable"
-                );
+                warn_get_buffer_sub_data_unavailable();
                 return;
             }
             let ptr = (dispatch.map_buffer_range)(
@@ -330,7 +386,7 @@ pub extern "C" fn glIsBuffer(buffer: u32) -> u8 {
 pub extern "C" fn glTexBuffer(target: u32, internalformat: u32, buffer: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.tex_buffer as *const ()) {
-            log::warn!("[FluorateGL] glTexBuffer: stub, ignored");
+            warn_tex_buffer_stub("glTexBuffer");
             return;
         }
 
@@ -339,10 +395,7 @@ pub extern "C" fn glTexBuffer(target: u32, internalformat: u32, buffer: u32) {
         } else {
             state::with_state(|s| {
                 s.buffers.get_gles(buffer).unwrap_or_else(|| {
-                    log::warn!(
-                        "[FluorateGL] glTexBuffer(target=0x{:04X}): desktop ID {} not found in IdMap, unbinding",
-                        target, buffer
-                    );
+                    warn_tex_buffer_id_miss("glTexBuffer", target, buffer);
                     0
                 })
             })
@@ -372,7 +425,7 @@ pub extern "C" fn glTexBufferRange(
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.tex_buffer_range as *const ()) {
-            log::warn!("[FluorateGL] glTexBufferRange: stub, ignored");
+            warn_tex_buffer_stub("glTexBufferRange");
             return;
         }
 
@@ -381,10 +434,7 @@ pub extern "C" fn glTexBufferRange(
         } else {
             state::with_state(|s| {
                 s.buffers.get_gles(buffer).unwrap_or_else(|| {
-                    log::warn!(
-                        "[FluorateGL] glTexBufferRange(target=0x{:04X}): desktop ID {} not found in IdMap, unbinding",
-                        target, buffer
-                    );
+                    warn_tex_buffer_id_miss("glTexBufferRange", target, buffer);
                     0
                 })
             })
