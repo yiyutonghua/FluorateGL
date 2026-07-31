@@ -15,6 +15,32 @@
 
 use crate::backend;
 use crate::backend::dispatch::GlesDispatch;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// BaseVertex 不支持时的首次告警标志（避免每帧刷屏）
+static BASE_VERTEX_WARNED: AtomicBool = AtomicBool::new(false);
+/// BaseInstance 不支持时的首次告警标志（避免每帧刷屏）
+static BASE_INSTANCE_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// 首次告警：BaseVertex 不可用，降级为普通 draw。
+fn warn_base_vertex_unsupported(fname: &str) {
+    if !BASE_VERTEX_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] {}: GLES 不支持 GL_OES_draw_elements_base_vertex，已降级为普通 draw（索引偏移丢失），后续调用将静默降级",
+            fname
+        );
+    }
+}
+
+/// 首次告警：BaseInstance 不可用，降级为对应 Instanced 版。
+fn warn_base_instance_unsupported(fname: &str) {
+    if !BASE_INSTANCE_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] {}: GLES 不支持 GL_EXT_base_instance，已降级为对应 Instanced 版（baseinstance 丢失），后续调用将静默降级",
+            fname
+        );
+    }
+}
 
 /// 判断 dispatch 函数指针是否为共享的未实现 stub。
 ///
@@ -73,11 +99,14 @@ pub extern "C" fn glDrawElementsInstanced(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glPrimitiveRestartIndex(index: u32) {
+    // glPrimitiveRestartIndex 是 GLES 3.0 core 特性，项目 3.1+ 前提下恒可用。
+    // 用 load_opt! 加载仅为兼容旧驱动边界情况，stub 时静默忽略：
+    // GLES 默认使用固定重启索引（0xFFFFFFFF for GL_UNSIGNED_INT），
+    // MC 一般使用默认值，忽略自定义重启索引不影响正确性。
     backend::with_gles_dispatch(|dispatch| unsafe {
         if !is_stub(dispatch, dispatch.primitive_restart_index as *const ()) {
             (dispatch.primitive_restart_index)(index);
         }
-        // GLES 不支持此函数时静默忽略
     });
 }
 
@@ -98,9 +127,7 @@ pub extern "C" fn glDrawElementsBaseVertex(
         if !supported {
             // 降级为普通 glDrawElements，丢弃 basevertex 偏移。
             // 注意：索引未偏移会导致顶点错位，仅 best-effort 避免崩溃。
-            log::warn!(
-                "[FluorateGL] glDrawElementsBaseVertex: GLES 不支持 GL_OES_draw_elements_base_vertex，已降级为 glDrawElements（索引偏移丢失）"
-            );
+            warn_base_vertex_unsupported("glDrawElementsBaseVertex");
             (dispatch.draw_elements)(mode, count, type_, indices);
         } else {
             (dispatch.draw_elements_base_vertex)(mode, count, type_, indices, basevertex);
@@ -145,9 +172,7 @@ pub extern "C" fn glDrawArraysInstancedBaseInstance(
         if !supported {
             // 降级为 glDrawArraysInstanced，丢弃 baseinstance。
             // 影响：使用 instance ID 计算属性偏移的 shader 会错位，仅 best-effort。
-            log::warn!(
-                "[FluorateGL] glDrawArraysInstancedBaseInstance: GLES 不支持 GL_EXT_base_instance，已降级为 glDrawArraysInstanced（baseinstance 丢失）"
-            );
+            warn_base_instance_unsupported("glDrawArraysInstancedBaseInstance");
             (dispatch.draw_arrays_instanced)(mode, first, count, instancecount);
         } else {
             (dispatch.draw_arrays_instanced_base_instance)(
@@ -179,9 +204,7 @@ pub extern "C" fn glDrawElementsInstancedBaseInstance(
                 dispatch.draw_elements_instanced_base_instance as *const (),
             );
         if !supported {
-            log::warn!(
-                "[FluorateGL] glDrawElementsInstancedBaseInstance: GLES 不支持 GL_EXT_base_instance，已降级为 glDrawElementsInstanced（baseinstance 丢失）"
-            );
+            warn_base_instance_unsupported("glDrawElementsInstancedBaseInstance");
             (dispatch.draw_elements_instanced)(mode, count, type_, indices, instancecount);
         } else {
             (dispatch.draw_elements_instanced_base_instance)(
@@ -214,9 +237,7 @@ pub extern "C" fn glDrawElementsInstancedBaseVertex(
                 dispatch.draw_elements_instanced_base_vertex as *const (),
             );
         if !supported {
-            log::warn!(
-                "[FluorateGL] glDrawElementsInstancedBaseVertex: GLES 不支持 GL_OES_draw_elements_base_vertex，已降级为 glDrawElementsInstanced（索引偏移丢失）"
-            );
+            warn_base_vertex_unsupported("glDrawElementsInstancedBaseVertex");
             (dispatch.draw_elements_instanced)(mode, count, type_, indices, instancecount);
         } else {
             (dispatch.draw_elements_instanced_base_vertex)(
@@ -252,9 +273,9 @@ pub extern "C" fn glDrawElementsInstancedBaseVertexBaseInstance(
                 dispatch.draw_elements_instanced_base_vertex_base_instance as *const (),
             );
         if !supported {
-            log::warn!(
-                "[FluorateGL] glDrawElementsInstancedBaseVertexBaseInstance: GLES 不支持 basevertex/baseinstance，已降级为 glDrawElementsInstanced（索引偏移与 baseinstance 丢失）"
-            );
+            // 同时丢失 basevertex 和 baseinstance，触发两类首次告警
+            warn_base_vertex_unsupported("glDrawElementsInstancedBaseVertexBaseInstance");
+            warn_base_instance_unsupported("glDrawElementsInstancedBaseVertexBaseInstance");
             (dispatch.draw_elements_instanced)(mode, count, type_, indices, instancecount);
         } else {
             (dispatch.draw_elements_instanced_base_vertex_base_instance)(
