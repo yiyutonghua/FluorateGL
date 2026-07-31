@@ -362,21 +362,24 @@ fn inject_missing_bindings(result: &mut String) -> bool {
     injected
 }
 
-/// 将全局非不透明 uniform 转换为一个独立的 UBO，并替换所有引用。
+/// 将全局非不透明 uniform 包装进一个无实例名 UBO。
 ///
 /// Vulkan target 拒绝独立 non-opaque uniform（必须包装进 UBO）。
-/// 本函数扫描单行 `uniform T name;` 声明，收集后包装进 `UniformBlock`，
-/// 并把源码中对这些变量的引用替换为 `UniformBlock.name`。
+/// 本函数扫描单行 `uniform T name;` 声明，收集后包装进无实例名 UBO：
+/// ```glsl
+/// layout(std140, binding = N) uniform UniformBlock {
+///     mat4 ModelViewMat;
+///     vec4 ColorModulator;
+/// };
+/// ```
 ///
-/// 关键顺序（避免历史 Bug）：
-/// 1. 先从原始 src 收集 uniform，同时产出删除了 uniform 行的 cleaned_src
-/// 2. 在 cleaned_src 上替换变量引用 name → UniformBlock.name
-/// 3. 最后构建 UBO 声明（成员名用原始 name）并插入到 #version 之后
+/// 无实例名 UBO 的成员全局可见，源码中的引用 `ModelViewMat` 无需替换即可继续使用。
+/// 这避免了引用替换的所有风险（历史 Bug：替换污染 UBO 声明块内部、误改局部变量等）。
 ///
-/// 若先插入 UBO 声明再全局替换，会把 UBO 块内 `mat4 ModelViewMat;`
-/// 错误替换成 `mat4 UniformBlock.ModelViewMat;`（成员名带点号，GLSL 非法）。
-///
-/// 注意：假定 uniform 名唯一且无同名局部变量/注释干扰。
+/// 流程：
+/// 1. 扫描收集 non-opaque uniform，同时产出删除了 uniform 行的 cleaned_src
+/// 2. 确定 binding（在 cleaned_src 上查找，避免与已有 binding 冲突）
+/// 3. 构建 UBO 声明（成员名用原始 name）并插入到 #version 之后
 fn convert_uniforms_to_ubo(src: &str) -> String {
     // 匹配单行全局 uniform 声明（不包括块，不包括 sampler/image/atomic_uint）
     // 例如：uniform mat4 ModelViewMat;
@@ -410,30 +413,17 @@ fn convert_uniforms_to_ubo(src: &str) -> String {
         return src.to_string(); // 无变化
     }
 
-    // Bug 2 修复：用 cleaned_lines（已删除 uniform 行）拼成 cleaned_src，
-    // 而非用原始 src（否则原始 uniform 声明行残留，同样会被替换成非法形式）。
+    // 用 cleaned_lines（已删除 uniform 行）拼成 cleaned_src。
     // lines() 会丢弃末尾换行，用 join 重建；若原始 src 末尾有换行则补回。
     let mut cleaned_src = cleaned_lines.join("\n");
     if src.ends_with('\n') && !cleaned_src.ends_with('\n') {
         cleaned_src.push('\n');
     }
 
-    // Bug 1 修复：在 cleaned_src（不含 UBO 声明）上先替换变量引用，
-    // 这样后续插入的 UBO 声明块内部不会被替换污染。
-    let mut result = cleaned_src;
-    for (_, name) in &uniforms {
-        // 使用词边界，只替换标识符引用（不替换类型名等）
-        let name_re = Regex::new(&format!(r"\b{}\b", regex::escape(name))).unwrap();
-        // 注意：可能误改同名字符串/局部变量，但 MC 着色器中极少出现
-        result = name_re
-            .replace_all(&result, &format!("UniformBlock.{}", name))
-            .into_owned();
-    }
+    // 确定 binding（在 cleaned_src 上查找，避免与已有 UBO/SSBO/sampler binding 冲突）
+    let binding = find_available_binding(&cleaned_src);
 
-    // 确定 binding（在替换后的源码上查找，避免与已有 UBO/SSBO/sampler binding 冲突）
-    let binding = find_available_binding(&result);
-
-    // 构建 UBO 声明（成员名用原始 name，不做替换）
+    // 构建 UBO 声明（无实例名，成员全局可见）
     let mut ubo_decl = format!(
         "layout(std140, binding = {}) uniform UniformBlock {{\n",
         binding
@@ -444,11 +434,11 @@ fn convert_uniforms_to_ubo(src: &str) -> String {
     ubo_decl.push_str("};\n");
 
     // 插入 UBO 声明到 #version 行之后
-    let insert_pos = find_insert_position(&result);
-    let mut final_result = String::with_capacity(result.len() + ubo_decl.len());
-    final_result.push_str(&result[..insert_pos]);
+    let insert_pos = find_insert_position(&cleaned_src);
+    let mut final_result = String::with_capacity(cleaned_src.len() + ubo_decl.len());
+    final_result.push_str(&cleaned_src[..insert_pos]);
     final_result.push_str(&ubo_decl);
-    final_result.push_str(&result[insert_pos..]);
+    final_result.push_str(&cleaned_src[insert_pos..]);
 
     final_result
 }
@@ -711,7 +701,8 @@ mod tests {
         );
     }
 
-    /// Bug 2 回归：原始 uniform 声明行应被删除，不应残留（残留行也会被替换成非法形式）
+    /// Bug 2 回归：原始 uniform 声明行应被删除（不残留）。
+    /// 无实例名 UBO 方案：引用保持原样（全局可见），不替换为 UniformBlock.name。
     #[test]
     fn test_convert_uniforms_original_line_removed() {
         let input = "#version 150\n\
@@ -728,10 +719,16 @@ mod tests {
             "原始 uniform 声明行应被删除（Bug 2），实际: {}",
             result
         );
-        // 但引用应被替换为 UniformBlock.ModelViewMat
+        // 无实例名 UBO：引用保持原样（成员全局可见），不替换为 UniformBlock.name
         assert!(
-            result.contains("UniformBlock.ModelViewMat"),
-            "引用应替换为 UniformBlock.name，实际: {}",
+            result.contains("gl_Position = ModelViewMat *"),
+            "引用应保持原样（无实例名 UBO 成员全局可见），实际: {}",
+            result
+        );
+        // 不应出现 UniformBlock. 前缀引用（无实例名方案的特征）
+        assert!(
+            !result.contains("UniformBlock."),
+            "不应替换为 UniformBlock.name（无实例名方案），实际: {}",
             result
         );
     }
@@ -810,18 +807,21 @@ mod tests {
         // 3. 原始 uniform 行已删除
         assert!(!result.contains("uniform mat4 ModelViewMat;"));
         assert!(!result.contains("uniform mat4 ProjMat;"));
-        // 4. 引用已替换
-        assert!(result.contains("UniformBlock.ProjMat * UniformBlock.ModelViewMat"));
+        // 4. 无实例名 UBO：引用保持原样（成员全局可见），不替换为 UniformBlock.name
+        assert!(
+            result.contains("gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);"),
+            "引用应保持原样（无实例名 UBO 成员全局可见），实际: {}",
+            result
+        );
+        assert!(
+            !result.contains("UniformBlock."),
+            "不应替换为 UniformBlock.name（无实例名方案），实际: {}",
+            result
+        );
         // 5. in/out 有 location
         assert!(result.contains("layout(location=0) in vec3 Position;"));
         assert!(result.contains("layout(location=1) in vec4 Color;"));
         assert!(result.contains("layout(location=0) out vec4 vertexColor;"));
-        // 6. 关键：UBO 声明块内部不应有任何点号（Bug 1 的直接症状）
-        assert!(
-            !result.contains("UniformBlock.UniformBlock."),
-            "不应出现嵌套点号引用，实际: {}",
-            result
-        );
     }
 
     /// 验证 gl_VertexID → gl_VertexIndex 重命名（Vulkan target 要求）
