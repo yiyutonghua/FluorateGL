@@ -1,3 +1,13 @@
+//! EGL/GLES 后端加载与函数指针分发
+//!
+//! 职责：
+//! - 按配置（`Config::backend`）dlopen 对应平台的 EGL/GLES 库
+//! - 通过 `load_opt!` 宏用 dlsym 加载函数指针，缺失的可选函数替换为 stub
+//! - 提供 `with_gles_dispatch` / `with_egl_dispatch` 给拦截层调用
+//!
+//! 全局状态用 `OnceLock` 存储，库生命周期内不可变；首次 GL/EGL 调用时
+//! 触发 GPU 信息记录与驱动 Debug 噪声屏蔽。
+
 pub mod dispatch;
 pub mod loader;
 
@@ -11,12 +21,6 @@ static CONFIG: OnceLock<Config> = OnceLock::new();
 pub static GLES_DISPATCH: OnceLock<dispatch::GlesDispatch> = OnceLock::new();
 static EGL_DISPATCH: OnceLock<crate::egl_sys::dispatch::EglDispatch> = OnceLock::new();
 static INIT_ONCE: OnceLock<()> = OnceLock::new();
-
-/*pub fn ensure_initialized() {
-    INIT_ONCE.get_or_init(|| {
-        let _ = crate::fluorategl_init();
-    });
-}*/
 
 pub fn mark_initialized() {
     let _ = INIT_ONCE.set(());

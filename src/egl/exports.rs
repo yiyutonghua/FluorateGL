@@ -1,4 +1,4 @@
-use super::dispatcher;
+use crate::backend;
 use libc::c_char;
 use std::ffi::c_void;
 
@@ -15,7 +15,7 @@ const EGL_EXTENSIONS: i32 = 0x3055;
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglGetDisplay(display_id: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
-    dispatcher::get_display(display_id)
+    backend::with_egl_dispatch(|d| unsafe { (d.get_display)(display_id) })
 }
 
 #[unsafe(no_mangle)]
@@ -25,7 +25,7 @@ pub extern "C" fn eglInitialize(
     major: *mut i32,
     minor: *mut i32,
 ) -> u32 {
-    let result = dispatcher::initialize(dpy, major, minor);
+    let result = backend::with_egl_dispatch(|d| unsafe { (d.initialize)(dpy, major, minor) });
     if result == EGL_SUCCESS {
         if !major.is_null() {
             unsafe { *major = 1 };
@@ -40,7 +40,7 @@ pub extern "C" fn eglInitialize(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglTerminate(dpy: *mut c_void) -> u32 {
-    dispatcher::terminate(dpy)
+    backend::with_egl_dispatch(|d| unsafe { (d.terminate)(dpy) })
 }
 
 #[unsafe(no_mangle)]
@@ -55,7 +55,7 @@ pub extern "C" fn eglQueryString(dpy: *mut c_void, name: i32) -> *const c_char {
             static EXTENSIONS: &[u8] = b"EGL_KHR_create_context EGL_KHR_surfaceless_context EGL_ANDROID_framebuffer_target EGL_ANDROID_blob_cache EGL_EXT_swap_buffers_with_damage EGL_KHR_swap_buffers_with_damage EGL_KHR_image_base EGL_KHR_gl_texture_2D_image EGL_KHR_gl_texture_cubemap_image EGL_KHR_gl_renderbuffer_image EGL_KHR_fence_sync EGL_KHR_wait_sync EGL_ANDROID_native_fence_sync EGL_KHR_reusable_sync\0";
             EXTENSIONS.as_ptr() as *const c_char
         }
-        _ => dispatcher::query_string(dpy, name),
+        _ => backend::with_egl_dispatch(|d| unsafe { (d.query_string)(dpy, name) }),
     }
 }
 
@@ -67,7 +67,7 @@ pub extern "C" fn eglGetConfigs(
     config_size: i32,
     num_config: *mut i32,
 ) -> u32 {
-    dispatcher::get_configs(dpy, configs, config_size, num_config)
+    backend::with_egl_dispatch(|d| unsafe { (d.get_configs)(dpy, configs, config_size, num_config) })
 }
 
 #[unsafe(no_mangle)]
@@ -79,7 +79,9 @@ pub extern "C" fn eglChooseConfig(
     config_size: i32,
     num_config: *mut i32,
 ) -> u32 {
-    dispatcher::choose_config(dpy, attrib_list, configs, config_size, num_config)
+    backend::with_egl_dispatch(|d| unsafe {
+        (d.choose_config)(dpy, attrib_list, configs, config_size, num_config)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -90,7 +92,7 @@ pub extern "C" fn eglGetConfigAttrib(
     attribute: i32,
     value: *mut i32,
 ) -> u32 {
-    dispatcher::get_config_attrib(dpy, config, attribute, value)
+    backend::with_egl_dispatch(|d| unsafe { (d.get_config_attrib)(dpy, config, attribute, value) })
 }
 
 #[unsafe(no_mangle)]
@@ -101,7 +103,7 @@ pub extern "C" fn eglCreateWindowSurface(
     win: *mut c_void,
     attrib_list: *const i32,
 ) -> *mut c_void {
-    dispatcher::create_window_surface(dpy, config, win, attrib_list)
+    backend::with_egl_dispatch(|d| unsafe { (d.create_window_surface)(dpy, config, win, attrib_list) })
 }
 
 #[unsafe(no_mangle)]
@@ -111,7 +113,7 @@ pub extern "C" fn eglCreatePbufferSurface(
     config: *mut c_void,
     attrib_list: *const i32,
 ) -> *mut c_void {
-    dispatcher::create_pbuffer_surface(dpy, config, attrib_list)
+    backend::with_egl_dispatch(|d| unsafe { (d.create_pbuffer_surface)(dpy, config, attrib_list) })
 }
 
 #[unsafe(no_mangle)]
@@ -123,7 +125,9 @@ pub extern "C" fn eglCreatePbufferFromClientBuffer(
     config: *mut c_void,
     attrib_list: *const i32,
 ) -> *mut c_void {
-    dispatcher::create_pbuffer_from_client_buffer(dpy, buftype, buffer, config, attrib_list)
+    backend::with_egl_dispatch(|d| unsafe {
+        (d.create_pbuffer_from_client_buffer)(dpy, buftype, buffer, config, attrib_list)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -134,13 +138,13 @@ pub extern "C" fn eglCreatePixmapSurface(
     pixmap: *mut c_void,
     attrib_list: *const i32,
 ) -> *mut c_void {
-    dispatcher::create_pixmap_surface(dpy, config, pixmap, attrib_list)
+    backend::with_egl_dispatch(|d| unsafe { (d.create_pixmap_surface)(dpy, config, pixmap, attrib_list) })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglDestroySurface(dpy: *mut c_void, surface: *mut c_void) -> u32 {
-    dispatcher::destroy_surface(dpy, surface)
+    backend::with_egl_dispatch(|d| unsafe { (d.destroy_surface)(dpy, surface) })
 }
 
 #[unsafe(no_mangle)]
@@ -151,25 +155,25 @@ pub extern "C" fn eglSurfaceAttrib(
     attribute: i32,
     value: i32,
 ) -> u32 {
-    dispatcher::surface_attrib(dpy, surface, attribute, value)
+    backend::with_egl_dispatch(|d| unsafe { (d.surface_attrib)(dpy, surface, attribute, value) })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglBindTexImage(dpy: *mut c_void, surface: *mut c_void, buffer: i32) -> u32 {
-    dispatcher::bind_tex_image(dpy, surface, buffer)
+    backend::with_egl_dispatch(|d| unsafe { (d.bind_tex_image)(dpy, surface, buffer) })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglReleaseTexImage(dpy: *mut c_void, surface: *mut c_void, buffer: i32) -> u32 {
-    dispatcher::release_tex_image(dpy, surface, buffer)
+    backend::with_egl_dispatch(|d| unsafe { (d.release_tex_image)(dpy, surface, buffer) })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglBindAPI(_api: u32) -> u32 {
-    dispatcher::bind_api(EGL_OPENGL_ES_API)
+    backend::with_egl_dispatch(|d| unsafe { (d.bind_api)(EGL_OPENGL_ES_API) })
 }
 
 #[unsafe(no_mangle)]
@@ -187,7 +191,9 @@ pub extern "C" fn eglCreateContext(
     attrib_list: *const i32,
 ) -> *mut std::ffi::c_void {
     if attrib_list.is_null() {
-        return dispatcher::create_context(dpy, config, share_context, std::ptr::null());
+        return backend::with_egl_dispatch(|d| unsafe {
+            (d.create_context)(dpy, config, share_context, std::ptr::null())
+        });
     }
 
     let mut new_attribs = Vec::new();
@@ -222,13 +228,13 @@ pub extern "C" fn eglCreateContext(
 
     new_attribs.push(EGL_NONE);
     let ptr = new_attribs.as_ptr();
-    dispatcher::create_context(dpy, config, share_context, ptr)
+    backend::with_egl_dispatch(|d| unsafe { (d.create_context)(dpy, config, share_context, ptr) })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglDestroyContext(dpy: *mut c_void, ctx: *mut c_void) -> u32 {
-    dispatcher::destroy_context(dpy, ctx)
+    backend::with_egl_dispatch(|d| unsafe { (d.destroy_context)(dpy, ctx) })
 }
 
 #[unsafe(no_mangle)]
@@ -246,7 +252,7 @@ pub extern "C" fn eglMakeCurrent(
         read,
         ctx
     );
-    let result = dispatcher::make_current(dpy, draw, read, ctx);
+    let result = backend::with_egl_dispatch(|d| unsafe { (d.make_current)(dpy, draw, read, ctx) });
     log::info!("[EGL] eglMakeCurrent result=0x{:04X}", result);
     result
 }
@@ -263,7 +269,7 @@ pub extern "C" fn eglQueryContext(
         unsafe { *value = 3 }; // Report GLES 3.x
         return EGL_SUCCESS;
     }
-    dispatcher::query_context(dpy, ctx, attribute, value)
+    backend::with_egl_dispatch(|d| unsafe { (d.query_context)(dpy, ctx, attribute, value) })
 }
 
 #[unsafe(no_mangle)]
@@ -274,49 +280,49 @@ pub extern "C" fn eglQuerySurface(
     attribute: i32,
     value: *mut i32,
 ) -> u32 {
-    dispatcher::query_surface(dpy, surface, attribute, value)
+    backend::with_egl_dispatch(|d| unsafe { (d.query_surface)(dpy, surface, attribute, value) })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglGetCurrentContext() -> *mut c_void {
-    dispatcher::get_current_context()
+    backend::with_egl_dispatch(|d| unsafe { (d.get_current_context)() })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglGetCurrentSurface(readdraw: i32) -> *mut c_void {
-    dispatcher::get_current_surface(readdraw)
+    backend::with_egl_dispatch(|d| unsafe { (d.get_current_surface)(readdraw) })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglGetCurrentDisplay() -> *mut c_void {
-    dispatcher::get_current_display()
+    backend::with_egl_dispatch(|d| unsafe { (d.get_current_display)() })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglWaitClient() -> u32 {
-    dispatcher::wait_client()
+    backend::with_egl_dispatch(|d| unsafe { (d.wait_client)() })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglWaitNative(engine: i32) -> u32 {
-    dispatcher::wait_native(engine)
+    backend::with_egl_dispatch(|d| unsafe { (d.wait_native)(engine) })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglWaitGL() -> u32 {
-    dispatcher::wait_gl()
+    backend::with_egl_dispatch(|d| unsafe { (d.wait_gl)() })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglReleaseThread() -> u32 {
-    dispatcher::release_thread()
+    backend::with_egl_dispatch(|d| unsafe { (d.release_thread)() })
 }
 
 #[unsafe(no_mangle)]
@@ -325,13 +331,13 @@ pub extern "C" fn eglSwapBuffers(
     dpy: *mut std::ffi::c_void,
     surface: *mut std::ffi::c_void,
 ) -> u32 {
-    dispatcher::swap_buffers(dpy, surface)
+    backend::with_egl_dispatch(|d| unsafe { (d.swap_buffers)(dpy, surface) })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglSwapInterval(dpy: *mut c_void, interval: i32) -> u32 {
-    dispatcher::swap_interval(dpy, interval)
+    backend::with_egl_dispatch(|d| unsafe { (d.swap_interval)(dpy, interval) })
 }
 
 #[unsafe(no_mangle)]
@@ -341,13 +347,13 @@ pub extern "C" fn eglCopyBuffers(
     surface: *mut c_void,
     target: *mut c_void,
 ) -> u32 {
-    dispatcher::copy_buffers(dpy, surface, target)
+    backend::with_egl_dispatch(|d| unsafe { (d.copy_buffers)(dpy, surface, target) })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglGetError() -> u32 {
-    dispatcher::get_error()
+    backend::with_egl_dispatch(|d| unsafe { (d.get_error)() })
 }
 
 /// 检查是否为需要追踪的关键 GL 函数（用于诊断 ID 映射问题）
@@ -439,5 +445,5 @@ pub extern "C" fn eglGetProcAddress(proc_name: *const libc::c_char) -> *mut std:
     if is_key {
         log::debug!("[FluorateGL] eglGetProcAddress({}) -> EGL driver", name);
     }
-    dispatcher::get_proc_address(proc_name)
+    backend::with_egl_dispatch(|d| unsafe { (d.get_proc_address)(proc_name) })
 }
