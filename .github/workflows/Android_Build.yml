@@ -3,14 +3,22 @@ name: Build for Android aarch64
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      # cargo-ndk 和 shaderc 的 cmake 都依赖 ANDROID_NDK_ROOT
+      ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_ROOT }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # 初始化 submodule（glslang 测试用例，构建 .so 非必需但保持完整性）
+          submodules: recursive
 
       - name: Install system dependencies
         run: |
@@ -23,7 +31,19 @@ jobs:
           toolchain: stable
           target: aarch64-linux-android
 
-      - name: Cache cargo-ndk binary
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          link-to-sdk: true
+
+      - name: Set NDK environment variables
+        run: |
+          echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+
+      - name: Cache cargo-ndk
         uses: actions/cache@v4
         id: cache-cargo-ndk
         with:
@@ -34,22 +54,23 @@ jobs:
         if: steps.cache-cargo-ndk.outputs.cache-hit != 'true'
         run: cargo install cargo-ndk
 
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
         with:
-          ndk-version: r27c
-          link-to-sdk: true
-
-      - name: Set environment variables
-        run: |
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
-          # 移除无用的 SHADERC_CMAKE_FLAGS，如需可保留
+          # 区分不同 target 的缓存
+          key: aarch64-linux-android
 
       - name: Build release
         run: cargo ndk --target aarch64-linux-android -- build --release
+
+      - name: Verify .so file
+        run: |
+          file target/aarch64-linux-android/release/libfluorategl.so
+          ls -lh target/aarch64-linux-android/release/libfluorategl.so
 
       - name: Upload .so artifact
         uses: actions/upload-artifact@v4
         with:
           name: libfluorategl-android-aarch64
           path: target/aarch64-linux-android/release/libfluorategl.so
+          if-no-files-found: error
