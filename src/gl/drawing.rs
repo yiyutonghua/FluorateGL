@@ -111,17 +111,8 @@ pub extern "C" fn glDrawElementsBaseVertex(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glDrawArraysIndirect(mode: u32, indirect: *const std::ffi::c_void) {
-    let caps = backend::capabilities();
+    // GLES 3.1 core 特性，项目前提，直接转发
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let supported =
-            caps.indirect_draw && !is_stub(dispatch, dispatch.draw_arrays_indirect as *const ());
-        if !supported {
-            // indirect draw 需从 GPU buffer 读取 command，CPU 侧无法安全模拟。
-            log::warn!(
-                "[FluorateGL] glDrawArraysIndirect: GLES 不支持 indirect draw（需 GLES 3.1+），无法模拟，已跳过"
-            );
-            return;
-        }
         (dispatch.draw_arrays_indirect)(mode, indirect);
     });
 }
@@ -129,16 +120,8 @@ pub extern "C" fn glDrawArraysIndirect(mode: u32, indirect: *const std::ffi::c_v
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glDrawElementsIndirect(mode: u32, type_: u32, indirect: *const std::ffi::c_void) {
-    let caps = backend::capabilities();
+    // GLES 3.1 core 特性，项目前提，直接转发
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let supported =
-            caps.indirect_draw && !is_stub(dispatch, dispatch.draw_elements_indirect as *const ());
-        if !supported {
-            log::warn!(
-                "[FluorateGL] glDrawElementsIndirect: GLES 不支持 indirect draw（需 GLES 3.1+），无法模拟，已跳过"
-            );
-            return;
-        }
         (dispatch.draw_elements_indirect)(mode, type_, indirect);
     });
 }

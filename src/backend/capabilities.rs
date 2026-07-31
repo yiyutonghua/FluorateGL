@@ -78,7 +78,15 @@ impl GlesCapabilities {
         let extensions = query_extensions(dispatch);
 
         let is_32 = version.at_least(3, 2);
-        let is_31 = version.at_least(3, 1);
+
+        // 项目仅支持 GLES 3.1+，indirect draw（glDrawArraysIndirect / glDrawElementsIndirect）
+        // 是 3.1 core 特性，恒可用，无需查询。若检测到 < 3.1 则该设备不在支持范围内。
+        if !version.at_least(3, 1) {
+            log::error!(
+                "[FluorateGL] 检测到 GLES {}，本项目需要 GLES 3.1+，部分功能将无法正常工作",
+                version.0
+            );
+        }
 
         let caps = Self {
             version,
@@ -93,7 +101,8 @@ impl GlesCapabilities {
                     .any(|e| e == "GL_EXT_multi_draw_elements_base_vertex"),
             multi_draw_indirect: is_32
                 || extensions.iter().any(|e| e == "GL_EXT_multi_draw_indirect"),
-            indirect_draw: is_31,
+            // GLES 3.1 core 特性，项目前提，恒为 true
+            indirect_draw: true,
             // GLES 无标准 indirect count 扩展
             indirect_count: false,
         };

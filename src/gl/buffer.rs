@@ -135,7 +135,7 @@ pub extern "C" fn glBufferStorage(
 #[allow(non_snake_case)]
 pub extern "C" fn glMapBuffer(target: u32, access: u32) -> *mut std::ffi::c_void {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        // glMapBuffer is not available in GLES 3.0; emulate it with glMapBufferRange.
+        // GLES 不提供 glMapBuffer（仅 glMapBufferRange），用 glMapBufferRange 模拟。
         // 若 map_buffer_range 也是 stub（驱动不支持），返回 null 避免后续 UB。
         if is_stub(dispatch, dispatch.map_buffer_range as *const ()) {
             log::warn!("[FluorateGL] glMapBuffer: glMapBufferRange not available, returning null");

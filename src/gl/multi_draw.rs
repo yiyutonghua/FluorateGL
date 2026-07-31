@@ -174,15 +174,7 @@ pub extern "C" fn glMultiDrawArraysIndirect(
         let supported = caps.multi_draw_indirect
             && !is_stub(dispatch, dispatch.multi_draw_arrays_indirect as *const ());
         if !supported {
-            // 降级：若 glDrawArraysIndirect 可用则循环调用
-            let indirect_ok = caps.indirect_draw
-                && !is_stub(dispatch, dispatch.draw_arrays_indirect as *const ());
-            if !indirect_ok {
-                log::warn!(
-                    "[FluorateGL] glMultiDrawArraysIndirect: GLES 不支持 indirect draw，无法模拟，已跳过"
-                );
-                return;
-            }
+            // 降级：glDrawArraysIndirect 是 GLES 3.1 core（项目前提），直接循环调用
             let step = array_indirect_stride(stride);
             for i in 0..drawcount as isize {
                 let cmd_ptr = (indirect as *const u8).offset(i * step) as *const std::ffi::c_void;
@@ -211,14 +203,7 @@ pub extern "C" fn glMultiDrawElementsIndirect(
         let supported = caps.multi_draw_indirect
             && !is_stub(dispatch, dispatch.multi_draw_elements_indirect as *const ());
         if !supported {
-            let indirect_ok = caps.indirect_draw
-                && !is_stub(dispatch, dispatch.draw_elements_indirect as *const ());
-            if !indirect_ok {
-                log::warn!(
-                    "[FluorateGL] glMultiDrawElementsIndirect: GLES 不支持 indirect draw，无法模拟，已跳过"
-                );
-                return;
-            }
+            // 降级：glDrawElementsIndirect 是 GLES 3.1 core（项目前提），直接循环调用
             let step = element_indirect_stride(stride);
             for i in 0..drawcount as isize {
                 let cmd_ptr = (indirect as *const u8).offset(i * step) as *const std::ffi::c_void;
