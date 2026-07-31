@@ -743,7 +743,8 @@ mod tests {
     #[test]
     fn test_unwrap_generated_ubo_preserves_native_ubo() {
         // MC 原生 UBO（非 UniformBlockVS/FS/Other）不应被拆解
-        let input = "layout(std140) uniform DynamicTransforms\n{\n    mat4 m;\n};\nvoid main() {}\n";
+        let input =
+            "layout(std140) uniform DynamicTransforms\n{\n    mat4 m;\n};\nvoid main() {}\n";
         let result = unwrap_generated_ubo(input);
         assert!(
             result.contains("uniform DynamicTransforms"),
