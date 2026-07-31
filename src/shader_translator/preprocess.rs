@@ -317,8 +317,9 @@ fn inject_missing_bindings(result: &mut String) -> bool {
     // 例如：
     //   uniform MyBlock {
     static RE_PLAIN_BLOCK: OnceLock<Regex> = OnceLock::new();
-    let re_plain_block = RE_PLAIN_BLOCK
-        .get_or_init(|| Regex::new(r"(?m)^(?P<indent>\s*)(?P<kind>uniform|buffer)\s+(?P<name>\w+)\s*\{").unwrap());
+    let re_plain_block = RE_PLAIN_BLOCK.get_or_init(|| {
+        Regex::new(r"(?m)^(?P<indent>\s*)(?P<kind>uniform|buffer)\s+(?P<name>\w+)\s*\{").unwrap()
+    });
 
     // 初始 binding_counter 从已有 binding 的最大值+1 开始，避免与
     // convert_uniforms_to_ubo 注入的 UniformBlock 或原生带 binding 的块冲突。

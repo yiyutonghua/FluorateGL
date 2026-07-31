@@ -102,57 +102,61 @@ pub extern "C" fn glShaderSource(
         let source_hash = hasher.finish();
 
         // 查翻译缓存，命中则跳过完整翻译管线（shaderc + spirv-cross）
-        let (upload_source, translated) =
-            if let Some(cached) = state::with_state_ref(|s| {
-                s.shader_translation_cache.get(&(source_hash, stage)).cloned()
-            }) {
-                log::debug!(
-                    "[ShaderTranslator] shader {} stage 0x{:04X} cache hit ({} chars)",
-                    shader, stage, cached.len()
-                );
-                (cached, true)
-            } else {
-                use crate::shader_translator::spirv_pass::TranslationResult;
-                let translate_start = std::time::Instant::now();
-                let (upload, trans) = match crate::shader_translator::spirv_pass::translate(
-                    &source, stage,
-                ) {
-                    TranslationResult::Translated(translated) => {
-                        log::debug!(
-                            "[ShaderTranslator] shader {} stage 0x{:04X} translated via SPIR-V ({} chars, took {:?})",
-                            shader,
-                            stage,
-                            translated.len(),
-                            translate_start.elapsed()
-                        );
-                        (translated, true)
-                    }
-                    TranslationResult::PassThrough => {
-                        log::debug!(
-                            "[ShaderTranslator] shader {} stage 0x{:04X} passed through unchanged (driver extension supported)",
-                            shader,
-                            stage
-                        );
-                        (source.clone(), false)
-                    }
-                    TranslationResult::Failed => {
-                        log::warn!(
-                            "[ShaderTranslator] SPIR-V pipeline failed for shader {}; passing original source ({} chars, took {:?})",
-                            shader,
-                            source.len(),
-                            translate_start.elapsed()
-                        );
-                        (source.clone(), false)
-                    }
-                };
-                // 翻译成功则缓存结果，后续相同源码可直接复用
-                if trans {
-                    state::with_state(|s| {
-                        s.shader_translation_cache.insert((source_hash, stage), upload.clone());
-                    });
+        let (upload_source, translated) = if let Some(cached) = state::with_state_ref(|s| {
+            s.shader_translation_cache
+                .get(&(source_hash, stage))
+                .cloned()
+        }) {
+            log::debug!(
+                "[ShaderTranslator] shader {} stage 0x{:04X} cache hit ({} chars)",
+                shader,
+                stage,
+                cached.len()
+            );
+            (cached, true)
+        } else {
+            use crate::shader_translator::spirv_pass::TranslationResult;
+            let translate_start = std::time::Instant::now();
+            let (upload, trans) = match crate::shader_translator::spirv_pass::translate(
+                &source, stage,
+            ) {
+                TranslationResult::Translated(translated) => {
+                    log::debug!(
+                        "[ShaderTranslator] shader {} stage 0x{:04X} translated via SPIR-V ({} chars, took {:?})",
+                        shader,
+                        stage,
+                        translated.len(),
+                        translate_start.elapsed()
+                    );
+                    (translated, true)
                 }
-                (upload, trans)
+                TranslationResult::PassThrough => {
+                    log::debug!(
+                        "[ShaderTranslator] shader {} stage 0x{:04X} passed through unchanged (driver extension supported)",
+                        shader,
+                        stage
+                    );
+                    (source.clone(), false)
+                }
+                TranslationResult::Failed => {
+                    log::warn!(
+                        "[ShaderTranslator] SPIR-V pipeline failed for shader {}; passing original source ({} chars, took {:?})",
+                        shader,
+                        source.len(),
+                        translate_start.elapsed()
+                    );
+                    (source.clone(), false)
+                }
             };
+            // 翻译成功则缓存结果，后续相同源码可直接复用
+            if trans {
+                state::with_state(|s| {
+                    s.shader_translation_cache
+                        .insert((source_hash, stage), upload.clone());
+                });
+            }
+            (upload, trans)
+        };
 
         state::with_state(|s| {
             if translated {

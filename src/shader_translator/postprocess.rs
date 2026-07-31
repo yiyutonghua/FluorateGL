@@ -53,7 +53,8 @@ pub fn post_process(src: &str) -> String {
     };
     let re_binding = {
         static RE_BINDING: OnceLock<Regex> = OnceLock::new();
-        RE_BINDING.get_or_init(|| Regex::new(r"(?i)layout\s*\(\s*binding\s*=\s*\d+\s*\)\s*").unwrap())
+        RE_BINDING
+            .get_or_init(|| Regex::new(r"(?i)layout\s*\(\s*binding\s*=\s*\d+\s*\)\s*").unwrap())
     };
     let re_binding_leading = {
         static RE_BINDING_LEADING: OnceLock<Regex> = OnceLock::new();
@@ -216,8 +217,9 @@ fn strip_varying_locations(src: &str) -> String {
 fn strip_uniform_locations(src: &str) -> String {
     let re_loc_only = {
         static RE_LOC_ONLY: OnceLock<Regex> = OnceLock::new();
-        RE_LOC_ONLY
-            .get_or_init(|| Regex::new(r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*\)\s*(uniform\b)").unwrap())
+        RE_LOC_ONLY.get_or_init(|| {
+            Regex::new(r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*\)\s*(uniform\b)").unwrap()
+        })
     };
     let re_loc_leading = {
         static RE_LOC_LEADING: OnceLock<Regex> = OnceLock::new();
@@ -366,8 +368,10 @@ fn fix_atomic_counter_binding(src: &str) -> String {
     // offset 是唯一限定符: layout(offset = N) → layout(binding = N)
     let re_offset_only = {
         static RE_OFFSET_ONLY: OnceLock<Regex> = OnceLock::new();
-        RE_OFFSET_ONLY
-            .get_or_init(|| Regex::new(r"(?i)layout\s*\(\s*offset\s*=\s*(\d+)\s*\)\s*(uniform\s+atomic_uint)").unwrap())
+        RE_OFFSET_ONLY.get_or_init(|| {
+            Regex::new(r"(?i)layout\s*\(\s*offset\s*=\s*(\d+)\s*\)\s*(uniform\s+atomic_uint)")
+                .unwrap()
+        })
     };
     let result = re_offset_only
         .replace_all(src, "layout(binding = $1) $2")
@@ -497,8 +501,9 @@ fn ensure_precision(source: &str) -> String {
 
     // 移除所有已有的 precision 声明
     static RE_PRECISION: OnceLock<Regex> = OnceLock::new();
-    let re_precision = RE_PRECISION
-        .get_or_init(|| Regex::new(r"(?m)^\s*precision\s+\w+\s+(?:float|int)\s*;.*$(\n)?").unwrap());
+    let re_precision = RE_PRECISION.get_or_init(|| {
+        Regex::new(r"(?m)^\s*precision\s+\w+\s+(?:float|int)\s*;.*$(\n)?").unwrap()
+    });
     result = re_precision.replace_all(&result, "").to_string();
 
     let precision_decl = "precision highp float;\nprecision highp int;\n";

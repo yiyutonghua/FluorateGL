@@ -193,7 +193,9 @@ pub extern "C" fn glGetUniformLocation(program: u32, name: *const c_char) -> i32
         .to_string_lossy()
         .into_owned();
     if let Some(loc) = state::with_state_ref(|s| {
-        s.uniform_location_cache.get(&(program, name_str.clone())).copied()
+        s.uniform_location_cache
+            .get(&(program, name_str.clone()))
+            .copied()
     }) {
         return loc;
     }
