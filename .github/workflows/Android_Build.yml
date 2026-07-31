@@ -9,15 +9,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    env:
-      # cargo-ndk 和 shaderc 的 cmake 都依赖 ANDROID_NDK_ROOT
-      ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_ROOT }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # 初始化 submodule（glslang 测试用例，构建 .so 非必需但保持完整性）
           submodules: recursive
 
       - name: Install system dependencies
@@ -57,7 +52,6 @@ jobs:
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          # 区分不同 target 的缓存
           key: aarch64-linux-android
 
       - name: Build release
