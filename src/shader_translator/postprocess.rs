@@ -79,8 +79,15 @@ pub fn post_process(src: &str) -> String {
     //    需要通过 `实例名.成员名`（如 `_20.ModelViewMat`）。MC 通过
     //    glGetUniformLocation(program, "ModelViewMat") 按成员名查询时返回 -1，
     //    因为带实例名的 UBO 成员必须用 "块名.成员名" 查询，直接按成员名查不到。
-    //    移除实例名后，UBO 成员变为全局可见，MC 可直接按成员名查询。
+    //    移除实例名后，函数体变为直接成员访问，为下一步拆解做准备。
     result = strip_ubo_instance_name(&result);
+
+    // 1.6 把生成的 UBO 拆解为 standalone uniform（关键：解决 MC uniform 查询失败）
+    //     GLES 规范规定 UBO 成员没有 location，glGetUniformLocation 按成员名查询
+    //     返回 -1。MC 的 Shader 类用 glGetUniformLocation 查询 uniform，UBO 方案
+    //     导致所有 uniform 查不到，红屏。把 UniformBlockVS/FS/Other 拆解为
+    //     standalone uniform（`uniform mat4 ModelViewMat;`）后，MC 可直接查询到。
+    result = unwrap_generated_ubo(&result);
 
     // 2. 修复 atomic counter binding
     //    spirv-cross 输出 `layout(offset = N) uniform atomic_uint`，
@@ -242,6 +249,60 @@ fn strip_ubo_instance_name(src: &str) -> String {
         "[ShaderTranslator] postprocess 移除了 UBO/SSBO 实例名: {:?}",
         instance_names
     );
+
+    result
+}
+
+/// 把 preprocess 生成的 UBO 拆解为 standalone uniform
+///
+/// preprocess 把 standalone uniform 包装进 UniformBlockVS/FS/Other（Vulkan SPIR-V
+/// 要求 non-opaque uniform 必须在 buffer 中）。但 GLES 规范规定 UBO 成员没有
+/// location，`glGetUniformLocation(program, "成员名")` 返回 -1。MC 的 Shader 类
+/// 用 `glGetUniformLocation` 查询 uniform，UBO 方案导致所有 uniform 查不到，红屏。
+///
+/// 此函数把 `layout(...) uniform UniformBlockVS { members };` 拆解为
+/// `uniform <type> <name>;` 列表，使每个 uniform 变为 standalone，MC 可直接查询。
+///
+/// 仅处理 preprocess 生成的 UniformBlockVS/FS/Other，不影响 MC 原生 UBO。
+/// strip_ubo_instance_name 已移除实例名，函数体已是直接成员访问，无需替换引用。
+fn unwrap_generated_ubo(src: &str) -> String {
+    // 匹配我们生成的 UBO 块：layout(...) uniform UniformBlock(VS|FS|Other) { members };
+    // (?s) 让 . 匹配换行，成员是多行的
+    let re_ubo = Regex::new(
+        r"(?s)layout\s*\([^)]*\)\s*uniform\s+(UniformBlock(?:VS|FS|Other))\s*\{([^}]*)\}\s*;",
+    )
+    .unwrap();
+
+    let mut unwrapped_count = 0;
+    let result = re_ubo
+        .replace_all(src, |caps: &regex::Captures| {
+            let block_name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let members = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+            unwrapped_count += 1;
+
+            // 把每个成员声明转为 standalone uniform
+            // 成员格式：`    mat4 ModelViewMat;` 或 `    highp mat4 ModelViewMat;`
+            let mut standalone = String::new();
+            for line in members.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                // 移除末尾分号，加 uniform 前缀
+                let line = line.trim_end_matches(';').trim();
+                standalone.push_str(&format!("uniform {};\n", line));
+            }
+            // 去掉末尾多余换行（replace_all 的替换文本不需要尾换行）
+            standalone.trim_end().to_string()
+        })
+        .to_string();
+
+    if unwrapped_count > 0 {
+        log::debug!(
+            "[ShaderTranslator] postprocess 拆解了 {} 个 UBO 为 standalone uniform",
+            unwrapped_count
+        );
+    }
 
     result
 }
@@ -638,5 +699,96 @@ mod tests {
         // 成员名应保留（用于 glGetUniformLocation 查询）
         assert!(result.contains("ModelViewMat"));
         assert!(result.contains("ProjMat"));
+    }
+
+    // ============ UBO 拆解为 standalone uniform ============
+
+    #[test]
+    fn test_unwrap_generated_ubo_basic() {
+        // UniformBlockVS 块应被拆解为 standalone uniform
+        let input = "layout(std140) uniform UniformBlockVS\n{\n    mat4 ModelViewMat;\n    mat4 ProjMat;\n};\nvoid main() { gl_Position = ProjMat * ModelViewMat * vec4(0); }\n";
+        let result = unwrap_generated_ubo(input);
+        assert!(
+            !result.contains("uniform UniformBlockVS"),
+            "UBO block should be removed, got: {}",
+            result
+        );
+        assert!(
+            result.contains("uniform mat4 ModelViewMat;"),
+            "should have standalone uniform ModelViewMat, got: {}",
+            result
+        );
+        assert!(
+            result.contains("uniform mat4 ProjMat;"),
+            "should have standalone uniform ProjMat, got: {}",
+            result
+        );
+        // 函数体直接成员访问保留（strip_ubo_instance_name 已处理）
+        assert!(result.contains("ProjMat * ModelViewMat"));
+    }
+
+    #[test]
+    fn test_unwrap_generated_ubo_fragment() {
+        // UniformBlockFS 块也应被拆解
+        let input = "layout(std140) uniform UniformBlockFS\n{\n    vec4 ColorModulator;\n};\nvoid main() { fragColor = ColorModulator; }\n";
+        let result = unwrap_generated_ubo(input);
+        assert!(
+            result.contains("uniform vec4 ColorModulator;"),
+            "should have standalone uniform ColorModulator, got: {}",
+            result
+        );
+        assert!(!result.contains("uniform UniformBlockFS"));
+    }
+
+    #[test]
+    fn test_unwrap_generated_ubo_preserves_native_ubo() {
+        // MC 原生 UBO（非 UniformBlockVS/FS/Other）不应被拆解
+        let input = "layout(std140) uniform DynamicTransforms\n{\n    mat4 m;\n};\nvoid main() {}\n";
+        let result = unwrap_generated_ubo(input);
+        assert!(
+            result.contains("uniform DynamicTransforms"),
+            "native UBO should be preserved, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_unwrap_generated_ubo_with_precision() {
+        // 带 precision 限定符的成员
+        let input = "layout(std140) uniform UniformBlockVS\n{\n    highp mat4 ModelViewMat;\n    mediump float FogStart;\n};\nvoid main() {}\n";
+        let result = unwrap_generated_ubo(input);
+        assert!(
+            result.contains("uniform highp mat4 ModelViewMat;"),
+            "should preserve precision, got: {}",
+            result
+        );
+        assert!(result.contains("uniform mediump float FogStart;"));
+    }
+
+    #[test]
+    fn test_post_process_unwraps_ubo_to_standalone() {
+        // 端到端：spirv-cross 输出（带实例名） → post_process → standalone uniform
+        let input = "#version 310 es\nprecision highp float;\nprecision highp int;\nlayout(std140) uniform UniformBlockVS\n{\n    mat4 ModelViewMat;\n    mat4 ProjMat;\n} _20;\nin vec3 Position;\nvoid main()\n{\n    gl_Position = (_20.ProjMat * _20.ModelViewMat) * vec4(Position, 1.0);\n}\n";
+        let result = post_process(input);
+        // UBO 块应被拆解
+        assert!(
+            !result.contains("uniform UniformBlockVS"),
+            "UBO block should be unwrapped, got: {}",
+            result
+        );
+        // 应有 standalone uniform 声明
+        assert!(
+            result.contains("uniform mat4 ModelViewMat;"),
+            "should have standalone uniform, got: {}",
+            result
+        );
+        assert!(result.contains("uniform mat4 ProjMat;"));
+        // 函数体应直接访问成员（无实例名前缀）
+        assert!(
+            result.contains("ProjMat * ModelViewMat"),
+            "should access members directly, got: {}",
+            result
+        );
+        assert!(!result.contains("_20."));
     }
 }

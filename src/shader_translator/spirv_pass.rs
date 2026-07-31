@@ -234,13 +234,12 @@ void main() {
 
     #[test]
     fn test_ubo_shader() {
-        // MC 风格的 UBO（无 layout(binding)，preprocess 会注入）
+        // MC vanilla 风格的 standalone uniform（preprocess 会转成 UniformBlockVS，
+        // postprocess 再拆解回 standalone uniform）
         let src = r#"#version 330
-layout(std140) uniform DynamicTransforms {
-    mat4 ModelViewMat;
-    vec4 ColorModulator;
-    vec3 ModelOffset;
-};
+uniform mat4 ModelViewMat;
+uniform vec4 ColorModulator;
+uniform vec3 ModelOffset;
 in vec3 Position;
 out vec4 vertexColor;
 void main() {
@@ -249,32 +248,32 @@ void main() {
 }
 "#;
         let translated = assert_translated_to_gles(src, GL_VERTEX_SHADER, "ubo_shader");
+        eprintln!("=== test_ubo_shader translated ===\n{}", translated);
         assert!(
             translated.contains("ModelViewMat"),
-            "UBO 成员 ModelViewMat 应保留"
+            "uniform ModelViewMat 应保留"
         );
         assert!(
             translated.contains("ColorModulator"),
-            "UBO 成员 ColorModulator 应保留"
+            "uniform ColorModulator 应保留"
         );
-        // spirv-cross 会自动添加 UBO 实例名（如 } _20;），
-        // postprocess 必须移除实例名并替换函数体中的引用，
-        // 否则 MC 通过 glGetUniformLocation(program, "ModelViewMat")
-        // 按成员名查询会返回 -1（红屏）。
+        // GLES 规范规定 UBO 成员没有 location，MC 通过 glGetUniformLocation
+        // 按成员名查询返回 -1。postprocess 必须把 UniformBlockVS/FS/Other
+        // 拆解为 standalone uniform（`uniform mat4 ModelViewMat;`），
+        // MC 才能查询到 location。
         assert!(
-            !translated.contains("} _"),
-            "UBO 实例名声明应被移除（如 }} _20;），got: {}",
+            !translated.contains("uniform UniformBlock"),
+            "不应有 UniformBlock 块声明（应拆解为 standalone uniform），got: {}",
             translated
         );
         assert!(
-            !translated.contains("_.") || !translated.contains("_20."),
-            "UBO 实例名引用应被替换为直接成员访问，got: {}",
+            translated.contains("uniform mat4 ModelViewMat"),
+            "ModelViewMat 应是 standalone uniform 声明，got: {}",
             translated
         );
-        // 验证成员可直接访问（无实例名前缀）
         assert!(
-            translated.contains("ModelViewMat *") || translated.contains("ModelViewMat*"),
-            "ModelViewMat 应被直接访问（无实例名前缀），got: {}",
+            translated.contains("uniform vec4 ColorModulator"),
+            "ColorModulator 应是 standalone uniform 声明，got: {}",
             translated
         );
     }
