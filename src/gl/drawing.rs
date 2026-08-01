@@ -159,6 +159,7 @@ pub extern "C" fn glDrawElementsBaseVertex(
 pub extern "C" fn glDrawArraysIndirect(mode: u32, indirect: *const std::ffi::c_void) {
     // 同步 indirect buffer 持久映射脏区域（若 indirect buffer 是持久映射的）
     sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
+    log::debug!("[FluorateGL] glDrawArraysIndirect(mode=0x{:04X})", mode);
     // GLES 3.1 core 特性，项目前提，直接转发
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.draw_arrays_indirect)(mode, indirect);
@@ -170,6 +171,11 @@ pub extern "C" fn glDrawArraysIndirect(mode: u32, indirect: *const std::ffi::c_v
 pub extern "C" fn glDrawElementsIndirect(mode: u32, type_: u32, indirect: *const std::ffi::c_void) {
     // 同步 indirect buffer 持久映射脏区域（若 indirect buffer 是持久映射的）
     sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
+    log::debug!(
+        "[FluorateGL] glDrawElementsIndirect(mode=0x{:04X}, type=0x{:04X})",
+        mode,
+        type_
+    );
     // GLES 3.1 core 特性，项目前提，直接转发
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.draw_elements_indirect)(mode, type_, indirect);

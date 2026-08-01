@@ -404,6 +404,13 @@ fn is_key_gl_function(name: &str) -> bool {
             | "glDetachShader"
             | "glGetProgramiv"
             | "glGetProgramInfoLog"
+            // Indirect draw（诊断 Sodium 是否查询/调用 indirect draw 函数）
+            | "glDrawArraysIndirect"
+            | "glDrawElementsIndirect"
+            | "glMultiDrawArraysIndirect"
+            | "glMultiDrawElementsIndirect"
+            | "glMultiDrawArraysIndirectCount"
+            | "glMultiDrawElementsIndirectCount"
     )
 }
 

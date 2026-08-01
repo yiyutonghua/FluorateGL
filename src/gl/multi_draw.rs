@@ -182,6 +182,12 @@ pub extern "C" fn glMultiDrawArraysIndirect(
     if drawcount <= 0 {
         return;
     }
+    log::debug!(
+        "[FluorateGL] glMultiDrawArraysIndirect(mode=0x{:04X}, drawcount={}, stride={})",
+        mode,
+        drawcount,
+        stride
+    );
     // 同步 GL_DRAW_INDIRECT_BUFFER 持久映射的脏区域（若 indirect buffer 是持久映射的）
     sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
     let caps = backend::capabilities();
@@ -213,6 +219,13 @@ pub extern "C" fn glMultiDrawElementsIndirect(
     if drawcount <= 0 {
         return;
     }
+    log::debug!(
+        "[FluorateGL] glMultiDrawElementsIndirect(mode=0x{:04X}, type=0x{:04X}, drawcount={}, stride={})",
+        mode,
+        type_,
+        drawcount,
+        stride
+    );
     // 同步 GL_DRAW_INDIRECT_BUFFER 持久映射的脏区域（若 indirect buffer 是持久映射的）
     sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
     let caps = backend::capabilities();
