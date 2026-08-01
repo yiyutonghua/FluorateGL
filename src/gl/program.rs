@@ -75,6 +75,10 @@ pub extern "C" fn glAttachShader(program: u32, shader: u32) {
             )
         });
         if gles_program == 0 || gles_shader == 0 {
+            log::warn!(
+                "[FluorateGL] glAttachShader({}, {}): ID 映射失败 (program={}->gles={}, shader={}->gles={})",
+                program, shader, program, gles_program, shader, gles_shader
+            );
             return;
         }
         (dispatch.attach_shader)(gles_program, gles_shader);

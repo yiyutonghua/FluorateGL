@@ -302,12 +302,19 @@ fn get_fake_extensions_string() -> *const c_char {
 #[allow(non_snake_case)]
 pub extern "C" fn glGetString(name: u32) -> *const c_char {
     let result = if name == 0x1F02 {
-        // GL_VERSION：报告 3.2.0，MC 所有版本完全支持 OpenGL 3.2.0。
-        // 末尾拼接 FluorateGL 版本号，MC F3 的 "OpenGL:" 行会显示
-        // "3.2.0 FluorateGL v0.2.0"。"3.2.0" 前缀保持不变，不影响 MC 版本解析。
-        static VERSION: &[u8] =
-            concat!("3.2.0 FluorateGL v", env!("CARGO_PKG_VERSION"), "\0").as_bytes();
-        VERSION.as_ptr() as *const c_char
+        // GL_VERSION：从 config::REPORTED_GL_VERSION_PREFIX 拼接 FluorateGL 版本号，
+        // MC F3 的 "OpenGL:" 行显示如 "3.3.0 FluorateGL v0.2.0"。
+        // 版本前缀在 config.rs 统一维护，此处不再硬编码，避免两处定义不同步。
+        static VERSION: OnceLock<CString> = OnceLock::new();
+        let v = VERSION.get_or_init(|| {
+            CString::new(format!(
+                "{} v{}",
+                crate::config::REPORTED_GL_VERSION_PREFIX,
+                env!("CARGO_PKG_VERSION")
+            ))
+            .unwrap_or_else(|_| CString::new("").unwrap())
+        });
+        v.as_ptr() as *const c_char
     } else if name == 0x8B8C {
         // GL_SHADING_LANGUAGE_VERSION
         static GLSL: OnceLock<CString> = OnceLock::new();

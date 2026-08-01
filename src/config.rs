@@ -85,8 +85,14 @@ impl Config {
 //   REPORTED_GL_VERSION_PREFIX 的 "主.次" 必须等于 REPORTED_GL_MAJOR.REPORTED_GL_MINOR
 // 集中定义避免散落在多处因改动遗漏导致不一致。
 
-/// 报告的 GL 版本前缀（glGetString(GL_VERSION) 返回 "3.2.0 FluorateGL v{ver}"）
-pub const REPORTED_GL_VERSION_PREFIX: &str = "3.2.0 FluorateGL";
+/// 报告的 GL 版本前缀（glGetString(GL_VERSION) 返回 "3.3.0 FluorateGL v{ver}"）
+///
+/// 选择 3.3 而非 3.2 的原因：LWJGL 在 GL 3.3 下才会把 sampler objects、
+/// blend_func_extended 等作为 core 函数加载函数指针。3.2 下这些函数即使有
+/// 对应扩展声明，LWJGL 也只在版本 >= 3.3 时查找 core 指针，导致 Sodium
+/// 创建 program 时调用这些函数触发 "No context is current" 错误并降级渲染。
+/// MobileGL 报告 3.3 即可运行 Sodium/Voxy/Distant Horizons/光影，印证 3.3 足够。
+pub const REPORTED_GL_VERSION_PREFIX: &str = "3.3.0 FluorateGL";
 
 // 编译期断言：版本字符串前缀 "主.次" 必须与 MAJOR/MINOR 常量一致，
 // 防止改动一处遗漏另一处导致 MC 版本解析异常。
@@ -100,9 +106,10 @@ const _: () = {
 /// 报告的 GL 主版本号（glGetIntegerv(GL_MAJOR_VERSION)）
 pub const REPORTED_GL_MAJOR: i32 = 3;
 /// 报告的 GL 次版本号（glGetIntegerv(GL_MINOR_VERSION)）
-pub const REPORTED_GL_MINOR: i32 = 2;
+pub const REPORTED_GL_MINOR: i32 = 3;
 /// 报告的 GLSL 版本字符串（glGetString(GL_SHADING_LANGUAGE_VERSION)）
-pub const REPORTED_GLSL_VERSION: &str = "1.50";
+/// GL 3.3 对应 GLSL 3.30（桌面 GLSL 版本号从 1.40 跳到 3.30）
+pub const REPORTED_GLSL_VERSION: &str = "3.30";
 
 /// 报告的 EGL 主版本号
 pub const REPORTED_EGL_MAJOR: i32 = 1;
