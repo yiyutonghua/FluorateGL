@@ -283,7 +283,10 @@ pub extern "C" fn glDrawBuffers(n: i32, bufs: *const u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glDrawBuffer(mode: u32) {
-    log::debug!("[FluorateGL] glDrawBuffer(mode=0x{:04X}) -> glDrawBuffers(1, ...)", mode);
+    log::debug!(
+        "[FluorateGL] glDrawBuffer(mode=0x{:04X}) -> glDrawBuffers(1, ...)",
+        mode
+    );
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.draw_buffers)(1, &mode);
     });

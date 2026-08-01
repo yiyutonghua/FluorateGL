@@ -536,11 +536,7 @@ pub extern "C" fn glUniformBlockBinding(
 /// 方块无法渲染（实体 shader 不调用此函数，故实体正常）。
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glBindFragDataLocation(
-    program: u32,
-    color_number: u32,
-    name: *const c_char,
-) {
+pub extern "C" fn glBindFragDataLocation(program: u32, color_number: u32, name: *const c_char) {
     let name_str = if name.is_null() {
         "<null>".to_string()
     } else {
@@ -865,7 +861,9 @@ pub extern "C" fn glGetFragDataIndex(program: u32, name: *const c_char) -> i32 {
     let name_str = if name.is_null() {
         "<null>".to_string()
     } else {
-        unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned()
+        unsafe { CStr::from_ptr(name) }
+            .to_string_lossy()
+            .into_owned()
     };
     log::debug!(
         "[FluorateGL] glGetFragDataIndex(program={}, name={:?}) -> -1 (dual-source blending unsupported)",
@@ -897,6 +895,8 @@ pub extern "C" fn glGetActiveUniformName(
         // 用临时变量接收后丢弃。
         let mut size = 0i32;
         let mut type_ = 0u32;
-        (dispatch.get_active_uniform)(gles_id, index, buf_size, length, &mut size, &mut type_, name);
+        (dispatch.get_active_uniform)(
+            gles_id, index, buf_size, length, &mut size, &mut type_, name,
+        );
     });
 }

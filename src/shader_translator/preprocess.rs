@@ -206,12 +206,12 @@ vec2 textureQueryLod_polyfill(sampler3D sampler, vec3 coords) {
     // \btextureQueryLod\s*\( 不会匹配 textureQueryLod_polyfill(（d 后是 _，非词边界后的 \s*\()）
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"\btextureQueryLod\s*\(").unwrap());
-    let replaced = re.replace_all(&new_result, "textureQueryLod_polyfill(").into_owned();
+    let replaced = re
+        .replace_all(&new_result, "textureQueryLod_polyfill(")
+        .into_owned();
 
     if replaced.len() != new_result.len() {
-        log::debug!(
-            "[ShaderTranslator] preprocess 注入 textureQueryLod polyfill 并替换调用点"
-        );
+        log::debug!("[ShaderTranslator] preprocess 注入 textureQueryLod polyfill 并替换调用点");
     }
 
     *result = replaced;

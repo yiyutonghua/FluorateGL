@@ -8,9 +8,7 @@ use crate::backend;
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glClampColor(_target: u32, _clamp: u32) {
-    log::debug!(
-        "[FluorateGL] glClampColor swallowed (GLES always clamps color output)"
-    );
+    log::debug!("[FluorateGL] glClampColor swallowed (GLES always clamps color output)");
 }
 
 /// glPointParameteri — GL 1.4 点光栅化参数（int 版本）。

@@ -99,12 +99,7 @@ pub extern "C" fn glDebugMessageCallbackKHR(
 /// 必须导出此符号供宿主查询；GLES 标签能力非渲染必需，直接 no-op 吞掉。
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glObjectLabel(
-    _identifier: u32,
-    _name: u32,
-    _length: i32,
-    _label: *const c_char,
-) {
+pub extern "C" fn glObjectLabel(_identifier: u32, _name: u32, _length: i32, _label: *const c_char) {
     log::debug!("[FluorateGL] glObjectLabel swallowed (debug label ignored, no rendering impact)");
 }
 
@@ -119,7 +114,9 @@ pub extern "C" fn glObjectLabelKHR(
     _length: i32,
     _label: *const c_char,
 ) {
-    log::debug!("[FluorateGL] glObjectLabelKHR swallowed (debug label ignored, no rendering impact)");
+    log::debug!(
+        "[FluorateGL] glObjectLabelKHR swallowed (debug label ignored, no rendering impact)"
+    );
 }
 
 #[unsafe(no_mangle)]
