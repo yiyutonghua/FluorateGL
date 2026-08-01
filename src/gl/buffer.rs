@@ -2,6 +2,37 @@ use crate::backend;
 use crate::state;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+// glMapBufferRange access bits（桌面 GL 与 GLES 共享的低 16 位语义）
+// GLES 3.1 仅支持 READ/WRITE/INVALIDATE_RANGE/INVALIDATE_BUFFER/FLUSH_EXPLICIT/UNSYNCHRONIZED，
+// 不支持 PERSISTENT(0x0040)/COHERENT(0x0080)（桌面 GL 4.4 / GL_ARB_buffer_storage 引入）。
+const GL_MAP_READ_BIT: u32 = 0x0001;
+const GL_MAP_WRITE_BIT: u32 = 0x0002;
+const GL_MAP_UNSYNCHRONIZED_BIT: u32 = 0x0020;
+const GL_MAP_PERSISTENT_BIT: u32 = 0x0040;
+const GL_MAP_COHERENT_BIT: u32 = 0x0080;
+
+/// 将桌面 GL 的 glMapBufferRange access flags 翻译为 GLES 3.1 支持的位。
+///
+/// GLES 3.1 不支持 PERSISTENT/COHERENT 位，需剥离：
+/// - PERSISTENT（映射期间 buffer 仍可被 GPU 使用）：无法完美模拟，剥离后配合
+///   UNSYNCHRONIZED 可近似 Sodium 的流式上传场景（每帧写入新区域 + fence 同步）。
+/// - COHERENT（GPU/CPU 访问自动可见）：用 UNSYNCHRONIZED 替代语义（都是不自动同步），
+///   Sodium 自管理同步，剥离后功能正确。
+///
+/// 剥离后若没有任何有效的读写位，补 GL_MAP_WRITE_BIT 避免 GLES 返回 NULL。
+fn translate_map_access(access: u32) -> u32 {
+    let mut out = access & !GL_MAP_PERSISTENT_BIT;
+    let had_coherent = out & GL_MAP_COHERENT_BIT != 0;
+    out &= !GL_MAP_COHERENT_BIT;
+    if had_coherent {
+        out |= GL_MAP_UNSYNCHRONIZED_BIT;
+    }
+    if out & (GL_MAP_READ_BIT | GL_MAP_WRITE_BIT) == 0 {
+        out |= GL_MAP_WRITE_BIT;
+    }
+    out
+}
+
 /// buffer stub 降级相关首次告警标志（避免每帧刷屏）
 /// glMapBuffer：GLES 无此函数，用 glMapBufferRange 模拟
 static MAP_BUFFER_WARNED: AtomicBool = AtomicBool::new(false);
@@ -186,10 +217,12 @@ pub extern "C" fn glBufferStorage(
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.buffer_storage as *const ()) {
+            // 驱动不支持 GL_EXT_buffer_storage，降级为 glBufferData（GL_DYNAMIC_DRAW）。
+            // 丢失 PERSISTENT/COHERENT 语义，但后续 glMapBufferRange 会通过
+            // translate_map_access 剥离这两个位并用 UNSYNCHRONIZED 替代，保证映射不返回 NULL。
             (dispatch.buffer_data)(target, size, data, 0x88E8); // GL_DYNAMIC_DRAW
         } else {
-            // 原样传入 flags，不要剥离 PERSISTENT 和 COHERENT：
-            // MC 的顶点流式上传完全依赖这两个 Bit。
+            // 原生路径：驱动支持 GL_EXT_buffer_storage，原样传 flags。
             (dispatch.buffer_storage)(target, size, data, flags);
         }
     });
@@ -219,10 +252,11 @@ pub extern "C" fn glMapBuffer(target: u32, access: u32) -> *mut std::ffi::c_void
         }
 
         let range_access = match access {
-            0x88B8 => 0x0001,          // GL_READ_ONLY -> GL_MAP_READ_BIT
-            0x88B9 => 0x0002,          // GL_WRITE_ONLY -> GL_MAP_WRITE_BIT
-            0x88BA => 0x0001 | 0x0002, // GL_READ_WRITE -> GL_MAP_READ_BIT | GL_MAP_WRITE_BIT
-            _ => access,
+            0x88B8 => GL_MAP_READ_BIT,
+            0x88B9 => GL_MAP_WRITE_BIT,
+            0x88BA => GL_MAP_READ_BIT | GL_MAP_WRITE_BIT,
+            // 其他值按 bit flags 处理，剥离 GLES 不支持的 PERSISTENT/COHERENT
+            _ => translate_map_access(access),
         };
 
         (dispatch.map_buffer_range)(target, 0, size as isize, range_access)
@@ -238,7 +272,9 @@ pub extern "C" fn glMapBufferRange(
     access: u32,
 ) -> *mut std::ffi::c_void {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.map_buffer_range)(target, offset, length, access)
+        // 剥离 GLES 不支持的 PERSISTENT/COHERENT 位，否则 GLES 返回 NULL
+        let gles_access = translate_map_access(access);
+        (dispatch.map_buffer_range)(target, offset, length, gles_access)
     })
 }
 #[unsafe(no_mangle)]
