@@ -85,8 +85,14 @@ impl Config {
 //   REPORTED_GL_VERSION_PREFIX 的 "主.次" 必须等于 REPORTED_GL_MAJOR.REPORTED_GL_MINOR
 // 集中定义避免散落在多处因改动遗漏导致不一致。
 
-/// 报告的 GL 版本前缀（glGetString(GL_VERSION) 返回 "3.2.0 FluorateGL v{ver}"）
-pub const REPORTED_GL_VERSION_PREFIX: &str = "3.2.0 FluorateGL";
+/// 报告的 GL 版本前缀（glGetString(GL_VERSION) 返回 "4.3.0 FluorateGL v{ver}"）
+///
+/// 选 4.3.0 而非 3.2.0 的原因：Sodium 0.8.x 通过 LWJGL 的 GLCapabilities 判定是否启用
+/// indirect multi-draw。LWJGL 对 GL_ARB_multi_draw_indirect 扩展有版本门槛：即使扩展
+/// 字符串声明了，也要求 OpenGL >= 4.3 才会加载 glMultiDrawElementsIndirect 函数指针。
+/// 报告 3.2.0 时 Sodium 不会查询该函数，chunk rendering pipeline 完全不启动。
+/// 4.3 是 GL_ARB_multi_draw_indirect 的引入版本，也是满足 Sodium 需求的最低版本。
+pub const REPORTED_GL_VERSION_PREFIX: &str = "4.3.0 FluorateGL";
 
 // 编译期断言：版本字符串前缀 "主.次" 必须与 MAJOR/MINOR 常量一致，
 // 防止改动一处遗漏另一处导致 MC 版本解析异常。
@@ -98,11 +104,12 @@ const _: () = {
     assert!(minor_digit == b'0' + REPORTED_GL_MINOR as u8);
 };
 /// 报告的 GL 主版本号（glGetIntegerv(GL_MAJOR_VERSION)）
-pub const REPORTED_GL_MAJOR: i32 = 3;
+pub const REPORTED_GL_MAJOR: i32 = 4;
 /// 报告的 GL 次版本号（glGetIntegerv(GL_MINOR_VERSION)）
-pub const REPORTED_GL_MINOR: i32 = 2;
+pub const REPORTED_GL_MINOR: i32 = 3;
 /// 报告的 GLSL 版本字符串（glGetString(GL_SHADING_LANGUAGE_VERSION)）
-pub const REPORTED_GLSL_VERSION: &str = "1.50";
+/// GLSL 4.30 对应 OpenGL 4.3
+pub const REPORTED_GLSL_VERSION: &str = "4.30";
 
 /// 报告的 EGL 主版本号
 pub const REPORTED_EGL_MAJOR: i32 = 1;
