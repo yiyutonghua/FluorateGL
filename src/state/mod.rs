@@ -18,6 +18,30 @@ use id_map::IdMap;
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 
+/// 持久映射 buffer 的 CPU 端 shadow memory
+///
+/// GLES 3.1 不支持 GL_MAP_PERSISTENT_BIT（映射期间 buffer 仍可被 GPU 使用），
+/// 用 CPU 端 shadow memory 模拟：glMapBufferRange 返回 shadow_ptr，宿主写入
+/// shadow memory，draw 前 glBufferSubData 同步到 GLES buffer。
+///
+/// 生命周期：glBufferStorage(带 PERSISTENT) 创建 → glMapBufferRange 返回 shadow_ptr →
+/// glFlushMappedBufferRange 标记脏区域 → draw 前同步 → glDeleteBuffers 释放。
+pub struct PersistentMapping {
+    /// CPU 端分配的 shadow memory 起始指针
+    pub shadow_ptr: *mut u8,
+    /// shadow memory 总大小（字节数）
+    pub shadow_size: usize,
+    /// 对应的 GLES buffer ID（用于 glBufferSubData 同步）
+    pub gles_buffer_id: u32,
+    /// 未同步的脏数据起始偏移
+    pub dirty_offset: usize,
+    /// 未同步的脏数据长度
+    pub dirty_length: usize,
+}
+
+// shadow_ptr 由 libc::malloc 分配，跨线程不共享（thread_local State），Send/Sync 安全
+unsafe impl Send for PersistentMapping {}
+
 pub struct State {
     pub buffers: IdMap,
     pub vertex_arrays: IdMap,
@@ -41,6 +65,11 @@ pub struct State {
     pub bound_texture: u32,
     pub bound_framebuffer: u32,
     pub bound_renderbuffer: u32,
+
+    /// 持久映射 buffer 的 shadow memory（key = desktop buffer ID）
+    pub persistent_buffers: FxHashMap<u32, PersistentMapping>,
+    /// 各 target 当前绑定的 desktop buffer ID（用于查询 target → buffer）
+    pub bound_buffers_by_target: FxHashMap<u32, u32>,
 }
 
 impl State {
@@ -66,6 +95,9 @@ impl State {
             bound_texture: 0,
             bound_framebuffer: 0,
             bound_renderbuffer: 0,
+
+            persistent_buffers: FxHashMap::default(),
+            bound_buffers_by_target: FxHashMap::default(),
         }
     }
 }
