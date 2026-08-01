@@ -1,14 +1,13 @@
 # FluorateGL
 
-桌面 OpenGL → OpenGL ES 翻译层,让依赖桌面 GL 的应用在 Android GLES 3.1+ 设备上运行。
+桌面 OpenGL → OpenGL ES 翻译层,尝试让Minecraft:Java Edition在 Android GLES 3.1+ 设备上运行。
 
 > 注意:这是纯 vibe coding 作品
 
 ## 适用场景
 
-- **目标设备**:Android GLES 3.1+(骁龙 Adreno 等 GPU)
-- **启动器**:FCL / ZL2 等启动器
-- **伪装版本**:对外报告 OpenGL 3.2 / GLSL 1.50,内部翻译为 GLES 3.1
+- **目标要求**:Android GLES 3.1+
+- **伪装版本**:对外报告 OpenGL 3.3 / GLSL 3.30,内部翻译为 GLES 3.1+
 
 ## 构建
 
