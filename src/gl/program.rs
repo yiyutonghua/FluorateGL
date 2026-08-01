@@ -522,6 +522,69 @@ pub extern "C" fn glUniformBlockBinding(
     });
 }
 
+/// glBindFragDataLocation stub — 桌面 GL 3.0 函数，GLES 无对应实现。
+///
+/// 语义：指定 fragment shader output 变量绑定的 location。
+/// GLES 行为：linker 自动分配 fragment output location，单一 output（如
+/// `out vec4 fragColor`）自动分配到 location 0，与 MC/Sodium 期望的
+/// FRAG_COLOR=0 一致。因此 no-op 实现是安全的。
+///
+/// 必须导出此函数：Sodium 的 ShaderChunkRenderer.createShader() 在
+/// glAttachShader 后调用 glBindFragDataLocation 绑定 fragment output。
+/// 若未导出，eglGetProcAddress 返回 null，LWJGL capabilities 字段为 null，
+/// 调用时抛 "No context is current" 错误，导致 chunk shader 创建中断，
+/// 方块无法渲染（实体 shader 不调用此函数，故实体正常）。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glBindFragDataLocation(
+    program: u32,
+    color_number: u32,
+    name: *const c_char,
+) {
+    let name_str = if name.is_null() {
+        "<null>".to_string()
+    } else {
+        unsafe { CStr::from_ptr(name) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    log::debug!(
+        "[FluorateGL] glBindFragDataLocation(program={}, color={}, name={:?}) -> no-op (GLES auto-assigns location 0)",
+        program,
+        color_number,
+        name_str
+    );
+}
+
+/// glBindFragDataLocationIndexed stub — 桌面 GL 3.3 函数，GLES 无对应实现。
+///
+/// 与 glBindFragDataLocation 类似，但支持 indexed fragment output（dual-source blending）。
+/// GLES 不支持 dual-source blending，no-op 实现安全（MC/Sodium 不使用此特性）。
+/// 导出避免 LWJGL capabilities 字段为 null 导致调用时抛错。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glBindFragDataLocationIndexed(
+    program: u32,
+    color_number: u32,
+    index: u32,
+    name: *const c_char,
+) {
+    let name_str = if name.is_null() {
+        "<null>".to_string()
+    } else {
+        unsafe { CStr::from_ptr(name) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    log::debug!(
+        "[FluorateGL] glBindFragDataLocationIndexed(program={}, color={}, index={}, name={:?}) -> no-op (GLES auto-assigns, dual-source unsupported)",
+        program,
+        color_number,
+        index,
+        name_str
+    );
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetUniformBlockIndex(program: u32, uniform_block_name: *const c_char) -> u32 {
