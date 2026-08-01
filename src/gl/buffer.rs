@@ -11,6 +11,12 @@ const GL_MAP_UNSYNCHRONIZED_BIT: u32 = 0x0020;
 const GL_MAP_PERSISTENT_BIT: u32 = 0x0040;
 const GL_MAP_COHERENT_BIT: u32 = 0x0080;
 
+/// GL_PARAMETER_BUFFER（GL 4.6 引入，glMultiDraw*IndirectCount 的 count 来源）
+/// GLES 不识别该 target，下传会触发 GL_INVALID_ENUM，仅在 state 中记录绑定。
+const GL_PARAMETER_BUFFER: u32 = 0x80EE;
+/// GL_COPY_READ_BUFFER：用于临时绑定 count buffer 读取数据（合法的通用 target）
+const GL_COPY_READ_BUFFER: u32 = 0x8F36;
+
 /// 将桌面 GL 的 glMapBufferRange access flags 翻译为 GLES 3.1 支持的位。
 ///
 /// GLES 3.1 不支持 PERSISTENT/COHERENT 位，需剥离：
@@ -156,6 +162,20 @@ pub extern "C" fn glDeleteBuffers(n: i32, buffers: *const u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
+    // GL_PARAMETER_BUFFER 是 GL 4.6 引入的 target（glMultiDraw*IndirectCount 的 count 来源），
+    // GLES 不识别该 target，下传会触发 GL_INVALID_ENUM。仅记录 state 用于 CPU 端模拟。
+    if target == GL_PARAMETER_BUFFER {
+        state::with_state(|s| {
+            s.bound_buffers_by_target.insert(target, buffer);
+        });
+        log::debug!(
+            "[FluorateGL] glBindBuffer(GL_PARAMETER_BUFFER): desktop {} recorded (not forwarded, tid={})",
+            buffer,
+            state::thread_id_u64()
+        );
+        return;
+    }
+
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = if buffer == 0 {
             0
@@ -198,6 +218,51 @@ pub extern "C" fn glBufferData(
     data: *const std::ffi::c_void,
     usage: u32,
 ) {
+    // GL_PARAMETER_BUFFER 用 shadow memory 管理，不下传 GLES
+    if target == GL_PARAMETER_BUFFER {
+        let desktop_id = state::with_state_ref(|s| {
+            s.bound_buffers_by_target.get(&target).copied()
+        });
+        if let Some(desktop_id) = desktop_id {
+            let alloc_size = if size > 0 { size as usize } else { 0 };
+            state::with_state(|s| {
+                // 释放旧 shadow（重新分配）
+                if let Some(old) = s.persistent_buffers.remove(&desktop_id) {
+                    unsafe { libc::free(old.shadow_ptr as *mut libc::c_void) };
+                }
+                if alloc_size > 0 {
+                    let shadow_ptr = unsafe { libc::malloc(alloc_size) as *mut u8 };
+                    if !shadow_ptr.is_null() {
+                        if !data.is_null() {
+                            unsafe {
+                                std::ptr::copy_nonoverlapping(
+                                    data as *const u8,
+                                    shadow_ptr,
+                                    alloc_size,
+                                );
+                            }
+                        }
+                        s.persistent_buffers.insert(
+                            desktop_id,
+                            state::PersistentMapping {
+                                shadow_ptr,
+                                shadow_size: alloc_size,
+                                gles_buffer_id: 0,
+                                dirty_offset: 0,
+                                dirty_length: 0,
+                            },
+                        );
+                    }
+                }
+            });
+            log::debug!(
+                "[FluorateGL] glBufferData(GL_PARAMETER_BUFFER): shadow size={}",
+                alloc_size
+            );
+        }
+        return;
+    }
+
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.buffer_data)(target, size, data, usage);
     });
@@ -211,6 +276,30 @@ pub extern "C" fn glBufferSubData(
     size: isize,
     data: *const std::ffi::c_void,
 ) {
+    // GL_PARAMETER_BUFFER 写入 shadow memory，不下传 GLES
+    if target == GL_PARAMETER_BUFFER {
+        state::with_state(|s| {
+            let desktop_id = match s.bound_buffers_by_target.get(&target).copied() {
+                Some(id) => id,
+                None => return,
+            };
+            if let Some(pm) = s.persistent_buffers.get_mut(&desktop_id) {
+                let off = if offset > 0 { offset as usize } else { 0 };
+                let len = if size > 0 { size as usize } else { 0 };
+                if off + len <= pm.shadow_size && !data.is_null() {
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            data as *const u8,
+                            pm.shadow_ptr.add(off),
+                            len,
+                        );
+                    }
+                }
+            }
+        });
+        return;
+    }
+
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.buffer_sub_data)(target, offset, size, data);
     });
@@ -261,6 +350,82 @@ pub(crate) fn sync_persistent_buffer_if_needed(target: u32) {
     });
 }
 
+/// 从 GL_PARAMETER_BUFFER 读取实际 draw count（u32），用于模拟 glMultiDraw*IndirectCount。
+///
+/// 原生 GLES 不支持从 GPU buffer 读 count，需在 CPU 侧读出后循环调用对应的
+/// 单次 Indirect。两级读取策略：
+///
+/// 1. **shadow memory**（Sodium 典型场景，count buffer 是持久映射的）：
+///    直接从 `shadow_ptr + offset` 读 4 字节，零 GLES 调用、零同步开销。
+///    shadow memory 是宿主写入的唯一目的地，是 CPU 可见的最新数据源。
+/// 2. **glMapBufferRange 兜底**（非持久映射的 count buffer）：
+///    借 GL_COPY_READ_BUFFER 临时绑定 count buffer → `glMapBufferRange(READ_BIT)`
+///    读 4 字节 → `glUnmapBuffer` → 恢复原绑定。
+///
+/// 返回 None 表示 count buffer 未绑定 / 读取失败，调用方应跳过本次 draw。
+pub(crate) fn read_parameter_buffer_u32(offset: isize) -> Option<u32> {
+    if offset < 0 {
+        return None;
+    }
+
+    // 路径 1: shadow memory（持久映射 buffer）
+    let shadow_read = state::with_state_ref(|s| {
+        let desktop_id = s.bound_buffers_by_target.get(&GL_PARAMETER_BUFFER).copied()?;
+        let pm = s.persistent_buffers.get(&desktop_id)?;
+        let off = offset as usize;
+        if off.checked_add(4)? > pm.shadow_size {
+            return None;
+        }
+        // SAFETY: shadow_ptr 由 malloc 分配，已校验 offset+4 在 shadow_size 范围内
+        let val = unsafe { std::ptr::read_unaligned(pm.shadow_ptr.add(off) as *const u32) };
+        Some(val)
+    });
+    if let Some(v) = shadow_read {
+        log::debug!(
+            "[FluorateGL] read_parameter_buffer_u32: shadow read offset={} count={}",
+            offset, v
+        );
+        return Some(v);
+    }
+
+    // 路径 2: glMapBufferRange 兜底
+    // GL_PARAMETER_BUFFER 是非法 target，需借 GL_COPY_READ_BUFFER 临时绑定
+    let desktop_id = state::with_state_ref(|s| {
+        s.bound_buffers_by_target.get(&GL_PARAMETER_BUFFER).copied()
+    })?;
+    let gles_id = state::with_state_ref(|s| s.buffers.get_gles(desktop_id))?;
+
+    // 保存 GL_COPY_READ_BUFFER 原绑定以便恢复（避免污染宿主状态）
+    let prev_gles = state::with_state_ref(|s| {
+        s.bound_buffers_by_target
+            .get(&GL_COPY_READ_BUFFER)
+            .copied()
+            .and_then(|d| s.buffers.get_gles(d))
+    })
+    .unwrap_or(0);
+
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.bind_buffer)(GL_COPY_READ_BUFFER, gles_id);
+        let ptr = (dispatch.map_buffer_range)(GL_COPY_READ_BUFFER, offset, 4, GL_MAP_READ_BIT);
+        if ptr.is_null() {
+            log::warn!(
+                "[FluorateGL] read_parameter_buffer_u32: map_range failed (offset={})",
+                offset
+            );
+            (dispatch.bind_buffer)(GL_COPY_READ_BUFFER, prev_gles);
+            return None;
+        }
+        let val = std::ptr::read_unaligned(ptr as *const u32);
+        (dispatch.unmap_buffer)(GL_COPY_READ_BUFFER);
+        (dispatch.bind_buffer)(GL_COPY_READ_BUFFER, prev_gles);
+        log::debug!(
+            "[FluorateGL] read_parameter_buffer_u32: map_range read offset={} count={}",
+            offset, val
+        );
+        Some(val)
+    })
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glBufferStorage(
@@ -269,10 +434,13 @@ pub extern "C" fn glBufferStorage(
     data: *const std::ffi::c_void,
     flags: u32,
 ) {
-    // 带 PERSISTENT 位时，在 CPU 端分配 shadow memory 模拟持久映射
-    let is_persistent = flags & GL_MAP_PERSISTENT_BIT_STORAGE != 0 && size > 0;
+    // GL_PARAMETER_BUFFER 是非法 GLES target，必须用 shadow memory 模拟
+    let is_parameter_buffer = target == GL_PARAMETER_BUFFER;
+    // 带 PERSISTENT 位 或 GL_PARAMETER_BUFFER 时，在 CPU 端分配 shadow memory 模拟持久映射
+    let need_shadow =
+        (flags & GL_MAP_PERSISTENT_BIT_STORAGE != 0 || is_parameter_buffer) && size > 0;
 
-    if is_persistent {
+    if need_shadow {
         // 查 target 绑定的 desktop buffer ID 和 GLES buffer ID
         let desktop_id = state::with_state_ref(|s| s.bound_buffers_by_target.get(&target).copied());
         let gles_id = state::with_state_ref(|s| {
@@ -281,6 +449,12 @@ pub extern "C" fn glBufferStorage(
 
         if let (Some(desktop_id), Some(gles_id)) = (desktop_id, gles_id) {
             let alloc_size = size as usize;
+            // 释放已有 shadow（重新分配场景）
+            state::with_state(|s| {
+                if let Some(old) = s.persistent_buffers.remove(&desktop_id) {
+                    unsafe { libc::free(old.shadow_ptr as *mut libc::c_void) };
+                }
+            });
             let shadow_ptr = unsafe { libc::malloc(alloc_size) as *mut u8 };
             if !shadow_ptr.is_null() {
                 // 初始数据拷贝
@@ -301,16 +475,23 @@ pub extern "C" fn glBufferStorage(
                             shadow_size: alloc_size,
                             gles_buffer_id: gles_id,
                             dirty_offset: 0,
-                            dirty_length: alloc_size, // 初始全量同步
+                            // GL_PARAMETER_BUFFER 不需要同步到 GLES（无 GLES buffer），
+                            // 持久映射的普通 buffer 初始全量同步
+                            dirty_length: if is_parameter_buffer { 0 } else { alloc_size },
                         },
                     );
                 });
                 log::debug!(
-                    "[FluorateGL] glBufferStorage: persistent shadow memory allocated (target=0x{:04X} desktop={} gles={} size={})",
-                    target, desktop_id, gles_id, alloc_size
+                    "[FluorateGL] glBufferStorage: shadow memory allocated (target=0x{:04X} desktop={} gles={} size={} persistent={})",
+                    target, desktop_id, gles_id, alloc_size, !is_parameter_buffer
                 );
             }
         }
+    }
+
+    // GL_PARAMETER_BUFFER 不下传 GLES（非法 target，数据由 shadow 管理）
+    if is_parameter_buffer {
+        return;
     }
 
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -327,6 +508,23 @@ pub extern "C" fn glBufferStorage(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glMapBuffer(target: u32, access: u32) -> *mut std::ffi::c_void {
+    // GL_PARAMETER_BUFFER 走 shadow memory 路径，委托给 glMapBufferRange
+    if target == GL_PARAMETER_BUFFER {
+        // 从 shadow_size 获取大小，整段映射
+        let size = state::with_state_ref(|s| {
+            s.bound_buffers_by_target
+                .get(&target)
+                .copied()
+                .and_then(|id| s.persistent_buffers.get(&id).map(|pm| pm.shadow_size as isize))
+        })
+        .unwrap_or(0);
+        if size <= 0 {
+            return std::ptr::null_mut();
+        }
+        // 复用 glMapBufferRange 的 GL_PARAMETER_BUFFER 拦截逻辑
+        return glMapBufferRange(target, 0, size, access);
+    }
+
     backend::with_gles_dispatch(|dispatch| unsafe {
         // GLES 不提供 glMapBuffer（仅 glMapBufferRange），用 glMapBufferRange 模拟。
         // 若 map_buffer_range 也是 stub（驱动不支持），返回 null 避免后续 UB。
@@ -367,6 +565,22 @@ pub extern "C" fn glMapBufferRange(
     length: isize,
     access: u32,
 ) -> *mut std::ffi::c_void {
+    // GL_PARAMETER_BUFFER 返回 shadow_ptr + offset，不下传 GLES
+    if target == GL_PARAMETER_BUFFER {
+        let ptr = state::with_state_ref(|s| {
+            let desktop_id = s.bound_buffers_by_target.get(&target).copied()?;
+            let pm = s.persistent_buffers.get(&desktop_id)?;
+            let off = if offset > 0 { offset as usize } else { 0 };
+            let len = if length > 0 { length as usize } else { 0 };
+            if off + len > pm.shadow_size {
+                return None;
+            }
+            // SAFETY: shadow_ptr 由 malloc 分配，已校验 off+len 在 shadow_size 范围内
+            Some(unsafe { pm.shadow_ptr.add(off) as *mut std::ffi::c_void })
+        });
+        return ptr.unwrap_or(std::ptr::null_mut());
+    }
+
     backend::with_gles_dispatch(|dispatch| unsafe {
         // 剥离 GLES 不支持的 PERSISTENT/COHERENT 位，否则 GLES 返回 NULL
         let gles_access = translate_map_access(access);
@@ -376,12 +590,20 @@ pub extern "C" fn glMapBufferRange(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glUnmapBuffer(target: u32) -> u8 {
+    // GL_PARAMETER_BUFFER 的 shadow memory 无需 unmap，直接返回成功
+    if target == GL_PARAMETER_BUFFER {
+        return 1;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.unmap_buffer)(target) })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glFlushMappedBufferRange(target: u32, offset: isize, length: isize) {
+    // GL_PARAMETER_BUFFER 的 shadow memory 是 CPU 端即时可见，无需 flush
+    if target == GL_PARAMETER_BUFFER {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.flush_mapped_buffer_range)(target, offset, length);
     });

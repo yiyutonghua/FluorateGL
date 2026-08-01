@@ -12,24 +12,15 @@
 //!   否则循环 `glDrawElements`（丢弃 basevertex）
 //! - `glMultiDrawArrays/ElementsIndirect`：若单次 Indirect 可用则循环（处理 stride=0 紧密排列），
 //!   否则无法模拟，告警返回
-//! - `IndirectCount` 系列：无法可靠模拟，告警返回
+//! - `IndirectCount` 系列：GLES 不支持 GL_PARAMETER_BUFFER，通过 CPU 端读取 count buffer
+//!   （shadow memory 优先，glMapBufferRange 兜底）后循环单次 Indirect 模拟
 
 use crate::backend;
 use crate::backend::dispatch::GlesDispatch;
-use std::sync::atomic::{AtomicBool, Ordering};
+use crate::gl::buffer::{read_parameter_buffer_u32, sync_persistent_buffer_if_needed};
 
-/// IndirectCount 不支持时的首次告警标志（避免每帧刷屏）
-static INDIRECT_COUNT_WARNED: AtomicBool = AtomicBool::new(false);
-
-/// 首次告警：IndirectCount 无法模拟，仅首次调用时输出 warn，后续静默跳过。
-fn warn_indirect_count_unsupported(fname: &str) {
-    if !INDIRECT_COUNT_WARNED.swap(true, Ordering::Relaxed) {
-        log::warn!(
-            "[FluorateGL] {}: GLES 不支持 indirect count，无法模拟，后续调用将静默跳过",
-            fname
-        );
-    }
-}
+/// GL_DRAW_INDIRECT_BUFFER：indirect command buffer 的 target（GLES 3.1 合法）
+const GL_DRAW_INDIRECT_BUFFER: u32 = 0x8F3F;
 
 /// 判断 dispatch 函数指针是否为共享的未实现 stub。
 fn is_stub(dispatch: &GlesDispatch, ptr: *const ()) -> bool {
@@ -191,6 +182,8 @@ pub extern "C" fn glMultiDrawArraysIndirect(
     if drawcount <= 0 {
         return;
     }
+    // 同步 GL_DRAW_INDIRECT_BUFFER 持久映射的脏区域（若 indirect buffer 是持久映射的）
+    sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
     let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
         let supported = caps.multi_draw_indirect
@@ -220,6 +213,8 @@ pub extern "C" fn glMultiDrawElementsIndirect(
     if drawcount <= 0 {
         return;
     }
+    // 同步 GL_DRAW_INDIRECT_BUFFER 持久映射的脏区域（若 indirect buffer 是持久映射的）
+    sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
     let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
         let supported = caps.multi_draw_indirect
@@ -246,6 +241,13 @@ pub extern "C" fn glMultiDrawArraysIndirectCount(
     maxdrawcount: i32,
     stride: isize,
 ) {
+    if maxdrawcount <= 0 {
+        return;
+    }
+
+    // 同步 indirect buffer 持久映射脏区域
+    sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
+
     let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
         let supported = caps.indirect_count
@@ -253,21 +255,37 @@ pub extern "C" fn glMultiDrawArraysIndirectCount(
                 dispatch,
                 dispatch.multi_draw_arrays_indirect_count as *const (),
             );
-        if !supported {
-            // IndirectCount 需从 GPU buffer 读取实际 drawcount，无法在 CPU 侧可靠模拟。
-            // 仅当 maxdrawcount<=0 时可安全跳过，否则首次告警后静默。
-            if maxdrawcount > 0 {
-                warn_indirect_count_unsupported("glMultiDrawArraysIndirectCount");
-            }
+        if supported {
+            (dispatch.multi_draw_arrays_indirect_count)(
+                mode,
+                indirect,
+                drawcount,
+                maxdrawcount,
+                stride,
+            );
             return;
         }
-        (dispatch.multi_draw_arrays_indirect_count)(
-            mode,
-            indirect,
-            drawcount,
-            maxdrawcount,
-            stride,
-        );
+        // 降级：CPU 端读取 count buffer 的实际 drawcount，循环 glDrawArraysIndirect
+        let Some(actual) = read_parameter_buffer_u32(drawcount) else {
+            // count buffer 未绑定或读取失败，按 maxdrawcount 兜底（best-effort）
+            log::debug!(
+                "[FluorateGL] glMultiDrawArraysIndirectCount: count buffer 读取失败，使用 maxdrawcount={} 兜底",
+                maxdrawcount
+            );
+            let step = array_indirect_stride(stride);
+            for i in 0..maxdrawcount as isize {
+                let cmd_ptr =
+                    (indirect as *const u8).offset(i * step) as *const std::ffi::c_void;
+                (dispatch.draw_arrays_indirect)(mode, cmd_ptr);
+            }
+            return;
+        };
+        let actual = actual.min(maxdrawcount as u32) as i32;
+        let step = array_indirect_stride(stride);
+        for i in 0..actual as isize {
+            let cmd_ptr = (indirect as *const u8).offset(i * step) as *const std::ffi::c_void;
+            (dispatch.draw_arrays_indirect)(mode, cmd_ptr);
+        }
     });
 }
 
@@ -281,6 +299,13 @@ pub extern "C" fn glMultiDrawElementsIndirectCount(
     maxdrawcount: i32,
     stride: isize,
 ) {
+    if maxdrawcount <= 0 {
+        return;
+    }
+
+    // 同步 indirect buffer 持久映射脏区域
+    sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
+
     let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
         let supported = caps.indirect_count
@@ -288,19 +313,36 @@ pub extern "C" fn glMultiDrawElementsIndirectCount(
                 dispatch,
                 dispatch.multi_draw_elements_indirect_count as *const (),
             );
-        if !supported {
-            if maxdrawcount > 0 {
-                warn_indirect_count_unsupported("glMultiDrawElementsIndirectCount");
-            }
+        if supported {
+            (dispatch.multi_draw_elements_indirect_count)(
+                mode,
+                type_,
+                indirect,
+                drawcount,
+                maxdrawcount,
+                stride,
+            );
             return;
         }
-        (dispatch.multi_draw_elements_indirect_count)(
-            mode,
-            type_,
-            indirect,
-            drawcount,
-            maxdrawcount,
-            stride,
-        );
+        // 降级：CPU 端读取 count buffer 的实际 drawcount，循环 glDrawElementsIndirect
+        let Some(actual) = read_parameter_buffer_u32(drawcount) else {
+            log::debug!(
+                "[FluorateGL] glMultiDrawElementsIndirectCount: count buffer 读取失败，使用 maxdrawcount={} 兜底",
+                maxdrawcount
+            );
+            let step = element_indirect_stride(stride);
+            for i in 0..maxdrawcount as isize {
+                let cmd_ptr =
+                    (indirect as *const u8).offset(i * step) as *const std::ffi::c_void;
+                (dispatch.draw_elements_indirect)(mode, type_, cmd_ptr);
+            }
+            return;
+        };
+        let actual = actual.min(maxdrawcount as u32) as i32;
+        let step = element_indirect_stride(stride);
+        for i in 0..actual as isize {
+            let cmd_ptr = (indirect as *const u8).offset(i * step) as *const std::ffi::c_void;
+            (dispatch.draw_elements_indirect)(mode, type_, cmd_ptr);
+        }
     });
 }

@@ -1,10 +1,16 @@
 use crate::backend;
+use crate::gl::buffer::sync_persistent_buffer_if_needed;
 use crate::gl::getter;
 use crate::state;
 use libc::c_char;
 use std::ffi::CString;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// GL_ARRAY_BUFFER target
+const GL_ARRAY_BUFFER: u32 = 0x8892;
+/// GL_ELEMENT_ARRAY_BUFFER target
+const GL_ELEMENT_ARRAY_BUFFER: u32 = 0x8893;
 
 /// glGetIntegerv 绑定查询时 GLES ID 未在 IdMap 中找到首次告警标志
 static BINDING_ID_MISS_WARNED: AtomicBool = AtomicBool::new(false);
@@ -197,6 +203,8 @@ pub extern "C" fn glPixelStorei(pname: u32, param: i32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glDrawArrays(mode: u32, first: i32, count: i32) {
+    // 同步持久映射 buffer 脏区域（若 vertex buffer 是持久映射的）
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
     let bound_vao = state::with_state(|s| s.bound_vertex_array);
     let bound_buf = state::with_state(|s| s.bound_buffer);
     log::debug!(
@@ -221,6 +229,9 @@ pub extern "C" fn glDrawElements(
     type_: u32,
     indices: *const std::ffi::c_void,
 ) {
+    // 同步持久映射 buffer 脏区域（若 vertex/index buffer 是持久映射的）
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
+    sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
     let bound_vao = state::with_state(|s| s.bound_vertex_array);
     let bound_buf = state::with_state(|s| s.bound_buffer);
     log::debug!(

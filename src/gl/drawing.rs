@@ -11,11 +11,23 @@
 //! - `glPrimitiveRestartIndex`：不支持时静默忽略
 //! - BaseVertex 系列：不支持时降级为普通 draw（丢弃 basevertex，影响索引正确性，仅 best-effort）
 //! - BaseInstance 系列：不支持时降级为对应 Instanced 版（丢弃 baseinstance）
-//! - Indirect 系列：不支持时无法模拟（需读 GPU buffer），告警返回
+//! - Indirect 系列：GLES 3.1 core（项目前提），直接转发
+//!
+//! 持久映射 buffer 同步：每个 draw call 前调用 [`sync_persistent_buffer_if_needed`]
+//! 同步 GL_ARRAY_BUFFER / GL_ELEMENT_ARRAY_BUFFER / GL_DRAW_INDIRECT_BUFFER 的脏区域。
+//! 非持久映射 buffer 查询快速短路（两次 FxHashMap 查询），开销可忽略。
 
 use crate::backend;
 use crate::backend::dispatch::GlesDispatch;
+use crate::gl::buffer::sync_persistent_buffer_if_needed;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// GL_ARRAY_BUFFER target
+const GL_ARRAY_BUFFER: u32 = 0x8892;
+/// GL_ELEMENT_ARRAY_BUFFER target
+const GL_ELEMENT_ARRAY_BUFFER: u32 = 0x8893;
+/// GL_DRAW_INDIRECT_BUFFER target
+const GL_DRAW_INDIRECT_BUFFER: u32 = 0x8F3F;
 
 /// BaseVertex 不支持时的首次告警标志（避免每帧刷屏）
 static BASE_VERTEX_WARNED: AtomicBool = AtomicBool::new(false);
@@ -60,6 +72,8 @@ pub extern "C" fn glDrawRangeElements(
     type_: u32,
     indices: *const std::ffi::c_void,
 ) {
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
+    sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.draw_range_elements as *const ()) {
             // GLES 不支持 glDrawRangeElements 时降级为 glDrawElements
@@ -77,6 +91,7 @@ pub extern "C" fn glDrawRangeElements(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glDrawArraysInstanced(mode: u32, first: i32, count: i32, instancecount: i32) {
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.draw_arrays_instanced)(mode, first, count, instancecount);
     });
@@ -91,6 +106,8 @@ pub extern "C" fn glDrawElementsInstanced(
     indices: *const std::ffi::c_void,
     instancecount: i32,
 ) {
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
+    sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.draw_elements_instanced)(mode, count, type_, indices, instancecount);
     });
@@ -119,6 +136,8 @@ pub extern "C" fn glDrawElementsBaseVertex(
     indices: *const std::ffi::c_void,
     basevertex: i32,
 ) {
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
+    sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
     let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
         // 优先用扩展能力判断，is_stub 兜底（驱动声明扩展但未导出符号的边界情况）
@@ -138,6 +157,8 @@ pub extern "C" fn glDrawElementsBaseVertex(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glDrawArraysIndirect(mode: u32, indirect: *const std::ffi::c_void) {
+    // 同步 indirect buffer 持久映射脏区域（若 indirect buffer 是持久映射的）
+    sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
     // GLES 3.1 core 特性，项目前提，直接转发
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.draw_arrays_indirect)(mode, indirect);
@@ -147,6 +168,8 @@ pub extern "C" fn glDrawArraysIndirect(mode: u32, indirect: *const std::ffi::c_v
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glDrawElementsIndirect(mode: u32, type_: u32, indirect: *const std::ffi::c_void) {
+    // 同步 indirect buffer 持久映射脏区域（若 indirect buffer 是持久映射的）
+    sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
     // GLES 3.1 core 特性，项目前提，直接转发
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.draw_elements_indirect)(mode, type_, indirect);
@@ -162,6 +185,7 @@ pub extern "C" fn glDrawArraysInstancedBaseInstance(
     instancecount: i32,
     baseinstance: u32,
 ) {
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
     let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
         let supported = caps.base_instance
@@ -196,6 +220,8 @@ pub extern "C" fn glDrawElementsInstancedBaseInstance(
     instancecount: i32,
     baseinstance: u32,
 ) {
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
+    sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
     let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
         let supported = caps.base_instance
@@ -229,6 +255,8 @@ pub extern "C" fn glDrawElementsInstancedBaseVertex(
     instancecount: i32,
     basevertex: i32,
 ) {
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
+    sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
     let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
         let supported = caps.draw_elements_base_vertex
@@ -263,6 +291,8 @@ pub extern "C" fn glDrawElementsInstancedBaseVertexBaseInstance(
     basevertex: i32,
     baseinstance: u32,
 ) {
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
+    sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
     let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
         // 需要 base_vertex 和 base_instance 都支持
