@@ -262,9 +262,21 @@ pub extern "C" fn glBufferData(
         return;
     }
 
-    // 持久映射 buffer：重新分配 shadow memory（大小可能变化），并下传 GLES
-    let desktop_id = state::with_state_ref(|s| s.bound_buffers_by_target.get(&target).copied());
-    if let Some(desktop_id) = desktop_id {
+    // 仅持久映射 buffer（已通过 glBufferStorage(PERSISTENT) 创建 shadow）需要重新分配 shadow：
+    // 大小可能变化，先释放旧 shadow 再分配新的。普通 buffer 的 glBufferData 只下传 GLES，
+    // 不创建 shadow——否则 glMapBufferRange 会误走 shadow 路径返回 shadow_ptr，
+    // 而 dirty_length=0（本函数所设）导致 draw 前 sync 空转，宿主写入的数据丢失在 shadow 中，
+    // GLES buffer 只有初始数据，造成红屏/UI 消失。
+    let shadow_realloc = state::with_state_ref(|s| {
+        let desktop_id = s.bound_buffers_by_target.get(&target).copied()?;
+        // 仅当该 buffer 已是持久映射的才需要重新分配 shadow
+        if s.persistent_buffers.contains_key(&desktop_id) {
+            Some(desktop_id)
+        } else {
+            None
+        }
+    });
+    if let Some(desktop_id) = shadow_realloc {
         let gles_id = state::with_state_ref(|s| s.buffers.get_gles(desktop_id));
         if let Some(gles_id) = gles_id {
             let alloc_size = if size > 0 { size as usize } else { 0 };
@@ -299,6 +311,11 @@ pub extern "C" fn glBufferData(
                     }
                 }
             });
+            log::debug!(
+                "[FluorateGL] glBufferData(0x{:04X}): persistent shadow reallocated size={}",
+                target,
+                alloc_size
+            );
         }
     }
 
