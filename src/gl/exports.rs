@@ -338,6 +338,22 @@ static FAKE_EXTENSIONS: &[&[u8]] = &[
     b"GL_ARB_shader_image_load_store\0",
     b"GL_ARB_separate_shader_objects\0",
     b"GL_ARB_vertex_attrib_binding\0",
+    // Draw 系列扩展：对应 dispatch.rs 中已加载的扩展函数。
+    // 声明必须与 capabilities 检测结果一致，否则宿主查询扩展后调用 stub 函数会崩溃。
+    // GLES 3.1 core：glDrawArraysIndirect / glDrawElementsIndirect
+    b"GL_ARB_draw_indirect\0",
+    // GLES 3.1 core：glMultiDrawArrays / glMultiDrawElements（部分驱动以 stub 加载）
+    // 桌面对应 GL_ARB_multi_draw_indirect，Sodium 0.8+ 查询此扩展决定是否启用 chunk batching
+    b"GL_ARB_multi_draw_indirect\0",
+    b"GL_EXT_multi_draw_indirect\0",
+    // GLES 3.2 / GL_OES_draw_elements_base_vertex：glDrawElementsBaseVertex 系列
+    b"GL_ARB_draw_elements_base_vertex\0",
+    b"GL_OES_draw_elements_base_vertex\0",
+    // GLES 3.2 / GL_EXT_base_instance：glDrawArraysInstancedBaseInstance 系列
+    b"GL_ARB_base_instance\0",
+    b"GL_EXT_base_instance\0",
+    // GLES 3.2 / GL_EXT_multi_draw_elements_base_vertex：glMultiDrawElementsBaseVertex
+    b"GL_EXT_multi_draw_elements_base_vertex\0",
     b"GL_ARB_timer_query\0",
     b"GL_ARB_buffer_storage\0",
     b"GL_ARB_get_program_binary\0",
