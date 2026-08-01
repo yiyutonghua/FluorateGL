@@ -60,6 +60,39 @@ pub(crate) fn is_unsupported_gles_cap(cap: u32) -> bool {
 // suppress_debug_noise 已 glDisable(GL_DEBUG_OUTPUT)，这里吞掉 MC 的重新启用，保持彻底关闭。
 const GL_DEBUG_OUTPUT: u32 = 0x9146;
 
+/// glDebugMessageCallback stub — 吞掉 MC/LWJGL 注册的 KHR_debug 回调。
+///
+/// Adreno 驱动无视 glDisable(GL_DEBUG_OUTPUT) 和 glDebugMessageControl 过滤，
+/// 在回调注册后仍持续发送 PERFORMANCE 消息（"Packing allocations" 等），
+/// 每条触发 LWJGL 的 Java 堆栈转储，导致 OptiFine 纹理图集上传阶段极端缓慢。
+///
+/// 不注册任何回调（直接吞掉），驱动即使生成消息也无回调可调用，彻底阻断噪声。
+/// 同时避免 MC 绕过拦截层通过 dlsym 找到 GLES 驱动的真实 glDebugMessageCallback。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glDebugMessageCallback(
+    _callback: *const std::ffi::c_void,
+    _user_param: *const std::ffi::c_void,
+) {
+    log::debug!(
+        "[FluorateGL] glDebugMessageCallback swallowed (callback not registered, driver debug noise blocked)"
+    );
+}
+
+/// glDebugMessageCallbackKHR stub — 与 glDebugMessageCallback 等价的 KHR 扩展入口。
+///
+/// 部分 LWJGL 版本优先查询 KHR 后缀版本，提供此入口确保两条查询路径都被拦截。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glDebugMessageCallbackKHR(
+    _callback: *const std::ffi::c_void,
+    _user_param: *const std::ffi::c_void,
+) {
+    log::debug!(
+        "[FluorateGL] glDebugMessageCallbackKHR swallowed (callback not registered, driver debug noise blocked)"
+    );
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glEnable(cap: u32) {

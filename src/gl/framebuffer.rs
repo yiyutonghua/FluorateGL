@@ -272,6 +272,23 @@ pub extern "C" fn glDrawBuffers(n: i32, bufs: *const u32) {
     });
 }
 
+/// glDrawBuffer(mode) — 桌面 GL 单缓冲区版本，GLES 无此函数。
+///
+/// 语义等价于 glDrawBuffers(1, &mode)。GLES 3.0+ FBO 默认绘制到
+/// GL_COLOR_ATTACHMENT0，调用此函数通常是无副作用的安全操作。
+///
+/// 实现：转发到 glDrawBuffers。避免 LWJGL capabilities 字段为 null，
+/// 导致 MC/OptiFine 设置 FBO 绘制缓冲区时抛 "No context is current" 错误，
+/// 进而触发 Adreno 驱动 "Packing allocations" 性能警告刷屏。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glDrawBuffer(mode: u32) {
+    log::debug!("[FluorateGL] glDrawBuffer(mode=0x{:04X}) -> glDrawBuffers(1, ...)", mode);
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.draw_buffers)(1, &mode);
+    });
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glReadBuffer(mode: u32) {
