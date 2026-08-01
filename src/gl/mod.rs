@@ -11,6 +11,7 @@
 //! - [`multi_draw`]：`glMultiDraw*` 系列（含 Indirect/IndirectCount）
 //! - [`render_state`]：混合/深度/模板等可编程管线状态
 //! - [`getter`]：`glGet*` 系列查询
+//! - [`pixel`]：像素/点参数（`glClampColor` stub、`glPointParameter*` 转发）
 //! - [`exports`]：通用导出（`glClear` 等）与 GLES 不支持 cap 的过滤
 //!
 //! 所有拦截函数通过 [`crate::backend`] 取得 GLES dispatch 后转发，必要时做
@@ -22,6 +23,7 @@ pub mod exports;
 pub mod framebuffer;
 pub mod getter;
 pub mod multi_draw;
+pub mod pixel;
 pub mod program;
 pub mod query;
 pub mod render_state;

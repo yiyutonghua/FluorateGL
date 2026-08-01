@@ -7,7 +7,7 @@
 //! 4. gles_compile：SPIR-V → GLSL ES 编译（spirv-cross2）
 //! 5. postprocess：GLSL ES 后处理（移除 binding、处理 outColor、precision）
 
-use crate::shader_translator::{gles_compile, spirv_compile, string_pass};
+use crate::shader_translator::{cache, gles_compile, spirv_compile, string_pass};
 
 #[derive(Debug, Clone)]
 pub enum TranslationResult {
@@ -25,7 +25,20 @@ pub enum TranslationResult {
 /// 还是 panic（catch_unwind 捕获），都统一回退到 string_pass 字符串级翻译。
 /// 这避免了 shader.rs 的 Failed 分支透传桌面 GLSL 给 GLES 导致崩溃。
 pub fn translate(source: &str, stage: u32) -> TranslationResult {
-    match std::panic::catch_unwind(|| translate_internal(source, stage)) {
+    // 缓存 key 中的 gles_version：translate 对外不暴露该参数，
+    // 翻译结果对调用方是确定的，使用固定值 320（gles_version_candidates 的首选）即可唯一标识输入。
+    const CACHE_GLES_VERSION: u32 = 320;
+
+    // 查询缓存：命中则跳过整条 SPIR-V 翻译管线
+    if let Some(cached) = cache::global_cache().get(source, stage, CACHE_GLES_VERSION) {
+        log::debug!(
+            "[ShaderTranslator] 缓存命中，跳过翻译流程 (stage 0x{:04X})",
+            stage
+        );
+        return TranslationResult::Translated(cached);
+    }
+
+    let result = match std::panic::catch_unwind(|| translate_internal(source, stage)) {
         Ok(TranslationResult::Translated(s)) => TranslationResult::Translated(s),
         Ok(TranslationResult::PassThrough) => TranslationResult::PassThrough,
         Ok(TranslationResult::Failed) | Err(_) => {
@@ -42,7 +55,19 @@ pub fn translate(source: &str, stage: u32) -> TranslationResult {
             );
             TranslationResult::Translated(fallback)
         }
+    };
+
+    // 仅缓存成功翻译的结果；PassThrough 不缓存（语义为“不翻译”）
+    if let TranslationResult::Translated(ref s) = result {
+        log::debug!(
+            "[ShaderTranslator] 翻译完成，存入缓存 (stage 0x{:04X}, {} chars)",
+            stage,
+            s.len()
+        );
+        cache::global_cache().put(source, stage, CACHE_GLES_VERSION, s.clone());
     }
+
+    result
 }
 
 /// 翻译管线内部实现

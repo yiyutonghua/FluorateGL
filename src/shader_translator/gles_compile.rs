@@ -4,9 +4,13 @@
 //! 对齐 MobileGlues 的 spirv-cross 配置：
 //! - es_default_float_precision_highp = true
 //! - es_default_int_precision_highp = true
-//! - common.flip_vertex_y = true
-//! - common.fixup_clipspace = true
+//! - common.flip_vertex_y = false（MobileGlues 未显式设置，用默认 false）
+//! - common.fixup_clipspace = false（MobileGlues 未显式设置，用默认 false）
 //! - common.emit_line_directives = false
+//!
+//! 注意：MobileGlues 的 client 是 OpenGL（EShClientOpenGL）而非 Vulkan，
+//! 因此 flip_vertex_y / fixup_clipspace 默认 false 即正确（OpenGL NDC Y-up、
+//! clip space [-w,w]）。FluorateGL 同样使用 OpenGL client，保持默认 false。
 
 use spirv_cross2::compile::glsl::GlslVersion;
 use spirv_cross2::compile::{CompilableTarget, CompiledArtifact};
@@ -49,13 +53,14 @@ pub fn compile(spv: &[u32], version: u16) -> Result<String, SpirvCrossError> {
     options.es_default_int_precision_highp = true;
 
     // 不翻转 Y 轴：输入是桌面 OpenGL SPIR-V（client=OpenGL，NDC Y-up），
-    // GLES 同样是 Y-up，无需翻转。MobileGlues 设 true 是因其输入方言为 Vulkan（Y-down），
-    // FluorateGL 用 Target::OpenGL（Y-up），设 true 会导致 Y 二次翻转、画面上下颠倒。
+    // GLES 同样是 Y-up，无需翻转。MobileGlues 同样使用 OpenGL client，
+    // 未显式设置 flip_vertex_y（用默认 false）。若误设 true 会导致 Y 翻转、画面上下颠倒。
     options.common.flip_vertex_y = false;
 
     // 不修正 clip space：桌面 OpenGL 与 GLES 都使用 [-w,w] clip space（NDC 深度 [-1,1]），
-    // 无需 remap。fixup_clipspace 假设输入是 Vulkan（[0,w]），设 true 会把 [-w,w] 错误映射，
-    // 导致深度测试全错。MobileGlues 设 true 同样是因 Vulkan 输入方言。
+    // 无需 remap。MobileGlues 同样使用 OpenGL client，未显式设置 fixup_clipspace（用默认 false）。
+    // fixup_clipspace 假设输入是 Vulkan（[0,w]），误设 true 会把 [-w,w] 错误映射，
+    // 导致深度测试全错。
     options.common.fixup_clipspace = false;
 
     // 不输出 #line 指令（我们在后处理中统一清理）

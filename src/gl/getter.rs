@@ -154,3 +154,25 @@ pub extern "C" fn glIsEnabled(cap: u32) -> u8 {
 pub extern "C" fn glIsEnabledi(cap: u32, index: u32) -> u8 {
     backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.is_enabled_i)(cap, index) })
 }
+
+/// glGetVertexAttribdv — GL 2.0 顶点属性查询（double 数组版本）。
+///
+/// GLES 仅提供 glGetVertexAttribfv（float 版本），故分配临时 f32 缓冲接收结果，
+/// 再逐元素扩展为 f64 写入调用方缓冲。vertex attrib 查询最多返回 4 个分量
+/// （如 GL_CURRENT_VERTEX_ATTRIB）。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetVertexAttribdv(index: u32, pname: u32, params: *mut f64) {
+    if params.is_null() {
+        return;
+    }
+    let mut temp = [0.0f32; 4];
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_vertex_attrib_fv)(index, pname, temp.as_mut_ptr());
+    });
+    unsafe {
+        for (i, v) in temp.iter().enumerate() {
+            *params.add(i) = *v as f64;
+        }
+    }
+}

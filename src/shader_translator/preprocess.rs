@@ -43,6 +43,10 @@ pub fn preprocess(source: &str, stage: u32) -> String {
     // 参考 MobileGlues 的同类修复：setPreamble("#undef VULKAN\n")
     undef_vulkan_macro(&mut result);
     rename_vulkan_builtin_variables(&mut result);
+    // 转换 samplerBuffer 系列 → 2D sampler（GLES 不支持纹理缓冲区，MC 光影 mod 常用）
+    result = convert_sampler_buffer(&result);
+    // 注入 textureQueryLod polyfill（GLES 3.0 不支持 GL 4.0 textureQueryLod）
+    inject_texture_query_lod(&mut result);
     // 转换独立 uniform 到 UBO（块名按 stage 区分，避免跨 stage type mismatch）
     result = convert_uniforms_to_ubo(&result, stage);
     inject_missing_locations(&mut result);
@@ -105,6 +109,112 @@ fn rename_vulkan_builtin_variables(result: &mut String) {
         log::debug!("[ShaderTranslator] preprocess 重命名了变量 sampler -> u_sampler");
         *result = new_result;
     }
+}
+
+/// 将 samplerBuffer/isamplerBuffer/usamplerBuffer 转换为对应的 2D sampler
+///
+/// GLES 3.2 不支持 samplerBuffer 系列（GL 3.1 纹理缓冲区），但 MC 光影 mod 常用。
+/// 参考 MobileGlues 的 process_sampler_buffer，将其转换为对应的 2D sampler，
+/// 并注入坐标映射辅助函数（buffer 纹理按逻辑宽度折行存储为 2D 纹理）。
+///
+/// 注意：这是简化版本，仅做类型替换 + 注入辅助代码，不重写 texelFetch 调用。
+/// MC 光影可能不实际使用 samplerBuffer，先实现基本转换。若 shader 不含
+/// samplerBuffer 则直接返回原文本，无副作用。
+fn convert_sampler_buffer(src: &str) -> String {
+    // 快速检查：不含 samplerBuffer 直接返回（避免无谓的正则替换）
+    if !src.contains("samplerBuffer") {
+        return src.to_string();
+    }
+
+    // 词边界匹配三种 buffer sampler 类型，capture group 保留前缀（i/u/空）
+    // \b 保证不会匹配子串（如 xisamplerBuffer 不会被命中）
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"\b(isampler|usampler|sampler)Buffer\b").unwrap());
+    let new_src = re.replace_all(src, "${1}2D").into_owned();
+
+    // 未发生实际替换（contains 命中但正则未匹配，例如注释中的文本）
+    if new_src.len() == src.len() {
+        return new_src;
+    }
+
+    log::debug!(
+        "[ShaderTranslator] preprocess 转换 samplerBuffer → sampler2D ({} -> {} chars)",
+        src.len(),
+        new_src.len()
+    );
+
+    // 注入坐标映射辅助代码（在 #version 行之后）
+    // buffer 纹理是一维的，转成 2D 纹理后需要按逻辑宽度折行
+    let helper = "\
+// samplerBuffer → sampler2D 转换辅助
+uniform int u_BufferTexWidth;  // buffer 纹理的逻辑宽度
+ivec2 bufferCoords(int index) {
+  return ivec2(index % u_BufferTexWidth, index / u_BufferTexWidth);
+}
+";
+    let insert_pos = find_insert_position(&new_src);
+    let mut result = String::with_capacity(new_src.len() + helper.len());
+    result.push_str(&new_src[..insert_pos]);
+    result.push_str(helper);
+    result.push_str(&new_src[insert_pos..]);
+    result
+}
+
+/// 注入 textureQueryLod polyfill 函数并替换调用点
+///
+/// GLES 3.0 不支持 textureQueryLod（GL 4.0），用 dFdx/dFdy + log2 软件实现。
+/// 参考 MobileGlues 的 inject_textureQueryLod。
+///
+/// 实现：
+/// 1. 在 #version 行之后注入两个 polyfill 重载（sampler2D / sampler3D）
+/// 2. 用正则替换调用点 `textureQueryLod(` → `textureQueryLod_polyfill(`
+///
+/// 注意：只替换函数调用，polyfill 函数自身定义（`textureQueryLod_polyfill(`）
+/// 不会被误匹配（`textureQueryLod` 后是 `_`，不满足 `\(`）。
+/// 若 shader 不含 textureQueryLod 则直接返回，无副作用。
+fn inject_texture_query_lod(result: &mut String) {
+    // 快速检查：不含 textureQueryLod 直接返回
+    if !result.contains("textureQueryLod") {
+        return;
+    }
+
+    // 注入 polyfill 函数（在 #version 行之后）
+    let polyfill = "\
+// textureQueryLod polyfill (GLES 3.0 不支持 GL 4.0 textureQueryLod)
+vec2 textureQueryLod_polyfill(sampler2D sampler, vec2 coords) {
+  vec2 dx = dFdx(coords);
+  vec2 dy = dFdy(coords);
+  float maxDelta = max(dot(dx, dx), dot(dy, dy));
+  float lod = 0.5 * log2(maxDelta);
+  return vec2(lod, lod);
+}
+vec2 textureQueryLod_polyfill(sampler3D sampler, vec3 coords) {
+  vec3 dx = dFdx(coords);
+  vec3 dy = dFdy(coords);
+  float maxDelta = max(dot(dx, dx), dot(dy, dy));
+  float lod = 0.5 * log2(maxDelta);
+  return vec2(lod, lod);
+}
+";
+    let insert_pos = find_insert_position(result);
+    let mut new_result = String::with_capacity(result.len() + polyfill.len());
+    new_result.push_str(&result[..insert_pos]);
+    new_result.push_str(polyfill);
+    new_result.push_str(&result[insert_pos..]);
+
+    // 替换函数调用 textureQueryLod( → textureQueryLod_polyfill(
+    // \btextureQueryLod\s*\( 不会匹配 textureQueryLod_polyfill(（d 后是 _，非词边界后的 \s*\()）
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"\btextureQueryLod\s*\(").unwrap());
+    let replaced = re.replace_all(&new_result, "textureQueryLod_polyfill(").into_owned();
+
+    if replaced.len() != new_result.len() {
+        log::debug!(
+            "[ShaderTranslator] preprocess 注入 textureQueryLod polyfill 并替换调用点"
+        );
+    }
+
+    *result = replaced;
 }
 
 /// 提取 GLSL 源码中的 #version 行

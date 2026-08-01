@@ -818,3 +818,85 @@ pub extern "C" fn glUniformMatrix3fv(location: i32, count: i32, transpose: u8, v
         (dispatch.uniform_matrix_3fv)(location, count, transpose, value);
     });
 }
+
+/// glShaderStorageBlockBinding stub — GL_ARB_shader_storage_buffer_object 扩展函数，no-op 实现。
+///
+/// 语义：修改 SSBO 的绑定点。GLES 3.1 支持 SSBO 但绑定方式不同，
+/// no-op 安全（MC/Sodium 不依赖动态 SSBO 重绑定）。已声明扩展，必须导出
+/// 避免 LWJGL capabilities 字段为 null 导致调用时抛错。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glShaderStorageBlockBinding(
+    program: u32,
+    storage_block_index: u32,
+    storage_block_binding: u32,
+) {
+    log::debug!(
+        "[FluorateGL] glShaderStorageBlockBinding(program={}, block={}, binding={}) -> no-op (SSBO rebind unsupported)",
+        program,
+        storage_block_index,
+        storage_block_binding
+    );
+}
+
+/// glProgramParameteri stub — GL 4.1 函数，no-op 实现。
+///
+/// 语义：设置 program 的参数（如 GL_PROGRAM_SEPARABLE）。GLES 不需要这些 flag，
+/// no-op 安全。必须导出避免 LWJGL capabilities 字段为 null。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glProgramParameteri(program: u32, pname: u32, value: i32) {
+    log::debug!(
+        "[FluorateGL] glProgramParameteri(program={}, pname={}, value={}) -> no-op (GLES ignores program params)",
+        program,
+        pname,
+        value
+    );
+}
+
+/// glGetFragDataIndex stub — GL 3.3 函数，返回 -1。
+///
+/// 语义：查询 fragment output 的 index（dual-source blending）。GLES 不支持
+/// dual-source blending，返回 -1 表示无 indexed output。必须导出避免
+/// LWJGL capabilities 字段为 null。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetFragDataIndex(program: u32, name: *const c_char) -> i32 {
+    let name_str = if name.is_null() {
+        "<null>".to_string()
+    } else {
+        unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned()
+    };
+    log::debug!(
+        "[FluorateGL] glGetFragDataIndex(program={}, name={:?}) -> -1 (dual-source blending unsupported)",
+        program,
+        name_str
+    );
+    -1
+}
+
+/// glGetActiveUniformName — GL 2.0 core 函数，转发 glGetActiveUniform 并提取 name。
+///
+/// 语义：查询指定 index 的 uniform 名称。glGetActiveUniform 返回 size/type/name，
+/// 本函数只关心 name，忽略 size 和 type_（传入临时变量接收后丢弃）。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetActiveUniformName(
+    program: u32,
+    index: u32,
+    buf_size: i32,
+    length: *mut i32,
+    name: *mut c_char,
+) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
+        if gles_id == 0 {
+            return;
+        }
+        // glGetActiveUniform 需要 size 和 type_ 参数，本函数忽略它们，
+        // 用临时变量接收后丢弃。
+        let mut size = 0i32;
+        let mut type_ = 0u32;
+        (dispatch.get_active_uniform)(gles_id, index, buf_size, length, &mut size, &mut type_, name);
+    });
+}

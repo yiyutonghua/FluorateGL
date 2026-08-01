@@ -93,6 +93,35 @@ pub extern "C" fn glDebugMessageCallbackKHR(
     );
 }
 
+/// glObjectLabel stub — GL_KHR_debug 对象调试标签。
+///
+/// 仅用于驱动侧 debug 标注，不影响渲染管线状态或输出。已声明 GL_KHR_debug 扩展，
+/// 必须导出此符号供宿主查询；GLES 标签能力非渲染必需，直接 no-op 吞掉。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glObjectLabel(
+    _identifier: u32,
+    _name: u32,
+    _length: i32,
+    _label: *const c_char,
+) {
+    log::debug!("[FluorateGL] glObjectLabel swallowed (debug label ignored, no rendering impact)");
+}
+
+/// glObjectLabelKHR stub — 与 glObjectLabel 等价的 KHR 扩展入口。
+///
+/// LWJGL 可能优先查询 KHR 后缀版本，提供此入口确保两条查询路径都被拦截。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glObjectLabelKHR(
+    _identifier: u32,
+    _name: u32,
+    _length: i32,
+    _label: *const c_char,
+) {
+    log::debug!("[FluorateGL] glObjectLabelKHR swallowed (debug label ignored, no rendering impact)");
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glEnable(cap: u32) {

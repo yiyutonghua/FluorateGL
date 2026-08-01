@@ -239,3 +239,91 @@ pub extern "C" fn glPixelStoref(pname: u32, param: f32) {
         }
     });
 }
+
+// === ARB 后缀别名 ===
+//
+// LWJGL 对 GL_ARB_draw_buffers_blend 扩展查询的是 ARB 后缀函数名，
+// 故需额外导出 ARB 版本。这些函数与 core 版本（glBlendEquationi 等）
+// 共享同一 GLES dispatch 实现，仅符号名不同；无需再做 ID 翻译或状态跟踪。
+
+/// glBlendEquationiARB — GL_ARB_draw_buffers_blend 别名，转发到 core 版本。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glBlendEquationiARB(buf: u32, mode: u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.blend_equation_i)(buf, mode);
+    });
+}
+
+/// glBlendEquationSeparateiARB — GL_ARB_draw_buffers_blend 别名，转发到 core 版本。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glBlendEquationSeparateiARB(buf: u32, modeRGB: u32, modeAlpha: u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.blend_equation_separate_i)(buf, modeRGB, modeAlpha);
+    });
+}
+
+/// glBlendFunciARB — GL_ARB_draw_buffers_blend 别名，转发到 core 版本。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glBlendFunciARB(buf: u32, src: u32, dst: u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.blend_func_i)(buf, src, dst);
+    });
+}
+
+/// glBlendFuncSeparateiARB — GL_ARB_draw_buffers_blend 别名，转发到 core 版本。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glBlendFuncSeparateiARB(
+    buf: u32,
+    srcRGB: u32,
+    dstRGB: u32,
+    srcAlpha: u32,
+    dstAlpha: u32,
+) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.blend_func_separate_i)(buf, srcRGB, dstRGB, srcAlpha, dstAlpha);
+    });
+}
+
+// === GL Core no-op stub ===
+//
+// 以下函数为桌面 GL Core 特性，GLES 无对应实现，导出 no-op stub 避免
+// LWJGL capabilities 字段为 null 导致调用时抛错。
+
+/// glProvokingVertex stub — 桌面 GL 3.2 函数，GLES 无对应实现。
+///
+/// 语义：指定 provoking vertex（FIRST/_LAST）用于 flat shading 取顶点属性。
+/// GLES 固定使用 LAST_VERTEX_PROVOKING，无法更改，no-op 实现安全。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glProvokingVertex(mode: u32) {
+    log::debug!(
+        "[FluorateGL] glProvokingVertex(0x{:04X}) -> no-op (GLES fixed to LAST_VERTEX_PROVOKING)",
+        mode
+    );
+}
+
+/// glBeginConditionalRender stub — 桌面 GL 3.0 函数，GLES 无对应实现。
+///
+/// 语义：基于 query object 结果条件渲染。GLES 不支持条件渲染，no-op 实现安全。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glBeginConditionalRender(id: u32, mode: u32) {
+    log::debug!(
+        "[FluorateGL] glBeginConditionalRender(id={}, mode=0x{:04X}) -> no-op (GLES unsupported)",
+        id,
+        mode
+    );
+}
+
+/// glEndConditionalRender stub — 桌面 GL 3.0 函数，GLES 无对应实现。
+///
+/// 语义：结束条件渲染区间。GLES 不支持条件渲染，no-op 实现安全。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glEndConditionalRender() {
+    log::debug!("[FluorateGL] glEndConditionalRender() -> no-op (GLES unsupported)");
+}

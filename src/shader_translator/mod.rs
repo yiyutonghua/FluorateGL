@@ -8,6 +8,7 @@
 //! - `postprocess`：GLSL ES 后处理（移除 binding、处理 outColor、precision）
 //! - `string_pass`：纯文本替换翻译（备用方案）
 
+pub mod cache;
 pub mod gles_compile;
 pub mod postprocess;
 pub mod preprocess;

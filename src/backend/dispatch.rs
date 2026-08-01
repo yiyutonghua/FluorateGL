@@ -96,6 +96,7 @@ pub struct GlesDispatch {
     pub vertex_attrib_format: unsafe extern "C" fn(u32, i32, u32, u8, u32),
     pub vertex_attrib_i_format: unsafe extern "C" fn(u32, i32, u32, u32),
     pub vertex_attrib_binding: unsafe extern "C" fn(u32, u32),
+    pub get_vertex_attrib_fv: unsafe extern "C" fn(u32, u32, *mut f32),
 
     // VAO/Draw 高级
     pub vertex_attrib_divisor: unsafe extern "C" fn(u32, u32),
@@ -247,6 +248,7 @@ pub struct GlesDispatch {
     pub polygon_offset: unsafe extern "C" fn(f32, f32),
     pub polygon_mode: unsafe extern "C" fn(u32, u32),
     pub pixel_store_f: unsafe extern "C" fn(u32, f32),
+    pub point_parameter_f: unsafe extern "C" fn(u32, f32),
     pub scissor_indexed: unsafe extern "C" fn(u32, i32, i32, i32, i32),
     pub viewport_indexed: unsafe extern "C" fn(u32, f32, f32, f32, f32),
     pub is_enabled: unsafe extern "C" fn(u32) -> u8,
@@ -521,6 +523,7 @@ impl GlesDispatch {
             vertex_attrib_format: load_opt!("glVertexAttribFormat"),
             vertex_attrib_i_format: load_opt!("glVertexAttribIFormat"),
             vertex_attrib_binding: load_opt!("glVertexAttribBinding"),
+            get_vertex_attrib_fv: load_opt!("glGetVertexAttribfv"),
 
             create_shader: unsafe { std::mem::transmute(load!("glCreateShader")) },
             delete_shader: unsafe { std::mem::transmute(load!("glDeleteShader")) },
@@ -684,6 +687,7 @@ impl GlesDispatch {
             polygon_offset: unsafe { std::mem::transmute(load!("glPolygonOffset")) },
             polygon_mode: load_opt!("glPolygonMode"),
             pixel_store_f: load_opt!("glPixelStoref"),
+            point_parameter_f: load_opt!("glPointParameterf"),
             scissor_indexed: load_opt!("glScissorIndexed"),
             viewport_indexed: load_opt!("glViewportIndexedf"),
             is_enabled: unsafe { std::mem::transmute(load!("glIsEnabled")) },

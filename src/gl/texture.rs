@@ -823,3 +823,163 @@ pub extern "C" fn glIsTexture(texture: u32) -> u8 {
         (dispatch.is_texture)(gles_id)
     })
 }
+
+/// glClearTexImage（GL_ARB_clear_texture 扩展，no-op stub）。
+///
+/// GLES 不支持此函数，MC 极少使用，no-op 安全。
+/// 已声明 GL_ARB_clear_texture 扩展，必须导出避免 LWJGL capabilities 为 null。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glClearTexImage(
+    texture: u32,
+    internalformat: u32,
+    format: u32,
+    type_: u32,
+    data: *const std::ffi::c_void,
+) {
+    log::debug!(
+        "[FluorateGL] glClearTexImage(texture={}, internalformat=0x{:04X}, format=0x{:04X}, type=0x{:04X}, data={:?}) -> no-op (GLES 不支持)",
+        texture,
+        internalformat,
+        format,
+        type_,
+        data
+    );
+}
+
+/// glClearTexSubImage（GL_ARB_clear_texture 扩展，no-op stub）。
+///
+/// GLES 不支持此函数，MC 极少使用，no-op 安全。
+/// 已声明 GL_ARB_clear_texture 扩展，必须导出避免 LWJGL capabilities 为 null。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glClearTexSubImage(
+    texture: u32,
+    level: i32,
+    xoffset: i32,
+    yoffset: i32,
+    zoffset: i32,
+    width: i32,
+    height: i32,
+    depth: i32,
+    format: u32,
+    type_: u32,
+    data: *const std::ffi::c_void,
+) {
+    log::debug!(
+        "[FluorateGL] glClearTexSubImage(texture={}, level={}, offset=[{},{},{}], size={}x{}x{}, format=0x{:04X}, type=0x{:04X}, data={:?}) -> no-op (GLES 不支持)",
+        texture,
+        level,
+        xoffset,
+        yoffset,
+        zoffset,
+        width,
+        height,
+        depth,
+        format,
+        type_,
+        data
+    );
+}
+
+/// glTexImage2DMultisample（GL 3.2，no-op stub）。
+///
+/// GLES 用 glTexStorage2DMultisample 替代，但 MC 极少使用 multisample texture，
+/// no-op 安全。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glTexImage2DMultisample(
+    target: u32,
+    samples: i32,
+    internalformat: u32,
+    width: i32,
+    height: i32,
+    fixedsamplelocations: u8,
+) {
+    log::debug!(
+        "[FluorateGL] glTexImage2DMultisample(target=0x{:04X}, samples={}, internalformat=0x{:04X}, {}x{}, fixedsamplelocations={}) -> no-op (GLES 不支持)",
+        target,
+        samples,
+        internalformat,
+        width,
+        height,
+        fixedsamplelocations
+    );
+}
+
+/// glTexImage3DMultisample（GL 3.2，no-op stub）。
+///
+/// GLES 用 glTexStorage3DMultisample 替代，但 MC 极少使用 multisample texture，
+/// no-op 安全。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glTexImage3DMultisample(
+    target: u32,
+    samples: i32,
+    internalformat: u32,
+    width: i32,
+    height: i32,
+    depth: i32,
+    fixedsamplelocations: u8,
+) {
+    log::debug!(
+        "[FluorateGL] glTexImage3DMultisample(target=0x{:04X}, samples={}, internalformat=0x{:04X}, {}x{}x{}, fixedsamplelocations={}) -> no-op (GLES 不支持)",
+        target,
+        samples,
+        internalformat,
+        width,
+        height,
+        depth,
+        fixedsamplelocations
+    );
+}
+
+/// glFramebufferTexture1D（GL 3.0，no-op stub）。
+///
+/// GLES 无 1D 纹理，no-op 安全。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glFramebufferTexture1D(
+    target: u32,
+    attachment: u32,
+    textarget: u32,
+    texture: u32,
+    level: i32,
+) {
+    log::debug!(
+        "[FluorateGL] glFramebufferTexture1D(target=0x{:04X}, attachment=0x{:04X}, textarget=0x{:04X}, texture={}, level={}) -> no-op (GLES 无 1D 纹理)",
+        target,
+        attachment,
+        textarget,
+        texture,
+        level
+    );
+}
+
+/// glFramebufferTexture3D（GL 3.0，转发 glFramebufferTextureLayer）。
+///
+/// GLES 无 glFramebufferTexture3D，但其语义等价于 glFramebufferTextureLayer
+/// （texture 的 zoffset 层挂到 attachment），故直接转发。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glFramebufferTexture3D(
+    target: u32,
+    attachment: u32,
+    textarget: u32,
+    texture: u32,
+    level: i32,
+    zoffset: i32,
+) {
+    log::debug!(
+        "[FluorateGL] glFramebufferTexture3D(target=0x{:04X}, attachment=0x{:04X}, textarget=0x{:04X}, texture={}, level={}, zoffset={}) -> 转发 glFramebufferTextureLayer",
+        target,
+        attachment,
+        textarget,
+        texture,
+        level,
+        zoffset
+    );
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.framebuffer_texture_layer)(target, attachment, texture, level, zoffset);
+    });
+}

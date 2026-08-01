@@ -11,8 +11,10 @@ name = "fluorategl"
 ctor = "1.0.9"
 libc = "0.2.186"
 log = "0.4.33"
+lru = "0.12"
 regex = "1"
 rustc-hash = "2.1.3"
+sha2 = "0.10"
 shaderc = { version = "0.10.1", features = ["build-from-source"] }
 spirv-cross2 = { version = "0.7.1", default-features = false, features = ["glsl","cpp"] }
 

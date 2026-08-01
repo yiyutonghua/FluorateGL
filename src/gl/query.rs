@@ -106,3 +106,52 @@ pub extern "C" fn glGetQueryObjectuiv(id: u32, pname: u32, params: *mut u32) {
         (dispatch.get_query_object_uiv)(gles_id, pname, params);
     });
 }
+
+/// glQueryCounter stub — GL_ARB_timer_query 扩展函数，no-op 实现。
+///
+/// 语义：记录 GPU 时间戳到 query object。GLES 3.2 有 glQueryCounterEXT 扩展版本，
+/// 但为简化先 no-op。已声明 GL_ARB_timer_query 扩展，必须导出避免 LWJGL
+/// capabilities 字段为 null 导致调用时抛错。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glQueryCounter(id: u32, target: u32) {
+    log::debug!(
+        "[FluorateGL] glQueryCounter(id={}, target={}) -> no-op (timer query stub)",
+        id,
+        target
+    );
+}
+
+/// glGetQueryObjecti64v stub — GL_ARB_timer_query 扩展函数，返回 0。
+///
+/// 语义：查询 query object 的 64 位有符号整数值（如 GPU 时间戳）。
+/// no-op 返回 0，调用方看到 0 时间戳。已声明扩展，必须导出。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetQueryObjecti64v(id: u32, pname: u32, params: *mut i64) {
+    log::debug!(
+        "[FluorateGL] glGetQueryObjecti64v(id={}, pname={}) -> 0 (timer query stub)",
+        id,
+        pname
+    );
+    if !params.is_null() {
+        unsafe { *params = 0 };
+    }
+}
+
+/// glGetQueryObjectui64v stub — GL_ARB_timer_query 扩展函数，返回 0。
+///
+/// 语义：查询 query object 的 64 位无符号整数值。no-op 返回 0。
+/// 已声明扩展，必须导出。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetQueryObjectui64v(id: u32, pname: u32, params: *mut u64) {
+    log::debug!(
+        "[FluorateGL] glGetQueryObjectui64v(id={}, pname={}) -> 0 (timer query stub)",
+        id,
+        pname
+    );
+    if !params.is_null() {
+        unsafe { *params = 0 };
+    }
+}

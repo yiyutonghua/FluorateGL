@@ -230,6 +230,330 @@ pub extern "C" fn glVertexAttrib4fv(index: u32, v: *const f32) {
     });
 }
 
+// A. ARB 别名：转发到 core 版本
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribDivisorARB(index: u32, divisor: u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_divisor)(index, divisor);
+    });
+}
+
+// B. VertexAttrib short/double 版本：转换为 float 后调用对应的 float 版本
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib1s(index: u32, x: i16) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_1f)(index, x as f32);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib2s(index: u32, x: i16, y: i16) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_2f)(index, x as f32, y as f32);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib3s(index: u32, x: i16, y: i16, z: i16) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_3f)(index, x as f32, y as f32, z as f32);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4s(index: u32, x: i16, y: i16, z: i16, w: i16) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(index, x as f32, y as f32, z as f32, w as f32);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib1d(index: u32, x: f64) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_1f)(index, x as f32);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib2d(index: u32, x: f64, y: f64) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_2f)(index, x as f32, y as f32);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib3d(index: u32, x: f64, y: f64, z: f64) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_3f)(index, x as f32, y as f32, z as f32);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4d(index: u32, x: f64, y: f64, z: f64, w: f64) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(index, x as f32, y as f32, z as f32, w as f32);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib1sv(index: u32, v: *const i16) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_1f)(index, *v as f32);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib2sv(index: u32, v: *const i16) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_2f)(index, *v as f32, *v.offset(1) as f32);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib3sv(index: u32, v: *const i16) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_3f)(index, *v as f32, *v.offset(1) as f32, *v.offset(2) as f32);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4sv(index: u32, v: *const i16) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(
+            index,
+            *v as f32,
+            *v.offset(1) as f32,
+            *v.offset(2) as f32,
+            *v.offset(3) as f32,
+        );
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib1dv(index: u32, v: *const f64) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_1f)(index, *v as f32);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib2dv(index: u32, v: *const f64) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_2f)(index, *v as f32, *v.offset(1) as f32);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib3dv(index: u32, v: *const f64) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_3f)(index, *v as f32, *v.offset(1) as f32, *v.offset(2) as f32);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4dv(index: u32, v: *const f64) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(
+            index,
+            *v as f32,
+            *v.offset(1) as f32,
+            *v.offset(2) as f32,
+            *v.offset(3) as f32,
+        );
+    });
+}
+
+// C. VertexAttrib4 整数向量版本：转换为 float 后调用 vertex_attrib_4f
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4iv(index: u32, v: *const i32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(
+            index,
+            *v as f32,
+            *v.offset(1) as f32,
+            *v.offset(2) as f32,
+            *v.offset(3) as f32,
+        );
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4bv(index: u32, v: *const i8) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(
+            index,
+            *v as f32,
+            *v.offset(1) as f32,
+            *v.offset(2) as f32,
+            *v.offset(3) as f32,
+        );
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4ubv(index: u32, v: *const u8) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(
+            index,
+            *v as f32,
+            *v.offset(1) as f32,
+            *v.offset(2) as f32,
+            *v.offset(3) as f32,
+        );
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4usv(index: u32, v: *const u16) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(
+            index,
+            *v as f32,
+            *v.offset(1) as f32,
+            *v.offset(2) as f32,
+            *v.offset(3) as f32,
+        );
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4uiv(index: u32, v: *const u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(
+            index,
+            *v as f32,
+            *v.offset(1) as f32,
+            *v.offset(2) as f32,
+            *v.offset(3) as f32,
+        );
+    });
+}
+
+// D. VertexAttrib4N normalized 版本：将整数归一化到 [0,1] 或 [-1,1] 浮点范围后调用 vertex_attrib_4f
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4Nub(index: u32, x: u8, y: u8, z: u8, w: u8) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(
+            index,
+            x as f32 / 255.0,
+            y as f32 / 255.0,
+            z as f32 / 255.0,
+            w as f32 / 255.0,
+        );
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4Nbv(index: u32, v: *const i8) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(
+            index,
+            *v as f32 / 127.0,
+            *v.offset(1) as f32 / 127.0,
+            *v.offset(2) as f32 / 127.0,
+            *v.offset(3) as f32 / 127.0,
+        );
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4Nsv(index: u32, v: *const i16) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(
+            index,
+            *v as f32 / 32767.0,
+            *v.offset(1) as f32 / 32767.0,
+            *v.offset(2) as f32 / 32767.0,
+            *v.offset(3) as f32 / 32767.0,
+        );
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4Niv(index: u32, v: *const i32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(
+            index,
+            *v as f32 / 2147483647.0,
+            *v.offset(1) as f32 / 2147483647.0,
+            *v.offset(2) as f32 / 2147483647.0,
+            *v.offset(3) as f32 / 2147483647.0,
+        );
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4Nubv(index: u32, v: *const u8) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(
+            index,
+            *v as f32 / 255.0,
+            *v.offset(1) as f32 / 255.0,
+            *v.offset(2) as f32 / 255.0,
+            *v.offset(3) as f32 / 255.0,
+        );
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4Nusv(index: u32, v: *const u16) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(
+            index,
+            *v as f32 / 65535.0,
+            *v.offset(1) as f32 / 65535.0,
+            *v.offset(2) as f32 / 65535.0,
+            *v.offset(3) as f32 / 65535.0,
+        );
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttrib4Nuiv(index: u32, v: *const u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_4f)(
+            index,
+            *v as f32 / 4294967295.0,
+            *v.offset(1) as f32 / 4294967295.0,
+            *v.offset(2) as f32 / 4294967295.0,
+            *v.offset(3) as f32 / 4294967295.0,
+        );
+    });
+}
+
 fn is_stub(dispatch: &backend::dispatch::GlesDispatch, f: *const ()) -> bool {
     f == dispatch.stub as *const ()
 }
@@ -407,6 +731,64 @@ pub extern "C" fn glVertexAttribI3uiv(index: u32, v: *const u32) {
 pub extern "C" fn glVertexAttribI4uiv(index: u32, v: *const u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.vertex_attrib_i_4uiv)(index, v);
+    });
+}
+
+// E. VertexAttribI4 整数向量版本：转换为 i32/u32 后调用 vertex_attrib_i_4i 或 vertex_attrib_i_4ui
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI4bv(index: u32, v: *const i8) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_4i)(
+            index,
+            *v as i32,
+            *v.offset(1) as i32,
+            *v.offset(2) as i32,
+            *v.offset(3) as i32,
+        );
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI4sv(index: u32, v: *const i16) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_4i)(
+            index,
+            *v as i32,
+            *v.offset(1) as i32,
+            *v.offset(2) as i32,
+            *v.offset(3) as i32,
+        );
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI4ubv(index: u32, v: *const u8) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_4ui)(
+            index,
+            *v as u32,
+            *v.offset(1) as u32,
+            *v.offset(2) as u32,
+            *v.offset(3) as u32,
+        );
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glVertexAttribI4usv(index: u32, v: *const u16) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.vertex_attrib_i_4ui)(
+            index,
+            *v as u32,
+            *v.offset(1) as u32,
+            *v.offset(2) as u32,
+            *v.offset(3) as u32,
+        );
     });
 }
 
