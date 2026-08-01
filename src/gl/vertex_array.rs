@@ -81,9 +81,9 @@ pub extern "C" fn glBindVertexArray(array: u32) {
         } else {
             state::with_state(|s| {
                 s.vertex_arrays.get_gles(array).unwrap_or_else(|| {
-                warn_vao_id_miss(array);
-                0
-            })
+                    warn_vao_id_miss(array);
+                    0
+                })
             })
         };
 

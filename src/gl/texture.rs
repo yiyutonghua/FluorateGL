@@ -220,9 +220,9 @@ pub extern "C" fn glBindTexture(target: u32, texture: u32) {
         } else {
             state::with_state(|s| {
                 s.textures.get_gles(texture).unwrap_or_else(|| {
-                warn_texture_id_miss("glBindTexture", target, texture);
-                0
-            })
+                    warn_texture_id_miss("glBindTexture", target, texture);
+                    0
+                })
             })
         };
 
@@ -570,7 +570,11 @@ pub extern "C" fn glCompressedTexImage3D(
     );
 
     if !is_compressed_format(internalformat) {
-        warn_compressed_format_mismatch("glCompressedTexImage3D", internalformat, normalize_internal_format(internalformat));
+        warn_compressed_format_mismatch(
+            "glCompressedTexImage3D",
+            internalformat,
+            normalize_internal_format(internalformat),
+        );
         return;
     }
 

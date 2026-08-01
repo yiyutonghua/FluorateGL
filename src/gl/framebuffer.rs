@@ -94,9 +94,9 @@ pub extern "C" fn glFramebufferTexture2D(
         } else {
             state::with_state(|s| {
                 s.textures.get_gles(texture).unwrap_or_else(|| {
-                warn_fbo_id_miss("glFramebufferTexture2D", target, texture);
-                0
-            })
+                    warn_fbo_id_miss("glFramebufferTexture2D", target, texture);
+                    0
+                })
             })
         };
 
@@ -119,9 +119,9 @@ pub extern "C" fn glFramebufferTextureLayer(
         } else {
             state::with_state(|s| {
                 s.textures.get_gles(texture).unwrap_or_else(|| {
-                warn_fbo_id_miss("glFramebufferTextureLayer", target, texture);
-                0
-            })
+                    warn_fbo_id_miss("glFramebufferTextureLayer", target, texture);
+                    0
+                })
             })
         };
 
@@ -143,9 +143,9 @@ pub extern "C" fn glFramebufferRenderbuffer(
         } else {
             state::with_state(|s| {
                 s.renderbuffers.get_gles(renderbuffer).unwrap_or_else(|| {
-                warn_fbo_id_miss("glFramebufferRenderbuffer", target, renderbuffer);
-                0
-            })
+                    warn_fbo_id_miss("glFramebufferRenderbuffer", target, renderbuffer);
+                    0
+                })
             })
         };
 

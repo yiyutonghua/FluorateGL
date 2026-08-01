@@ -274,8 +274,7 @@ pub extern "C" fn glMultiDrawArraysIndirectCount(
             );
             let step = array_indirect_stride(stride);
             for i in 0..maxdrawcount as isize {
-                let cmd_ptr =
-                    (indirect as *const u8).offset(i * step) as *const std::ffi::c_void;
+                let cmd_ptr = (indirect as *const u8).offset(i * step) as *const std::ffi::c_void;
                 (dispatch.draw_arrays_indirect)(mode, cmd_ptr);
             }
             return;
@@ -332,8 +331,7 @@ pub extern "C" fn glMultiDrawElementsIndirectCount(
             );
             let step = element_indirect_stride(stride);
             for i in 0..maxdrawcount as isize {
-                let cmd_ptr =
-                    (indirect as *const u8).offset(i * step) as *const std::ffi::c_void;
+                let cmd_ptr = (indirect as *const u8).offset(i * step) as *const std::ffi::c_void;
                 (dispatch.draw_elements_indirect)(mode, type_, cmd_ptr);
             }
             return;

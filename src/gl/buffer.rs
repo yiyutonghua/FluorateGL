@@ -137,7 +137,8 @@ pub extern "C" fn glDeleteBuffers(n: i32, buffers: *const u32) {
                     libc::free(pm.shadow_ptr as *mut libc::c_void);
                     log::debug!(
                         "[FluorateGL] glDeleteBuffers: freed shadow memory (desktop={}, size={})",
-                        desktop_id, pm.shadow_size
+                        desktop_id,
+                        pm.shadow_size
                     );
                 }
             });
@@ -182,9 +183,9 @@ pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
         } else {
             state::with_state(|s| {
                 s.buffers.get_gles(buffer).unwrap_or_else(|| {
-                warn_buffer_id_miss("glBindBuffer", target, buffer);
-                0
-            })
+                    warn_buffer_id_miss("glBindBuffer", target, buffer);
+                    0
+                })
             })
         };
 
@@ -220,9 +221,7 @@ pub extern "C" fn glBufferData(
 ) {
     // GL_PARAMETER_BUFFER 用 shadow memory 管理，不下传 GLES
     if target == GL_PARAMETER_BUFFER {
-        let desktop_id = state::with_state_ref(|s| {
-            s.bound_buffers_by_target.get(&target).copied()
-        });
+        let desktop_id = state::with_state_ref(|s| s.bound_buffers_by_target.get(&target).copied());
         if let Some(desktop_id) = desktop_id {
             let alloc_size = if size > 0 { size as usize } else { 0 };
             state::with_state(|s| {
@@ -411,7 +410,10 @@ pub(crate) fn sync_persistent_buffer_if_needed(target: u32) {
         (dispatch.buffer_sub_data)(target, off as isize, len as isize, ptr);
         log::debug!(
             "[FluorateGL] sync_persistent_buffer: target=0x{:04X} desktop={} offset={} len={}",
-            target, desktop_id, off, len
+            target,
+            desktop_id,
+            off,
+            len
         );
     });
 }
@@ -436,7 +438,10 @@ pub(crate) fn read_parameter_buffer_u32(offset: isize) -> Option<u32> {
 
     // 路径 1: shadow memory（持久映射 buffer）
     let shadow_read = state::with_state_ref(|s| {
-        let desktop_id = s.bound_buffers_by_target.get(&GL_PARAMETER_BUFFER).copied()?;
+        let desktop_id = s
+            .bound_buffers_by_target
+            .get(&GL_PARAMETER_BUFFER)
+            .copied()?;
         let pm = s.persistent_buffers.get(&desktop_id)?;
         let off = offset as usize;
         if off.checked_add(4)? > pm.shadow_size {
@@ -449,16 +454,16 @@ pub(crate) fn read_parameter_buffer_u32(offset: isize) -> Option<u32> {
     if let Some(v) = shadow_read {
         log::debug!(
             "[FluorateGL] read_parameter_buffer_u32: shadow read offset={} count={}",
-            offset, v
+            offset,
+            v
         );
         return Some(v);
     }
 
     // 路径 2: glMapBufferRange 兜底
     // GL_PARAMETER_BUFFER 是非法 target，需借 GL_COPY_READ_BUFFER 临时绑定
-    let desktop_id = state::with_state_ref(|s| {
-        s.bound_buffers_by_target.get(&GL_PARAMETER_BUFFER).copied()
-    })?;
+    let desktop_id =
+        state::with_state_ref(|s| s.bound_buffers_by_target.get(&GL_PARAMETER_BUFFER).copied())?;
     let gles_id = state::with_state_ref(|s| s.buffers.get_gles(desktop_id))?;
 
     // 保存 GL_COPY_READ_BUFFER 原绑定以便恢复（避免污染宿主状态）
@@ -486,7 +491,8 @@ pub(crate) fn read_parameter_buffer_u32(offset: isize) -> Option<u32> {
         (dispatch.bind_buffer)(GL_COPY_READ_BUFFER, prev_gles);
         log::debug!(
             "[FluorateGL] read_parameter_buffer_u32: map_range read offset={} count={}",
-            offset, val
+            offset,
+            val
         );
         Some(val)
     })
@@ -509,9 +515,7 @@ pub extern "C" fn glBufferStorage(
     if need_shadow {
         // 查 target 绑定的 desktop buffer ID 和 GLES buffer ID
         let desktop_id = state::with_state_ref(|s| s.bound_buffers_by_target.get(&target).copied());
-        let gles_id = state::with_state_ref(|s| {
-            desktop_id.and_then(|id| s.buffers.get_gles(id))
-        });
+        let gles_id = state::with_state_ref(|s| desktop_id.and_then(|id| s.buffers.get_gles(id)));
 
         if let (Some(desktop_id), Some(gles_id)) = (desktop_id, gles_id) {
             let alloc_size = size as usize;
@@ -526,11 +530,7 @@ pub extern "C" fn glBufferStorage(
                 // 初始数据拷贝
                 if !data.is_null() {
                     unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            data as *const u8,
-                            shadow_ptr,
-                            alloc_size,
-                        );
+                        std::ptr::copy_nonoverlapping(data as *const u8, shadow_ptr, alloc_size);
                     }
                 }
                 state::with_state(|s| {
@@ -549,7 +549,11 @@ pub extern "C" fn glBufferStorage(
                 });
                 log::debug!(
                     "[FluorateGL] glBufferStorage: shadow memory allocated (target=0x{:04X} desktop={} gles={} size={} persistent={})",
-                    target, desktop_id, gles_id, alloc_size, !is_parameter_buffer
+                    target,
+                    desktop_id,
+                    gles_id,
+                    alloc_size,
+                    !is_parameter_buffer
                 );
             }
         }
@@ -647,7 +651,9 @@ pub extern "C" fn glMapBufferRange(
     if let Some(ptr) = shadow_ptr {
         log::debug!(
             "[FluorateGL] glMapBufferRange(0x{:04X}): shadow path offset={} length={}",
-            target, offset, length
+            target,
+            offset,
+            length
         );
         return ptr;
     }
@@ -706,7 +712,9 @@ pub extern "C" fn glFlushMappedBufferRange(target: u32, offset: isize, length: i
     if marked.is_some() {
         log::debug!(
             "[FluorateGL] glFlushMappedBufferRange(0x{:04X}): shadow dirty offset={} length={}",
-            target, offset, length
+            target,
+            offset,
+            length
         );
         return;
     }
@@ -739,9 +747,9 @@ pub extern "C" fn glBindBufferBase(target: u32, index: u32, buffer: u32) {
         } else {
             state::with_state(|s| {
                 s.buffers.get_gles(buffer).unwrap_or_else(|| {
-                warn_buffer_id_miss("glBindBufferBase", target, buffer);
-                0
-            })
+                    warn_buffer_id_miss("glBindBufferBase", target, buffer);
+                    0
+                })
             })
         };
 
@@ -764,9 +772,9 @@ pub extern "C" fn glBindBufferRange(
         } else {
             state::with_state(|s| {
                 s.buffers.get_gles(buffer).unwrap_or_else(|| {
-                warn_buffer_id_miss("glBindBufferRange", target, buffer);
-                0
-            })
+                    warn_buffer_id_miss("glBindBufferRange", target, buffer);
+                    0
+                })
             })
         };
 
