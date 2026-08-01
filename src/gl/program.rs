@@ -223,17 +223,31 @@ pub extern "C" fn glGetUniformLocation(program: u32, name: *const c_char) -> i32
     }) {
         return loc;
     }
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
-        if gles_id == 0 {
-            return -1;
-        }
-        let loc = (dispatch.get_uniform_location)(gles_id, name);
-        state::with_state(|s| {
-            s.uniform_location_cache.insert((program, name_str), loc);
-        });
-        loc
-    })
+    let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
+    if gles_id == 0 {
+        log::debug!(
+            "[FluorateGL] glGetUniformLocation: program {} not in IdMap, returning -1 for {}",
+            program,
+            name_str
+        );
+        return -1;
+    }
+    let loc = backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_uniform_location)(gles_id, name)
+    });
+    // 仅记录查询失败的 uniform（返回 -1），帮助定位 shader 翻译问题
+    if loc < 0 {
+        log::warn!(
+            "[FluorateGL] glGetUniformLocation: program(desktop={}) gles={} name={:?} -> -1 (NOT FOUND)",
+            program,
+            gles_id,
+            name_str
+        );
+    }
+    state::with_state(|s| {
+        s.uniform_location_cache.insert((program, name_str), loc);
+    });
+    loc
 }
 
 #[unsafe(no_mangle)]

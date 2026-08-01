@@ -219,6 +219,16 @@ pub extern "C" fn glBufferData(
     data: *const std::ffi::c_void,
     usage: u32,
 ) {
+    // 诊断：记录所有 glBufferData 调用，确认 Sodium 对哪些 buffer 上传了初始数据
+    let bound_desktop = state::with_state_ref(|s| s.bound_buffers_by_target.get(&target).copied());
+    log::debug!(
+        "[FluorateGL] glBufferData(target=0x{:04X}, size={}, data={}, usage=0x{:04X}, bound_buffer={:?})",
+        target,
+        size,
+        if data.is_null() { "null" } else { "non-null" },
+        usage,
+        bound_desktop
+    );
     // GL_PARAMETER_BUFFER 用 shadow memory 管理，不下传 GLES
     if target == GL_PARAMETER_BUFFER {
         let desktop_id = state::with_state_ref(|s| s.bound_buffers_by_target.get(&target).copied());
@@ -332,6 +342,16 @@ pub extern "C" fn glBufferSubData(
     size: isize,
     data: *const std::ffi::c_void,
 ) {
+    // 诊断：记录所有 glBufferSubData 调用，确认 Sodium 对哪些 buffer 更新了数据
+    let bound_desktop = state::with_state_ref(|s| s.bound_buffers_by_target.get(&target).copied());
+    log::debug!(
+        "[FluorateGL] glBufferSubData(target=0x{:04X}, offset={}, size={}, data={}, bound_buffer={:?})",
+        target,
+        offset,
+        size,
+        if data.is_null() { "null" } else { "non-null" },
+        bound_desktop
+    );
     // GL_PARAMETER_BUFFER 写入 shadow memory，不下传 GLES（非法 target）
     if target == GL_PARAMETER_BUFFER {
         state::with_state(|s| {
@@ -523,6 +543,16 @@ pub extern "C" fn glBufferStorage(
     data: *const std::ffi::c_void,
     flags: u32,
 ) {
+    // 诊断：记录所有 glBufferStorage 调用，确认 Sodium 对哪些 buffer 创建了 storage
+    let bound_desktop = state::with_state_ref(|s| s.bound_buffers_by_target.get(&target).copied());
+    log::debug!(
+        "[FluorateGL] glBufferStorage(target=0x{:04X}, size={}, data={}, flags=0x{:04X}, bound_buffer={:?})",
+        target,
+        size,
+        if data.is_null() { "null" } else { "non-null" },
+        flags,
+        bound_desktop
+    );
     // GL_PARAMETER_BUFFER 是非法 GLES target，必须用 shadow memory 模拟
     let is_parameter_buffer = target == GL_PARAMETER_BUFFER;
     // 带 PERSISTENT 位 或 GL_PARAMETER_BUFFER 时，在 CPU 端分配 shadow memory 模拟持久映射
@@ -675,6 +705,16 @@ pub extern "C" fn glMapBufferRange(
         return ptr;
     }
 
+    // 诊断：非 shadow path 的映射，确认 Sodium 是否对普通 buffer 调用了 map
+    let bound_desktop = state::with_state_ref(|s| s.bound_buffers_by_target.get(&target).copied());
+    log::debug!(
+        "[FluorateGL] glMapBufferRange(0x{:04X}): GLES native path offset={} length={} access=0x{:04X} bound_buffer={:?}",
+        target,
+        offset,
+        length,
+        access,
+        bound_desktop
+    );
     backend::with_gles_dispatch(|dispatch| unsafe {
         // 剥离 GLES 不支持的 PERSISTENT/COHERENT 位，否则 GLES 返回 NULL
         let gles_access = translate_map_access(access);
@@ -694,6 +734,13 @@ pub extern "C" fn glUnmapBuffer(target: u32) -> u8 {
     if is_persistent.is_some() {
         return 1;
     }
+    // 诊断：非 persistent path 的 unmap，确认普通 buffer 映射生命周期
+    let bound_desktop = state::with_state_ref(|s| s.bound_buffers_by_target.get(&target).copied());
+    log::debug!(
+        "[FluorateGL] glUnmapBuffer(0x{:04X}): GLES native path bound_buffer={:?}",
+        target,
+        bound_desktop
+    );
     backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.unmap_buffer)(target) })
 }
 
