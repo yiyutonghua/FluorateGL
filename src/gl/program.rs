@@ -133,6 +133,12 @@ pub extern "C" fn glLinkProgram(program: u32) {
                     gles_id
                 );
             }
+        } else {
+            log::debug!(
+                "[FluorateGL] Program {} (GLES {}) link OK",
+                program,
+                gles_id
+            );
         }
     });
 }
@@ -140,12 +146,20 @@ pub extern "C" fn glLinkProgram(program: u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glUseProgram(program: u32) {
+    log::debug!("[FluorateGL] glUseProgram({})", program);
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = if program == 0 {
             0
         } else {
             state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0))
         };
+        if program != 0 && gles_id == 0 {
+            log::warn!(
+                "[FluorateGL] glUseProgram({}): desktop program not in IdMap, gles_id=0 (tid={})",
+                program,
+                state::thread_id_u64()
+            );
+        }
         (dispatch.use_program)(gles_id);
         state::with_state(|s| s.bound_program = program);
     });
