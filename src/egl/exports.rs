@@ -1,6 +1,8 @@
 use crate::backend;
 use libc::c_char;
+use rustc_hash::FxHashSet;
 use std::ffi::c_void;
+use std::sync::{Mutex, OnceLock};
 
 const EGL_NONE: i32 = 0x3038;
 const EGL_CONTEXT_CLIENT_VERSION: i32 = 0x3098;
@@ -452,8 +454,28 @@ pub extern "C" fn eglGetProcAddress(proc_name: *const libc::c_char) -> *mut std:
     }
 
     // 3. 最后回退到底层 EGL 驱动
+    let result = backend::with_egl_dispatch(|d| unsafe { (d.get_proc_address)(proc_name) });
     if is_key {
         log::debug!("[FluorateGL] eglGetProcAddress({}) -> EGL driver", name);
+    } else if result.is_null() {
+        // 诊断：LWJGL/MC 查询了 FluorateGL 未导出且 GLES 驱动也不提供的函数。
+        // 返回 null 会导致 LWJGL capabilities 字段为 null，调用时抛
+        // "No context is current or a function that is not available" 错误。
+        // 首次告警避免刷屏，帮助定位需要补 stub 的函数。
+        warn_missing_gl_function(&name);
     }
-    backend::with_egl_dispatch(|d| unsafe { (d.get_proc_address)(proc_name) })
+    result
+}
+
+/// 记录 eglGetProcAddress 查询但未提供的 GL 函数（首次告警）
+fn warn_missing_gl_function(name: &str) {
+    static WARNED: OnceLock<Mutex<FxHashSet<String>>> = OnceLock::new();
+    let set = WARNED.get_or_init(|| Mutex::new(FxHashSet::default()));
+    let mut guard = set.lock().unwrap();
+    if guard.insert(name.to_string()) {
+        log::warn!(
+            "[FluorateGL] eglGetProcAddress({}) -> null (FluorateGL 未导出且 GLES 驱动未提供，LWJGL capabilities 将为 null，调用时会抛错)",
+            name
+        );
+    }
 }
