@@ -148,7 +148,10 @@ pub extern "C" fn glVertexAttribIPointer(
 ) {
     log::debug!(
         "[FluorateGL] glVertexAttribIPointer(index={}, size={}, type=0x{:04X}, stride={})",
-        index, size, type_, stride
+        index,
+        size,
+        type_,
+        stride
     );
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.vertex_attrib_i_pointer)(index, size, type_, stride, pointer);
@@ -457,7 +460,11 @@ pub extern "C" fn glVertexAttribFormat(
 ) {
     log::debug!(
         "[FluorateGL] glVertexAttribFormat(attrib={}, size={}, type=0x{:04X}, normalized={}, offset={})",
-        attribindex, size, type_, normalized, relativeoffset
+        attribindex,
+        size,
+        type_,
+        normalized,
+        relativeoffset
     );
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.vertex_attrib_format as *const ()) {
@@ -478,7 +485,10 @@ pub extern "C" fn glVertexAttribIFormat(
 ) {
     log::debug!(
         "[FluorateGL] glVertexAttribIFormat(attrib={}, size={}, type=0x{:04X}, offset={})",
-        attribindex, size, type_, relativeoffset
+        attribindex,
+        size,
+        type_,
+        relativeoffset
     );
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.vertex_attrib_i_format as *const ()) {
@@ -494,7 +504,8 @@ pub extern "C" fn glVertexAttribIFormat(
 pub extern "C" fn glVertexAttribBinding(attribindex: u32, bindingindex: u32) {
     log::debug!(
         "[FluorateGL] glVertexAttribBinding(attrib={}, binding={})",
-        attribindex, bindingindex
+        attribindex,
+        bindingindex
     );
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.vertex_attrib_binding as *const ()) {
