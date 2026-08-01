@@ -36,6 +36,12 @@ pub fn preprocess(source: &str, stage: u32) -> String {
     let mut result = remove_line_directives(source);
     strip_mc_version_comment(&mut result);
     force_glsl_version(&mut result);
+    // 取消 glslang Vulkan target 默认定义的 VULKAN 宏。
+    // Sodium 等 mod 的 shader 通过 #ifdef VULKAN 区分 Vulkan/GL 后端，
+    // 若 VULKAN 被定义，shader 走 Vulkan 分支（可能使用不同 attribute 布局
+    // 或内置变量），转回 GLES 后导致方块无法渲染。
+    // 参考 MobileGlues 的同类修复：setPreamble("#undef VULKAN\n")
+    undef_vulkan_macro(&mut result);
     rename_vulkan_builtin_variables(&mut result);
     // 转换独立 uniform 到 UBO（块名按 stage 区分，避免跨 stage type mismatch）
     result = convert_uniforms_to_ubo(&result, stage);
@@ -57,6 +63,29 @@ fn uniform_block_name(stage: u32) -> &'static str {
         GL_VERTEX_SHADER => "UniformBlockVS",
         GL_FRAGMENT_SHADER => "UniformBlockFS",
         _ => "UniformBlockOther",
+    }
+}
+
+/// 取消 glslang Vulkan target 默认定义的 VULKAN 宏
+///
+/// shaderc 以 Vulkan 为 target 编译 GLSL 时，glslang 会自动定义 `VULKAN` 宏。
+/// Sodium 等 mod 的 shader 用 `#ifdef VULKAN` 区分后端：
+/// - Vulkan 分支可能使用不同的 attribute 布局、内置变量或 uniform 绑定方式
+/// - GL 分支才是桌面 GL 的正常逻辑
+///
+/// 若不取消，shader 走 Vulkan 分支，生成的 SPIR-V 转回 GLES 后可能导致
+/// 方块无法渲染（attribute/uniform 不匹配）。
+///
+/// 实现：在 `#version` 行之后插入 `#undef VULKAN`。
+/// `#undef` 必须在 `#version` 之后（GLSL 要求 #version 为首行）。
+fn undef_vulkan_macro(result: &mut String) {
+    // 查找 #version 行的结束位置（第一个换行符）
+    // force_glsl_version 已确保 #version 在首行（可能前面无注释）
+    if let Some(version_end) = result.find('\n') {
+        result.insert_str(version_end + 1, "#undef VULKAN\n");
+    } else {
+        // 无换行（极端情况），直接追加
+        result.push_str("\n#undef VULKAN\n");
     }
 }
 

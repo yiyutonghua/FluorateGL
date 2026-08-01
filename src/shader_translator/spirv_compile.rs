@@ -88,11 +88,17 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
     // stage 用于给 UniformBlock 起唯一块名（UniformBlockVS/UniformBlockFS），避免跨 stage type mismatch
     let preprocessed = crate::shader_translator::preprocess::preprocess(source, stage);
 
+    // 诊断：记录原始 shader 源码前 300 字符，确认是否有 VULKAN 条件编译
+    // 以及 #undef VULKAN 是否生效（preprocessed 中会包含 #undef VULKAN）
     log::debug!(
         "[ShaderTranslator] ENTERING shaderc compile for stage 0x{:04X} (source {} chars, preprocessed {} chars)",
         stage,
         source.len(),
         preprocessed.len()
+    );
+    log::debug!(
+        "[ShaderTranslator] original source (first 300 chars):\n{}",
+        source.chars().take(300).collect::<String>()
     );
 
     // 构造编译选项
