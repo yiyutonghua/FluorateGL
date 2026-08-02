@@ -2,7 +2,7 @@
 
 桌面 OpenGL → OpenGL ES 翻译层,尝试让Minecraft:Java Edition在 Android GLES 3.1+ 设备上运行。
 
-> 注意:这是纯 vibe coding 作品
+> 注意:这是纯 vibe coding 作品,目前无法使用(
 
 ## 适用场景
 
@@ -22,6 +22,6 @@ cargo build --target aarch64-linux-android --release
 
 | 变量 | 值 | 说明 |
 |------|-----|------|
-| `FLUORATEGL_BACKEND` | `system` / `angle` / `llvmpipe` | GLES 后端(默认 `system`) |
+| `FLUORATEGL_BACKEND` | `system` / `angle`（暂不可使用） / `llvmpipe` | GLES 后端(默认 `system`) |
 | `FLUORATEGL_LOG` | `error` / `warn` / `info` / `debug` / `trace` | 日志级别(默认 `info`) |
 | `FLUORATEGL_SKIP_BACKEND` | `1` / `true` | 跳过 EGL/GLES 库加载(纯 CPU 场景) |
