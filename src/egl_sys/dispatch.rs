@@ -79,9 +79,7 @@ unsafe extern "C" fn stub_empty_string() -> *const c_char {
 /// - 禁止用于返回 u64 / f64 等 8 字节非整数类型的字段——transmute 位级合法但 stub 只写 w0/x0 低 32 位，高 32 位残留 → UB
 /// - 添加新 stub 签名类型时必须同步更新此注释与下方 stub 函数族
 macro_rules! stub {
-    ($e:expr) => {{
-        unsafe { std::mem::transmute::<_, _>($e) }
-    }};
+    ($e:expr) => {{ unsafe { std::mem::transmute::<_, _>($e) } }};
 }
 
 impl EglDispatch {
@@ -219,16 +217,34 @@ mod tests {
         // 返回指针类（创建/获取类）→ stub_null_ptr（null 安全值）
         assert_eq!(s.get_display as *const (), stub_null_ptr as *const ());
         assert_eq!(s.create_context as *const (), stub_null_ptr as *const ());
-        assert_eq!(s.create_window_surface as *const (), stub_null_ptr as *const ());
-        assert_eq!(s.create_pbuffer_surface as *const (), stub_null_ptr as *const ());
+        assert_eq!(
+            s.create_window_surface as *const (),
+            stub_null_ptr as *const ()
+        );
+        assert_eq!(
+            s.create_pbuffer_surface as *const (),
+            stub_null_ptr as *const ()
+        );
         assert_eq!(
             s.create_pbuffer_from_client_buffer as *const (),
             stub_null_ptr as *const ()
         );
-        assert_eq!(s.create_pixmap_surface as *const (), stub_null_ptr as *const ());
-        assert_eq!(s.get_current_context as *const (), stub_null_ptr as *const ());
-        assert_eq!(s.get_current_surface as *const (), stub_null_ptr as *const ());
-        assert_eq!(s.get_current_display as *const (), stub_null_ptr as *const ());
+        assert_eq!(
+            s.create_pixmap_surface as *const (),
+            stub_null_ptr as *const ()
+        );
+        assert_eq!(
+            s.get_current_context as *const (),
+            stub_null_ptr as *const ()
+        );
+        assert_eq!(
+            s.get_current_surface as *const (),
+            stub_null_ptr as *const ()
+        );
+        assert_eq!(
+            s.get_current_display as *const (),
+            stub_null_ptr as *const ()
+        );
         assert_eq!(s.get_proc_address as *const (), stub_null_ptr as *const ());
 
         // u32 状态/查询类 → stub_zero_u32（0 = EGL_FALSE / 失败码）

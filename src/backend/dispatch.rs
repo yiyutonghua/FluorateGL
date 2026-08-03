@@ -377,9 +377,7 @@ macro_rules! stub {
         let f: unsafe extern "C" fn() = gl_stub_void;
         unsafe { std::mem::transmute::<_, _>(f) }
     }};
-    ($e:expr) => {{
-        unsafe { std::mem::transmute::<_, _>($e) }
-    }};
+    ($e:expr) => {{ unsafe { std::mem::transmute::<_, _>($e) } }};
 }
 
 impl GlesDispatch {

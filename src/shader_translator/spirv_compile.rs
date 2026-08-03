@@ -114,10 +114,13 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
             return None;
         }
     };
-    
+
     // target env: Vulkan 1.2（与下方 SPIR-V 1.5 匹配；shaderc 默认回落 Vulkan 1.0，
     // 只支持 SPIR-V 1.0，会导致 "Invalid SPIR-V binary version 1.5 for target environment SPIR-V 1.0"）
-    options.set_target_env(shaderc::TargetEnv::Vulkan, shaderc::EnvVersion::Vulkan1_2 as u32);
+    options.set_target_env(
+        shaderc::TargetEnv::Vulkan,
+        shaderc::EnvVersion::Vulkan1_2 as u32,
+    );
     // 优化级别：Zero（不做 SPIRV-Tools 优化，保留变量名/OpName/OpMemberName）。
     // 历史教训：Performance 级别的 aggressive-dce 可能消除未使用变量及其
     // OpName/OpMemberName，导致 spirv-cross 输出 fallback 名（如 _13），

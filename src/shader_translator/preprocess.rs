@@ -13,10 +13,10 @@
 //! in 和 out 是独立的接口空间（SPIR-V Input/Output StorageClass），
 //! 分别从 0 计数，保证 VS out 和 FS in 的同名 varying location 一致。
 
+use crate::simplify_vulkan_workarounds;
 use regex::Regex;
 use rustc_hash::FxHashSet;
 use std::sync::OnceLock;
-use crate::simplify_vulkan_workarounds;
 
 /// GLSL stage 常量（与 GL_VERTEX_SHADER/GL_FRAGMENT_SHADER 对齐）
 pub const GL_VERTEX_SHADER: u32 = 0x8B31;

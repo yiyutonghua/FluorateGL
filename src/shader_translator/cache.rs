@@ -57,7 +57,7 @@ impl ShaderCache {
             source.contains("gl_VertexID"),
             source.contains("gl_FragColor"),
             source.contains("gl_VertexIndex"), // Vulkan target 特征
-            source.contains("u_sampler"),     // 重命名特征
+            source.contains("u_sampler"),      // 重命名特征
         ];
 
         for feature in features {
@@ -80,8 +80,8 @@ impl ShaderCache {
         // 优化特征
         let optimizations = [
             source.contains("#version 450 core"), // 版本升级特征
-            source.contains("layout(location="), // location 注入特征
-            source.contains("layout(binding="), // binding 注入特征
+            source.contains("layout(location="),  // location 注入特征
+            source.contains("layout(binding="),   // binding 注入特征
         ];
 
         for opt in optimizations {

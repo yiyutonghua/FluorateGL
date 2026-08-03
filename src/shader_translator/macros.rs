@@ -53,7 +53,10 @@ macro_rules! gl_check_error {
 macro_rules! check_id_mapping {
     ($id:expr, $context:expr) => {
         if $id == 0 {
-            log::error!("[ShaderTranslator] {} - ID mapping failed, returned 0", $context);
+            log::error!(
+                "[ShaderTranslator] {} - ID mapping failed, returned 0",
+                $context
+            );
             return None;
         }
     };
@@ -91,7 +94,10 @@ macro_rules! simplify_vulkan_workarounds {
 macro_rules! optimize_spirv_compile {
     ($options:expr) => {
         // 优化SPIR-V编译选项（shaderc 0.10.1 API）
-        $options.set_target_env(shaderc::TargetEnv::Vulkan, shaderc::EnvVersion::Vulkan1_2 as u32);
+        $options.set_target_env(
+            shaderc::TargetEnv::Vulkan,
+            shaderc::EnvVersion::Vulkan1_2 as u32,
+        );
         $options.set_optimization_level(shaderc::OptimizationLevel::Performance);
         $options.set_generate_debug_info();
         $options.set_auto_bind_uniforms(true);

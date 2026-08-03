@@ -6,9 +6,9 @@
 //! - processOutColorLocations：为 outColorN 添加 layout(location=N)
 //! - forceSupporterOutput：确保 precision highp float/int 声明
 
+use crate::simplify_ubo_processing;
 use regex::Regex;
 use std::sync::OnceLock;
-use crate::simplify_ubo_processing;
 
 /// GLSL ES 后处理主入口
 ///

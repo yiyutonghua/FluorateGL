@@ -143,7 +143,9 @@ pub extern "C" fn eglCreatePbufferSurface(
     crate::init::ensure_backend_initialized(); // 惰化守卫：确保后端已初始化（否则首个 EGL 调用会被短路）
     // P1-A 双层兜底：stub 模式下返回 null（EGL_NO_SURFACE 语义），避免伪指针进入宿主
     if !crate::backend::egl_backend_ready() {
-        log::error!("[EGL] eglCreatePbufferSurface 在 STUB 模式（EGL 库加载失败）被调用，返回 null");
+        log::error!(
+            "[EGL] eglCreatePbufferSurface 在 STUB 模式（EGL 库加载失败）被调用，返回 null"
+        );
         return std::ptr::null_mut();
     }
     backend::with_egl_dispatch(|d| unsafe { (d.create_pbuffer_surface)(dpy, config, attrib_list) })
@@ -582,7 +584,9 @@ mod tests {
     #[test]
     fn attrib_list_within_limit_rejects_oversized() {
         // 200 对属性、无 EGL_NONE 终止（共 400 个 i32，循环第 129 对时触发上限）
-        let attribs: Vec<i32> = (0..200).flat_map(|_| [EGL_CONTEXT_CLIENT_VERSION, 3]).collect();
+        let attribs: Vec<i32> = (0..200)
+            .flat_map(|_| [EGL_CONTEXT_CLIENT_VERSION, 3])
+            .collect();
         assert!(
             !attrib_list_within_limit(attribs.as_ptr()),
             "超过 128 对的 attrib_list 必须被拒绝"
@@ -592,7 +596,9 @@ mod tests {
     /// P1-C：恰好 128 对且无 EGL_NONE 终止也应被拒绝（边界值）。
     #[test]
     fn attrib_list_within_limit_rejects_boundary_without_none() {
-        let attribs: Vec<i32> = (0..128).flat_map(|_| [EGL_CONTEXT_CLIENT_VERSION, 3]).collect();
+        let attribs: Vec<i32> = (0..128)
+            .flat_map(|_| [EGL_CONTEXT_CLIENT_VERSION, 3])
+            .collect();
         assert!(
             !attrib_list_within_limit(attribs.as_ptr()),
             "128 对但无 EGL_NONE 终止必须被拒绝"

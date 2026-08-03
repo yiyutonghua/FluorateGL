@@ -498,18 +498,24 @@ fn build_fake_extensions() -> Vec<&'static [u8]> {
         return result;
     }
     let caps = crate::backend::capabilities();
-    let behavior_dependent: &[(&[u8], fn(&crate::backend::capabilities::GlesCapabilities) -> bool)] = &[
+    let behavior_dependent: &[(
+        &[u8],
+        fn(&crate::backend::capabilities::GlesCapabilities) -> bool,
+    )] = &[
         (b"GL_ARB_draw_indirect\0", |c| c.indirect_draw),
         // 差异 #3：multi_draw_indirect 二选一保留 GL_EXT 名，GL_ARB 名不再声明
         (b"GL_EXT_multi_draw_indirect\0", |c| c.multi_draw_indirect),
-        (b"GL_ARB_draw_elements_base_vertex\0", |c| c.draw_elements_base_vertex),
-        (b"GL_OES_draw_elements_base_vertex\0", |c| c.draw_elements_base_vertex),
+        (b"GL_ARB_draw_elements_base_vertex\0", |c| {
+            c.draw_elements_base_vertex
+        }),
+        (b"GL_OES_draw_elements_base_vertex\0", |c| {
+            c.draw_elements_base_vertex
+        }),
         (b"GL_ARB_base_instance\0", |c| c.base_instance),
         (b"GL_EXT_base_instance\0", |c| c.base_instance),
-        (
-            b"GL_EXT_multi_draw_elements_base_vertex\0",
-            |c| c.multi_draw_elements_base_vertex,
-        ),
+        (b"GL_EXT_multi_draw_elements_base_vertex\0", |c| {
+            c.multi_draw_elements_base_vertex
+        }),
     ];
     // 行为依赖字段全 false 时提示：S2 已保证构建前 caps 就绪（真实查询或 stub 早退），
     // 此处仅剩"GLES 3.1 无行为依赖特性扩展"的真实剔除场景（如 3.1 设备无
