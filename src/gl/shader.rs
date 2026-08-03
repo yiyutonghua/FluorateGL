@@ -146,14 +146,17 @@ pub extern "C" fn glShaderSource(
                 (translated, true)
             }
             TranslationResult::PassThrough => {
+                // 预留分支：当前管线（Vulkan target + string_pass 兜底）不产生 PassThrough
                 log::debug!(
-                    "[ShaderTranslator] shader {} stage 0x{:04X} passed through unchanged (driver extension supported)",
+                    "[ShaderTranslator] shader {} stage 0x{:04X} passed through unchanged",
                     shader,
                     stage
                 );
                 (source.clone(), false)
             }
             TranslationResult::Failed => {
+                // 不可达：translate() 不变式保证永不返回 Failed（失败统一回退
+                // string_pass，见 spirv_pass.rs）
                 log::warn!(
                     "[ShaderTranslator] SPIR-V pipeline failed for shader {}; passing original source ({} chars, took {:?})",
                     shader,
@@ -451,7 +454,7 @@ pub extern "C" fn glCreateShaderProgramv(
         prog
     });
 
-    // 6. 清理 Shader 对象（glCreateShaderProgramv 规范要求隐式删除 shader）
+    // 清理 Shader 对象（glCreateShaderProgramv 规范要求隐式删除 shader）
     glDeleteShader(shader_id);
 
     program_id

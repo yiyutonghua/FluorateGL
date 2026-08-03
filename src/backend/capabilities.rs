@@ -58,7 +58,7 @@ pub struct GlesCapabilities {
 }
 
 impl GlesCapabilities {
-    /// 全 false 兜底（GLES 库加载失败时使用）
+    /// 全 false 兜底（当前仅测试使用；生产兜底见 backend/mod.rs 的 FALLBACK_CAPS）
     #[allow(dead_code)]
     pub fn none() -> Self {
         Self {

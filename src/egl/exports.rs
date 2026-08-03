@@ -236,7 +236,7 @@ pub extern "C" fn eglQueryAPI() -> u32 {
 /// P1-C：检查 attrib_list 是否在 MAX_ATTRIB_PAIRS 对内且以 EGL_NONE 终止。
 /// 返回 true = 合法（可继续处理）；false = 超限或非法。
 /// 纯函数：不依赖 backend 全局状态，单测可直接调用（避免经 eglCreateContext
-/// 全路径测试时被 is_stub 守卫短路导致假阳性）。
+/// 全路径测试时被 egl_backend_ready 守卫短路导致假阳性）。
 /// 语义与 eglCreateContext 原有内联检查完全一致：
 /// - null 表示无属性，合法；
 /// - 仅检查偶数下标（每对的 key 位置）是否为 EGL_NONE；

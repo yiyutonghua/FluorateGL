@@ -277,7 +277,7 @@ pub struct GlesDispatch {
     // GLES 3.2 multi-draw indirect
     pub multi_draw_arrays_indirect: unsafe extern "C" fn(u32, *const c_void, i32, isize),
     pub multi_draw_elements_indirect: unsafe extern "C" fn(u32, u32, *const c_void, i32, isize),
-    // GL 4.6 / EXT_mesh_shader indirect count（GLES 几乎无支持，stub 时告警）
+    // GL 4.6 / GL_ARB_indirect_compute indirect count（GLES 几乎无支持，stub 时告警）
     // drawcount 参数为 GLintptr（buffer offset），非指针
     pub multi_draw_arrays_indirect_count:
         unsafe extern "C" fn(u32, *const c_void, isize, i32, isize),
@@ -407,7 +407,7 @@ impl GlesDispatch {
     /// - 返回 *const c_char（字符串查询）→ gl_stub_empty_string（空串，宿主可安全 CStr 解析）
     pub fn all_stub() -> Self {
         Self {
-            // 直接 pass-through
+            // 占位 stub 槽
             stub: stub!(),
             clear: stub!(),
             get_string: stub!(gl_stub_empty_string as unsafe extern "C" fn() -> *const c_char),

@@ -2,9 +2,8 @@
 //!
 //! 包含统一的错误处理、日志记录和GL实现方式优化宏
 //!
-//! 说明：warn_once/gl_check_error/check_id_mapping/is_stub/gles_dispatch/
-//! optimize_spirv_compile 等宏为后续 GL 层预留，暂无调用点，
-//! 用 #[allow(unused_macros)] 抑制警告（保留定义供后续使用）。
+//! 预留宏（warn_once/gl_check_error/check_id_mapping/is_stub/gles_dispatch/
+//! optimize_spirv_compile）暂无调用点，说明见 mod.rs。
 
 #![allow(unused_macros)]
 
@@ -39,10 +38,8 @@ macro_rules! gl_check_error {
         let err = unsafe { gl::GetError() };
         if err != gl::NO_ERROR {
             log::error!("[ShaderTranslator] {} - GL Error: {}", $context, err);
-            // 在调试模式下可以添加更多错误处理
             #[cfg(debug_assertions)]
             {
-                // 这里可以添加断言或更详细的错误处理
                 assert!(false, "GL error: {} - {}", $context, err);
             }
         }
@@ -84,8 +81,6 @@ macro_rules! gles_dispatch {
 #[macro_export]
 macro_rules! simplify_vulkan_workarounds {
     ($code:expr) => {
-        // 简化Vulkan workarounds逻辑
-        // 这里可以添加更具体的简化逻辑
         $code
     };
 }
@@ -109,7 +104,6 @@ macro_rules! optimize_spirv_compile {
 #[macro_export]
 macro_rules! simplify_ubo_processing {
     ($code:expr) => {
-        // 简化UBO处理逻辑
         $code
     };
 }

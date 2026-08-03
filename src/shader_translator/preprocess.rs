@@ -352,8 +352,7 @@ fn parse_binding(qualifiers: &str) -> Option<u32> {
 
 /// 为缺少 location 的 in/out 变量自动添加 layout(location=X)
 ///
-/// OpenGL SPIR-V 模式下，glslang parse 阶段要求所有 in/out 变量必须有 location
-/// （AUTO_MAP_LOCATIONS 在 parse 之后才生效，来不及自动分配）。
+/// Vulkan target 下 glslang parse 要求所有 in/out 变量必须有 location。
 ///
 /// 关键修复：
 /// 1. in 和 out 使用独立的 counter，分别从 0 开始（不同接口空间，不冲突）

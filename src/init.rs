@@ -85,7 +85,7 @@ fn capture_self_handle() {
         if !info.dli_fname.is_null() {
             // 仅尝试 RTLD_NOLOAD（不重新加载，只增加引用计数）。
             // 旧平台不支持 RTLD_NOLOAD 时不做二次 dlopen 回退（避免 ctor 重入）；
-            // 长期方向由 P3-A 自建导出符号表替代 dlsym(self_handle)。
+            // P3-A 已实现：SYMBOLS 表过滤后再 dlsym(self_handle)（见 egl/exports.rs）。
             let handle =
                 unsafe { libc::dlopen(info.dli_fname, libc::RTLD_NOW | libc::RTLD_NOLOAD) };
             if !handle.is_null() {

@@ -303,7 +303,7 @@ fn preprocess_packs_non_opaque_uniforms_into_ubo() {
 
 #[test]
 fn preprocess_skips_sampler_uniform_location_injection() {
-    // sampler 是 opaque，不应注入 location（旧 AUTO_MAP_BINDINGS 语义保留为负断言）；
+    // sampler 是 opaque，不应注入 location（binding 由 shaderc auto_bind_uniforms 分配）；
     // non-opaque MVP 被包装进 UBO 而非注入 location
     let src = "#version 330\nuniform sampler2D tex;\nuniform mat4 MVP;\nvoid main() {}\n";
     let result = preprocess::preprocess(src, 0x8B31);
@@ -430,7 +430,7 @@ fn preprocess_upgrades_version_when_binding_injected() {
     let src =
         "#version 330\nlayout(std140) uniform MyBlock {\n    mat4 data;\n};\nvoid main() {}\n";
     let result = preprocess::preprocess(src, 0x8B31);
-    // 升级到 450（force_glsl_version 先升级到 450，ensure_binding_version 不再触发）
+    // 升级到 450（force_glsl_version 已统一升级到 450）
     assert!(result.starts_with("#version 450 core"));
 }
 

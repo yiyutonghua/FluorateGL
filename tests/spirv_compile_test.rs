@@ -7,7 +7,7 @@
 //! - 合法 GLSL → SPIR-V 编译成功
 //! - 非法 GLSL 返回 None
 //! - 无效 stage 返回 None
-//! - legacy 版本（< 330）被 glslang 拒绝
+//! - legacy 版本（< 330）经 preprocess 升级后编译成功
 //! - GLSL 330 经预处理升级后编译成功
 //! - GL_*_SHADER 常量值正确性
 //!

@@ -14,8 +14,10 @@ use std::sync::OnceLock;
 ///
 /// 执行顺序：
 /// 0. 移除 in/out varying 的 layout(location=N)（解决跨 stage mismatch）
+/// 0.5 移除 standalone uniform 的 layout(location=N)（清理残留 location）
 /// 1. 移除非 image 的 layout(binding=X)（image 的 binding 不能移除）
 /// 1.5 移除 UBO/SSBO 实例名（spirv-cross 自动添加，导致 uniform 查询失败）
+/// 1.6 把生成的 UBO 拆解为 standalone uniform（解决 uniform 查询失败）
 /// 2. 修复 atomic counter binding（offset → binding，GLES 要求 binding）
 /// 3. 注入 image format 限定符（GLES 要求 image 必须有 format 和 binding）
 /// 4. 处理 outColorN 的 location
@@ -25,7 +27,7 @@ pub fn post_process(src: &str) -> String {
 
     // 0. 移除 in/out varying 的 layout(location=N)
     //    MC 桌面 GLSL 不声明 varying location（linker 按变量名匹配），
-    //    但 preprocess 注入了 location（glslang OpenGL SPIR-V 模式 parse 要求），
+    //    但 preprocess 注入了 location（Vulkan target 要求所有 in/out 有 location），
     //    spirv-cross 保留它。不同 shader pair 中变量数量/顺序不同，
     //    导致同名 varying 跨 stage location 不一致（mismatch）。
     //    移除后 GLES linker 按变量名匹配，解决跨 stage 链接失败。
@@ -35,10 +37,10 @@ pub fn post_process(src: &str) -> String {
     result = strip_varying_locations(&result);
 
     // 0.5 移除 standalone uniform 的 layout(location=N)
-    //     preprocess 为 non-opaque uniform（mat4/vec3/float 等）注入 location 以满足
-    //     glslang OpenGL SPIR-V 模式 parse 要求，且每个 shader 独立从 0 计数。
-    //     跨 stage 链接时，VS 与 FS 中不同名 uniform 会占用同一 location（如 VS 的
-    //     Color@1 与 FS 的 FogColor@1），导致 GLES linker 报 location 冲突。
+    //     清理历史上/兜底残留的 standalone uniform location（当前 preprocess 已
+    //     不再注入，见 convert_uniforms_to_ubo）。若残留 location，跨 stage 链接时
+    //     不同名 uniform 可能占用同一 location（如 VS 的 Color@1 与 FS 的
+    //     FogColor@1），导致 GLES linker 报 location 冲突。
     //     GLES 中 standalone uniform 无需显式 location（MC 通过 glGetUniformLocation
     //     动态查询），移除安全。uniform block（含 `{`，用 binding 不用 location）不受影响。
     result = strip_uniform_locations(&result);

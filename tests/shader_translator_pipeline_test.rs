@@ -7,7 +7,7 @@
 //! - 各种 vertex/fragment/compute shader 端到端翻译
 //! - Minecraft 风格 shader（UBO + 多 in/out 变量）
 //! - 非法 GLSL 优雅失败（返回 Failed 而非 panic）
-//! - legacy 版本（< 330）被 glslang 拒绝
+//! - legacy 版本（< 330）经 preprocess 升级后编译成功
 //! - 无效 stage 返回 Failed
 //! - TranslationResult 枚举变体验证
 //! - 翻译输出包含 GLSL ES 版本和 precision
