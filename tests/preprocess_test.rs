@@ -4,7 +4,8 @@
 //! - 版本指令处理（无版本、低版本、330-440 升级、>= 450 保持）
 //! - #line 指令移除
 //! - in/out 变量 location 注入
-//! - non-opaque uniform location 注入
+//! - non-opaque uniform 包装进 UBO（Vulkan target 拒绝独立 non-opaque uniform，
+//!   不注入 location；7a39023/bae79dc 起）
 //! - UBO/SSBO binding 注入
 //! - 已有 layout 限定符的跳过逻辑
 //! - 组合场景与边界输入
@@ -100,24 +101,25 @@ fn preprocess_keeps_460_unchanged() {
 }
 
 #[test]
-fn preprocess_upgrades_low_desktop_version_to_330() {
-    // 桌面 GLSL < 330 升级到 330 core（OpenGL SPIR-V 最低要求）
+fn preprocess_upgrades_low_desktop_version_to_450() {
+    // 桌面 GLSL < 460 统一升级到 450 core（Vulkan target 需 core profile +
+    // layout(binding) 需 420+，7a39023 起统一策略）
     let src = "#version 120\nvoid main() {}\n";
     let result = preprocess::preprocess(src, 0x8B31);
     assert!(
-        result.starts_with("#version 330 core"),
-        "expected upgrade to 330 core, got: {}",
+        result.starts_with("#version 450 core"),
+        "expected upgrade to 450 core, got: {}",
         result
     );
 }
 
 #[test]
-fn preprocess_upgrades_150_to_330() {
+fn preprocess_upgrades_150_to_450() {
     let src = "#version 150 core\nvoid main() {}\n";
     let result = preprocess::preprocess(src, 0x8B31);
     assert!(
-        result.starts_with("#version 330 core"),
-        "expected upgrade to 330 core, got: {}",
+        result.starts_with("#version 450 core"),
+        "expected upgrade to 450 core, got: {}",
         result
     );
 }
@@ -276,27 +278,33 @@ fn preprocess_skips_existing_location_on_in_out() {
     assert!(result.contains("layout(location=0) out vec4 fragColor;"));
 }
 
-// ============ preprocess: uniform location 注入 ============
+// ============ preprocess: uniform 处理（UBO 包装） ============
 
 #[test]
-fn preprocess_injects_location_for_non_opaque_uniform() {
+fn preprocess_packs_non_opaque_uniforms_into_ubo() {
+    // Vulkan target 拒绝独立 non-opaque uniform（必须包装进 UBO），
+    // 不注入 location（7a39023/bae79dc）。块名按 stage 命名（VS→UniformBlockVS），
+    // binding 从 0 开始（无已有 binding 时）。
     let src = "#version 330\nuniform mat4 MVP;\nuniform vec3 color;\nvoid main() {}\n";
     let result = preprocess::preprocess(src, 0x8B31);
     assert!(
-        result.contains("layout(location=0) uniform mat4 MVP;"),
-        "got: {}",
+        result.contains("layout(std140, binding = 0) uniform UniformBlockVS"),
+        "expected UBO wrapper, got: {}",
         result
     );
+    assert!(result.contains("mat4 MVP;"), "MVP member should be in UBO, got: {}", result);
+    assert!(result.contains("vec3 color;"), "color member should be in UBO, got: {}", result);
     assert!(
-        result.contains("layout(location=1) uniform vec3 color;"),
-        "got: {}",
+        !result.contains("layout(location="),
+        "location should not be injected, got: {}",
         result
     );
 }
 
 #[test]
 fn preprocess_skips_sampler_uniform_location_injection() {
-    // sampler 是 opaque，不应注入 location（由 AUTO_MAP_BINDINGS 处理）
+    // sampler 是 opaque，不应注入 location（旧 AUTO_MAP_BINDINGS 语义保留为负断言）；
+    // non-opaque MVP 被包装进 UBO 而非注入 location
     let src = "#version 330\nuniform sampler2D tex;\nuniform mat4 MVP;\nvoid main() {}\n";
     let result = preprocess::preprocess(src, 0x8B31);
     assert!(
@@ -304,33 +312,70 @@ fn preprocess_skips_sampler_uniform_location_injection() {
         "sampler should not get location, got: {}",
         result
     );
-    assert!(result.contains("layout(location=0) uniform mat4 MVP;"));
+    assert!(result.contains("mat4 MVP;"), "MVP should be packed into UBO, got: {}", result);
+    assert!(
+        !result.contains("layout(location="),
+        "location should not be injected, got: {}",
+        result
+    );
 }
 
 #[test]
 fn preprocess_skips_texture_and_image_uniforms() {
+    // texture2D/image2D 无 location（负断言，旧语义保留）；
+    // scale 被包装进 UBO 而非注入 location
     let src = "#version 330\nuniform texture2D tex;\nuniform image2D img;\nuniform float scale;\nvoid main() {}\n";
     let result = preprocess::preprocess(src, 0x8B31);
     assert!(!result.contains("layout(location=0) uniform texture2D"));
     assert!(!result.contains("layout(location=0) uniform image2D"));
-    assert!(result.contains("layout(location=0) uniform float scale;"));
+    assert!(result.contains("float scale;"), "scale should be packed into UBO, got: {}", result);
+    assert!(
+        !result.contains("layout(location="),
+        "location should not be injected, got: {}",
+        result
+    );
 }
 
 #[test]
 fn preprocess_skips_uniform_block_location_injection() {
-    // uniform block 不应注入 location
+    // uniform block 不应注入 location（负断言保留）；
+    // scale 被包装进 UniformBlockVS（binding=0），MyBlock 由 inject_missing_bindings
+    // 分配 binding=1（UniformBlockVS 先占 0），均不出现 location
     let src = "#version 330\nuniform MyBlock {\n    mat4 data;\n};\nuniform float scale;\nvoid main() {}\n";
     let result = preprocess::preprocess(src, 0x8B31);
     assert!(!result.contains("layout(location=0) uniform MyBlock"));
-    assert!(result.contains("layout(location=0) uniform float scale;"));
+    assert!(
+        result.contains("layout(std140, binding=1) uniform MyBlock"),
+        "MyBlock should get binding=1, got: {}",
+        result
+    );
+    assert!(result.contains("float scale;"), "scale should be packed into UBO, got: {}", result);
+    assert!(
+        !result.contains("layout(location="),
+        "location should not be injected, got: {}",
+        result
+    );
 }
 
 #[test]
 fn preprocess_skips_existing_layout_on_uniform() {
+    // 带 layout(location) 前缀的 uniform 也被包装进 UBO 且 location 剥离
+    // （gap 修复：旧 UNIFORM_RE 只匹配行首 uniform，带前缀行逃逸包装，
+    //   Vulkan target 下 shaderc 编译失败）
     let src = "#version 330\nlayout(location=3) uniform mat4 MVP;\nuniform float scale;\nvoid main() {}\n";
     let result = preprocess::preprocess(src, 0x8B31);
-    assert!(result.contains("layout(location=3) uniform mat4 MVP;"));
-    assert!(result.contains("layout(location=0) uniform float scale;"));
+    assert!(
+        !result.contains("layout(location=3)"),
+        "existing location should be stripped, got: {}",
+        result
+    );
+    assert!(result.contains("mat4 MVP;"), "MVP should be packed into UBO, got: {}", result);
+    assert!(result.contains("float scale;"), "scale should be packed into UBO, got: {}", result);
+    assert!(
+        !result.contains("layout(location="),
+        "no location should remain, got: {}",
+        result
+    );
 }
 
 // ============ preprocess: UBO/SSBO binding 注入 ============

@@ -596,10 +596,14 @@ fn convert_uniforms_to_ubo(src: &str, stage: u32) -> String {
     // 匹配单行全局 uniform 声明（不包括块，不包括 sampler/image/atomic_uint）
     // 例如：uniform mat4 ModelViewMat;
     //        uniform vec4 ColorModulator;
+    //        layout(location=3) uniform mat4 MVP;  ← 容忍可选 layout(...) 前缀
+    // 带 layout 前缀的 non-opaque uniform 在旧代码中逃逸 UBO 包装，Vulkan target
+    // 下 shaderc 编译失败（真实缺陷）。匹配后整行删除、只取 type/name 收集进 UBO，
+    // location 前缀自然剥离（location 在 UBO 内无意义，且原值可能跨 stage 冲突）。
     static UNIFORM_RE: OnceLock<Regex> = OnceLock::new();
     let uniform_re = UNIFORM_RE.get_or_init(|| {
         Regex::new(
-            r"(?m)^\s*uniform\s+(?P<type>[a-zA-Z_][\w]*(\s*\*\s*)?(?:[a-zA-Z_][\w]*\s*)?)\s+(?P<name>[a-zA-Z_][\w]*)\s*;"
+            r"(?m)^\s*(?:layout\s*\([^)]*\)\s*)?uniform\s+(?P<type>[a-zA-Z_][\w]*(\s*\*\s*)?(?:[a-zA-Z_][\w]*\s*)?)\s+(?P<name>[a-zA-Z_][\w]*)\s*;"
         ).unwrap()
     });
 
