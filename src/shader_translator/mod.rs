@@ -10,8 +10,14 @@
 
 pub mod cache;
 pub mod gles_compile;
+pub mod macros;
 pub mod postprocess;
 pub mod preprocess;
 pub mod spirv_compile;
 pub mod spirv_pass;
 pub mod string_pass;
+
+// 注：被使用的宏（simplify_ubo_processing / simplify_vulkan_workarounds）
+// 通过 #[macro_export] 导出到 crate 根，调用方用 `use crate::xxx;` 导入。
+// 其余预留宏（warn_once/gl_check_error/check_id_mapping/is_stub/gles_dispatch/
+// optimize_spirv_compile）暂无调用点，保留在 macros 模块内供后续使用。

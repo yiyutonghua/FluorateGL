@@ -576,7 +576,9 @@ pub extern "C" fn glGetStringi(name: u32, index: u32) -> *const c_char {
     let result = if name == 0x1F03 && (index as usize) < FAKE_EXTENSIONS.len() {
         FAKE_EXTENSIONS[index as usize].as_ptr() as *const c_char
     } else {
-        std::ptr::null()
+        // 越界返回空串而非 null：防宿主不判 null 直接解引用崩溃
+        static EMPTY: &[u8] = b"\0";
+        EMPTY.as_ptr() as *const c_char
     };
     log::debug!(
         "[FluorateGL] glGetStringi(0x{:04X}, {}) -> {:?}",
@@ -585,4 +587,31 @@ pub extern "C" fn glGetStringi(name: u32, index: u32) -> *const c_char {
         result
     );
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::glGetStringi;
+
+    /// 越界索引应返回非 null 的空串指针（首字节 '\0'），
+    /// 而非 null 指针：防宿主不判 null 直接解引用崩溃。
+    #[test]
+    fn gl_get_stringi_out_of_range_returns_empty_string() {
+        let ptr = glGetStringi(0x1F03, 9999);
+        assert!(!ptr.is_null(), "越界索引应返回非 null 指针");
+        unsafe {
+            assert_eq!(*ptr, 0, "返回的指针应指向空串（首字节为 '\\0'）");
+        }
+    }
+
+    /// 合法索引仍应返回对应扩展名（回归保护）。
+    #[test]
+    fn gl_get_stringi_valid_index_returns_extension() {
+        let ptr = glGetStringi(0x1F03, 0);
+        assert!(!ptr.is_null(), "合法索引应返回非 null 指针");
+        unsafe {
+            let name = std::ffi::CStr::from_ptr(ptr).to_bytes();
+            assert_eq!(name, b"GL_ARB_vertex_array_object");
+        }
+    }
 }

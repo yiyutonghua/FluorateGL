@@ -51,21 +51,6 @@ pub fn compile(spv: &[u32], version: u16) -> Result<String, SpirvCrossError> {
     // MC shader 需要 highp 避免精度不足，但某些着色器可能需要 mediump 以提高性能
     options.es_default_float_precision_highp = true;
     options.es_default_int_precision_highp = true;
-    options.es_default_float_precision_mediump = false; // 禁用默认 mediump
-    options.es_default_int_precision_mediump = false; // 禁用默认 mediump
-    options.es_default_float_precision_lowp = false; // 禁用默认 lowp
-    options.es_default_int_precision_lowp = false; // 禁用默认 lowp
-
-    // 优化选项：提高编译效率
-    options.common.max_set = 0; // 禁用 set 优化（可能破坏变量名）
-    options.common.max_binding = 0; // 禁用 binding 优化（可能破坏变量名）
-    options.common.max_descriptor_set = 0; // 禁用 descriptor set 优化
-    options.common.max_buffer_bounds = 0; // 禁用 buffer bounds 优化
-    options.common.max_image_bounds = 0; // 禁用 image bounds 优化
-
-    // 确保保留变量名和调试信息
-    options.common.keep_variable_names = true;
-    options.common.keep_struct_member_names = true;
 
     // 不翻转 Y 轴：输入是桌面 OpenGL SPIR-V（client=OpenGL，NDC Y-up），
     // GLES 同样是 Y-up，无需翻转。MobileGlues 同样使用 OpenGL client，

@@ -16,6 +16,7 @@
 use regex::Regex;
 use rustc_hash::FxHashSet;
 use std::sync::OnceLock;
+use crate::simplify_vulkan_workarounds;
 
 /// GLSL stage 常量（与 GL_VERTEX_SHADER/GL_FRAGMENT_SHADER 对齐）
 pub const GL_VERTEX_SHADER: u32 = 0x8B31;
@@ -95,20 +96,22 @@ fn undef_vulkan_macro(result: &mut String) {
 
 /// 将桌面 GLSL 的内置变量重命名为 Vulkan GLSL 对应的名称
 fn rename_vulkan_builtin_variables(result: &mut String) {
-    // 1. gl_VertexID -> gl_VertexIndex
-    static RE_VERTEX: OnceLock<Regex> = OnceLock::new();
-    let re_vertex = RE_VERTEX.get_or_init(|| Regex::new(r"\bgl_VertexID\b").unwrap());
-    *result = re_vertex.replace_all(result, "gl_VertexIndex").into_owned();
+    simplify_vulkan_workarounds!({
+        // 1. gl_VertexID -> gl_VertexIndex
+        static RE_VERTEX: OnceLock<Regex> = OnceLock::new();
+        let re_vertex = RE_VERTEX.get_or_init(|| Regex::new(r"\bgl_VertexID\b").unwrap());
+        *result = re_vertex.replace_all(result, "gl_VertexIndex").into_owned();
 
-    // 2. 变量名 sampler -> u_sampler (避免与关键字冲突)
-    // \b 保证了 sampler2D 中的 sampler 不会被替换
-    static RE_SAMPLER: OnceLock<Regex> = OnceLock::new();
-    let re_sampler = RE_SAMPLER.get_or_init(|| Regex::new(r"\bsampler\b").unwrap());
-    let new_result = re_sampler.replace_all(result, "u_sampler").into_owned();
-    if new_result.len() != result.len() {
-        log::debug!("[ShaderTranslator] preprocess 重命名了变量 sampler -> u_sampler");
-        *result = new_result;
-    }
+        // 2. 变量名 sampler -> u_sampler (避免与关键字冲突)
+        // \b 保证了 sampler2D 中的 sampler 不会被替换
+        static RE_SAMPLER: OnceLock<Regex> = OnceLock::new();
+        let re_sampler = RE_SAMPLER.get_or_init(|| Regex::new(r"\bsampler\b").unwrap());
+        let new_result = re_sampler.replace_all(result, "u_sampler").into_owned();
+        if new_result.len() != result.len() {
+            log::debug!("[ShaderTranslator] preprocess 重命名了变量 sampler -> u_sampler");
+            *result = new_result;
+        }
+    });
 }
 
 /// 将 samplerBuffer/isamplerBuffer/usamplerBuffer 转换为对应的 2D sampler
@@ -132,7 +135,7 @@ fn convert_sampler_buffer(src: &str) -> String {
     static RE_TYPE: OnceLock<Regex> = OnceLock::new();
     let re_type =
         RE_TYPE.get_or_init(|| Regex::new(r"\b(isampler|usampler|sampler)Buffer\b").unwrap());
-    let mut new_src = re_type.replace_all(src, "${1}2D").into_owned();
+    let new_src = re_type.replace_all(src, "${1}2D").into_owned();
 
     // 检查是否真的发生了类型替换
     if new_src.len() == src.len() {

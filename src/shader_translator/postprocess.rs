@@ -8,6 +8,7 @@
 
 use regex::Regex;
 use std::sync::OnceLock;
+use crate::simplify_ubo_processing;
 
 /// GLSL ES 后处理主入口
 ///
@@ -277,50 +278,52 @@ fn strip_uniform_locations(src: &str) -> String {
 /// 3. 避免误处理 C 风格结构体变量
 /// 4. 处理多行 UBO 声明
 fn strip_ubo_instance_name(src: &str) -> String {
-    // 匹配 UBO/SSBO 块声明末尾的实例名
-    // 格式：} _N;  或  } _N = ...;（带初始化的罕见情况）
-    // 或 } _N;\n（多行声明）
-    static RE_INSTANCE: OnceLock<Regex> = OnceLock::new();
-    let re_instance = RE_INSTANCE
-        .get_or_init(|| Regex::new(r"\}\s*(?P<inst>_\w+)(?:\s*=\s*[^;]*)?\s*;").unwrap());
+    simplify_ubo_processing!({
+        // 匹配 UBO/SSBO 块声明末尾的实例名
+        // 格式：} _N;  或  } _N = ...;（带初始化的罕见情况）
+        // 或 } _N;\n（多行声明）
+        static RE_INSTANCE: OnceLock<Regex> = OnceLock::new();
+        let re_instance = RE_INSTANCE
+            .get_or_init(|| Regex::new(r"\}\s*(?P<inst>_\w+)(?:\s*=\s*[^;]*)?\s*;").unwrap());
 
-    // 收集所有 UBO/SSBO 实例名
-    let instance_names: Vec<String> = re_instance
-        .captures_iter(src)
-        .filter_map(|c| c.name("inst").map(|m| m.as_str().to_string()))
-        .collect();
+        // 收集所有 UBO/SSBO 实例名
+        let instance_names: Vec<String> = re_instance
+            .captures_iter(src)
+            .filter_map(|c| c.name("inst").map(|m| m.as_str().to_string()))
+            .collect();
 
-    if instance_names.is_empty() {
-        return src.to_string();
-    }
+        if instance_names.is_empty() {
+            return src.to_string();
+        }
 
-    // 1. 移除实例名声明：`} _20;` → `};`
-    let result = re_instance.replace_all(src, "};").to_string();
+        // 1. 移除实例名声明：`} _20;` → `};`
+        let result = re_instance.replace_all(src, "};").to_string();
 
-    // 2. 替换函数体中的 `实例名.成员` → `成员`
-    //    用 \b 边界确保只匹配完整的实例名（避免误伤其他变量）
-    let mut result = result;
-    for inst in &instance_names {
-        // 动态构造的 Regex：pattern 依赖运行时解析到的实例名 inst（如 _20、_30）
-        let pattern = format!(r"\b{}\.", regex::escape(inst));
-        let re = Regex::new(&pattern).unwrap();
-        result = re.replace_all(&result, "").to_string();
-    }
+        // 2. 替换函数体中的 `实例名.成员` → `成员`
+        //    用 \b 边界确保只匹配完整的实例名（避免误伤其他变量）
+        let mut result = result;
+        for inst in &instance_names {
+            // 动态构造的 Regex：pattern 依赖运行时解析到的实例名 inst（如 _20、_30）
+            let pattern = format!(r"\b{}\.", regex::escape(inst));
+            let re = Regex::new(&pattern).unwrap();
+            result = re.replace_all(&result, "").to_string();
+        }
 
-    // 3. 处理 UBO 块内的成员引用（如 _20.ModelViewMat 在块内）
-    //    这可能出现在 UBO 块的成员初始化中
-    for inst in &instance_names {
-        let pattern = format!(r"\b{}\.", regex::escape(inst));
-        let re = Regex::new(&pattern).unwrap();
-        result = re.replace_all(&result, "").to_string();
-    }
+        // 3. 处理 UBO 块内的成员引用（如 _20.ModelViewMat 在块内）
+        //    这可能出现在 UBO 块的成员初始化中
+        for inst in &instance_names {
+            let pattern = format!(r"\b{}\.", regex::escape(inst));
+            let re = Regex::new(&pattern).unwrap();
+            result = re.replace_all(&result, "").to_string();
+        }
 
-    log::debug!(
-        "[ShaderTranslator] postprocess 移除了 UBO/SSBO 实例名: {:?}",
-        instance_names
-    );
+        log::debug!(
+            "[ShaderTranslator] postprocess 移除了 UBO/SSBO 实例名: {:?}",
+            instance_names
+        );
 
-    result
+        result
+    })
 }
 
 /// 把 preprocess 生成的 UBO 拆解为 standalone uniform

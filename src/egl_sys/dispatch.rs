@@ -2,6 +2,7 @@ use libc::c_char;
 use std::ffi::c_void;
 
 #[allow(dead_code)]
+#[repr(C)]
 pub struct EglDispatch {
     pub get_display: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
     pub initialize: unsafe extern "C" fn(*mut c_void, *mut i32, *mut i32) -> u32,
@@ -46,17 +47,84 @@ pub struct EglDispatch {
     pub get_proc_address: unsafe extern "C" fn(*const c_char) -> *mut c_void,
 }
 
+// 编译期断言：EglDispatch 全部字段为函数指针，表大小可按指针大小整除
+// （与 backend/dispatch.rs 中 GlesDispatch 的断言写法一致）
+const _: () = assert!(
+    std::mem::size_of::<EglDispatch>() % std::mem::size_of::<unsafe extern "C" fn()>() == 0
+);
+
+// —— 按签名类别的安全 no-op stub（零参数，忽略入参，返回安全常量）——
+// 用于 all_stub()：宿主在 stub 模式下调用时，拿到的是安全值而非寄存器垃圾。
+#[allow(dead_code)]
+unsafe extern "C" fn stub_void() {}
+unsafe extern "C" fn stub_zero_u32() -> u32 {
+    0
+}
+unsafe extern "C" fn stub_null_ptr() -> *mut c_void {
+    std::ptr::null_mut()
+}
+unsafe extern "C" fn stub_true() -> u32 {
+    1 // EGL_TRUE
+}
+unsafe extern "C" fn stub_empty_string() -> *const c_char {
+    b"\0".as_ptr() as *const c_char
+}
+
+/// 按签名类别将零参数 stub（先 reify 为自身签名的 fn pointer）transmute 为
+/// 目标字段签名。stub 不使用入参（忽略寄存器/栈上的参数），转换安全。
+macro_rules! stub {
+    ($e:expr) => {{
+        unsafe { std::mem::transmute::<_, _>($e) }
+    }};
+}
+
 impl EglDispatch {
-    /// Create a dispatch table where every function pointer is a no-op stub.
+    /// Create a dispatch table where every function pointer is a safe no-op stub.
+    ///
+    /// 按签名类别返回安全值（P1-A：避免宿主把 AArch64 x0 残留垃圾当指针/状态使用）：
+    /// - 返回指针（创建/获取类）→ `stub_null_ptr`（null，宿主可安全判空）
+    /// - 返回 u32 状态/查询类 → `stub_zero_u32`（0 = EGL_FALSE / 失败码）
+    /// - 返回 EGLBoolean 类（bind_api）→ `stub_true`（EGL_TRUE = 1）
+    /// - 返回字符串类（query_string）→ `stub_empty_string`（空串，宿主可安全 CStr 解析）
     pub fn all_stub() -> Self {
-        unsafe extern "C" fn stub_fn() {}
-        let mut stub = std::mem::MaybeUninit::<Self>::uninit();
-        let ptr = stub.as_mut_ptr() as *mut unsafe extern "C" fn();
-        let count = std::mem::size_of::<Self>() / std::mem::size_of::<unsafe extern "C" fn()>();
-        for i in 0..count {
-            unsafe { ptr.add(i).write(stub_fn) };
+        Self {
+            get_display: stub!(stub_null_ptr as unsafe extern "C" fn() -> *mut c_void),
+            initialize: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            terminate: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            query_string: stub!(stub_empty_string as unsafe extern "C" fn() -> *const c_char),
+            get_configs: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            choose_config: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            get_config_attrib: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            create_window_surface: stub!(stub_null_ptr as unsafe extern "C" fn() -> *mut c_void),
+            create_pbuffer_surface: stub!(stub_null_ptr as unsafe extern "C" fn() -> *mut c_void),
+            create_pbuffer_from_client_buffer: stub!(
+                stub_null_ptr as unsafe extern "C" fn() -> *mut c_void
+            ),
+            create_pixmap_surface: stub!(stub_null_ptr as unsafe extern "C" fn() -> *mut c_void),
+            destroy_surface: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            surface_attrib: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            bind_tex_image: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            release_tex_image: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            create_context: stub!(stub_null_ptr as unsafe extern "C" fn() -> *mut c_void),
+            destroy_context: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            make_current: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            query_context: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            query_surface: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            get_current_context: stub!(stub_null_ptr as unsafe extern "C" fn() -> *mut c_void),
+            get_current_surface: stub!(stub_null_ptr as unsafe extern "C" fn() -> *mut c_void),
+            get_current_display: stub!(stub_null_ptr as unsafe extern "C" fn() -> *mut c_void),
+            wait_client: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            wait_native: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            wait_gl: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            release_thread: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            bind_api: stub!(stub_true as unsafe extern "C" fn() -> u32), // EGLBoolean = EGL_TRUE
+            query_api: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            swap_buffers: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            swap_interval: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            copy_buffers: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            get_error: stub!(stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            get_proc_address: stub!(stub_null_ptr as unsafe extern "C" fn() -> *mut c_void),
         }
-        unsafe { stub.assume_init() }
     }
 
     #[allow(clippy::missing_transmute_annotations)]
@@ -129,5 +197,81 @@ impl EglDispatch {
             get_error: unsafe { std::mem::transmute(load!("eglGetError")) },
             get_proc_address: unsafe { std::mem::transmute(load!("eglGetProcAddress")) },
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// P1-A：all_stub() 各字段必须按签名类别指向对应 stub
+    /// （比较裸指针地址，避免签名不同的函数指针直接比较）
+    #[test]
+    fn all_stub_assigns_safe_values_by_signature() {
+        let s = EglDispatch::all_stub();
+
+        // 返回指针类（创建/获取类）→ stub_null_ptr（null 安全值）
+        assert_eq!(s.get_display as *const (), stub_null_ptr as *const ());
+        assert_eq!(s.create_context as *const (), stub_null_ptr as *const ());
+        assert_eq!(s.create_window_surface as *const (), stub_null_ptr as *const ());
+        assert_eq!(s.create_pbuffer_surface as *const (), stub_null_ptr as *const ());
+        assert_eq!(
+            s.create_pbuffer_from_client_buffer as *const (),
+            stub_null_ptr as *const ()
+        );
+        assert_eq!(s.create_pixmap_surface as *const (), stub_null_ptr as *const ());
+        assert_eq!(s.get_current_context as *const (), stub_null_ptr as *const ());
+        assert_eq!(s.get_current_surface as *const (), stub_null_ptr as *const ());
+        assert_eq!(s.get_current_display as *const (), stub_null_ptr as *const ());
+        assert_eq!(s.get_proc_address as *const (), stub_null_ptr as *const ());
+
+        // u32 状态/查询类 → stub_zero_u32（0 = EGL_FALSE / 失败码）
+        assert_eq!(s.initialize as *const (), stub_zero_u32 as *const ());
+        assert_eq!(s.terminate as *const (), stub_zero_u32 as *const ());
+        assert_eq!(s.make_current as *const (), stub_zero_u32 as *const ());
+        assert_eq!(s.query_context as *const (), stub_zero_u32 as *const ());
+        assert_eq!(s.query_surface as *const (), stub_zero_u32 as *const ());
+        assert_eq!(s.swap_buffers as *const (), stub_zero_u32 as *const ());
+        assert_eq!(s.get_error as *const (), stub_zero_u32 as *const ());
+
+        // EGLBoolean 类 → stub_true（EGL_TRUE = 1）
+        assert_eq!(s.bind_api as *const (), stub_true as *const ());
+
+        // 字符串类 → stub_empty_string（空串指针，非 null，可安全 CStr 解析）
+        assert_eq!(s.query_string as *const (), stub_empty_string as *const ());
+    }
+
+    /// P1-A：运行时验证各签名类别 stub 返回的安全值本身正确
+    #[test]
+    fn all_stub_returns_safe_values() {
+        let s = EglDispatch::all_stub();
+        unsafe {
+            // 指针类 → null
+            assert!((s.get_display)(std::ptr::null_mut()).is_null());
+            assert!(
+                (s.create_context)(
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null()
+                )
+                .is_null()
+            );
+            // u32 状态类 → 0
+            assert_eq!(
+                (s.initialize)(
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut()
+                ),
+                0
+            );
+            // EGLBoolean 类 → 1
+            assert_eq!((s.bind_api)(0), 1);
+            // 字符串类 → 非 null 且首字节为 NUL（空串）
+            let str_ptr = (s.query_string)(std::ptr::null_mut(), 0);
+            assert!(!str_ptr.is_null());
+            assert_eq!(*str_ptr, 0);
+        }
     }
 }

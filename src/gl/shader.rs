@@ -129,67 +129,39 @@ pub extern "C" fn glShaderSource(
             source.push_str(&piece);
         }
 
-        // 计算源码哈希用于翻译缓存
-        use std::hash::{Hash, Hasher};
-        let mut hasher = rustc_hash::FxHasher::default();
-        source.hash(&mut hasher);
-        let source_hash = hasher.finish();
-
-        // 查翻译缓存，命中则跳过完整翻译管线（shaderc + spirv-cross）
-        let (upload_source, translated) = if let Some(cached) = state::with_state_ref(|s| {
-            s.shader_translation_cache
-                .get(&(source_hash, stage))
-                .cloned()
-        }) {
-            log::debug!(
-                "[ShaderTranslator] shader {} stage 0x{:04X} cache hit ({} chars)",
-                shader,
-                stage,
-                cached.len()
-            );
-            (cached, true)
-        } else {
-            use crate::shader_translator::spirv_pass::TranslationResult;
-            let translate_start = std::time::Instant::now();
-            let (upload, trans) = match crate::shader_translator::spirv_pass::translate(
-                &source, stage,
-            ) {
-                TranslationResult::Translated(translated) => {
-                    log::debug!(
-                        "[ShaderTranslator] shader {} stage 0x{:04X} translated via SPIR-V ({} chars, took {:?})",
-                        shader,
-                        stage,
-                        translated.len(),
-                        translate_start.elapsed()
-                    );
-                    (translated, true)
-                }
-                TranslationResult::PassThrough => {
-                    log::debug!(
-                        "[ShaderTranslator] shader {} stage 0x{:04X} passed through unchanged (driver extension supported)",
-                        shader,
-                        stage
-                    );
-                    (source.clone(), false)
-                }
-                TranslationResult::Failed => {
-                    log::warn!(
-                        "[ShaderTranslator] SPIR-V pipeline failed for shader {}; passing original source ({} chars, took {:?})",
-                        shader,
-                        source.len(),
-                        translate_start.elapsed()
-                    );
-                    (source.clone(), false)
-                }
-            };
-            // 翻译成功则缓存结果，后续相同源码可直接复用
-            if trans {
-                state::with_state(|s| {
-                    s.shader_translation_cache
-                        .insert((source_hash, stage), upload.clone());
-                });
+        // 直接走完整翻译管线（全局 ShaderCache LruCache(64) 已兜底缓存语义）
+        use crate::shader_translator::spirv_pass::TranslationResult;
+        let translate_start = std::time::Instant::now();
+        let (upload_source, translated) = match crate::shader_translator::spirv_pass::translate(
+            &source, stage,
+        ) {
+            TranslationResult::Translated(translated) => {
+                log::debug!(
+                    "[ShaderTranslator] shader {} stage 0x{:04X} translated via SPIR-V ({} chars, took {:?})",
+                    shader,
+                    stage,
+                    translated.len(),
+                    translate_start.elapsed()
+                );
+                (translated, true)
             }
-            (upload, trans)
+            TranslationResult::PassThrough => {
+                log::debug!(
+                    "[ShaderTranslator] shader {} stage 0x{:04X} passed through unchanged (driver extension supported)",
+                    shader,
+                    stage
+                );
+                (source.clone(), false)
+            }
+            TranslationResult::Failed => {
+                log::warn!(
+                    "[ShaderTranslator] SPIR-V pipeline failed for shader {}; passing original source ({} chars, took {:?})",
+                    shader,
+                    source.len(),
+                    translate_start.elapsed()
+                );
+                (source.clone(), false)
+            }
         };
 
         state::with_state(|s| {
@@ -296,7 +268,9 @@ pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
         let gles_id = state::with_state_ref(|s| s.shaders.get_gles(shader).unwrap_or(0));
         if gles_id == 0 {
             // shader 不在 IdMap 中：可能是跨线程查询（异步线程创建、Render 线程查询）
-            // 或 GLES 创建失败（gles_id=0 被 alloc）。此时不设置 *params，调用方看到 0（GL_FALSE）。
+            // 或 glCreateShader 时底层 GLES 返回 0（当前线程无 EGL 上下文），此时
+            // 不分配 desktop_id 直接返回 0，故该 id 不会进入 IdMap。
+            // 本分支不设置 *params，调用方看到 0（GL_FALSE）。
             warn_shader_id_miss(shader);
             return;
         }

@@ -1,15 +1,14 @@
 //! 线程局部 GL 状态：ID 映射与缓存
 //!
-//! 桌面 GL 与底层 GLES 的对象 ID 是两套独立命名空间（桌面 ID 由本库分配且
-//! 单调递增不复用，GLES ID 由驱动分配）。[`IdMap`] 维护双向映射。
+//! 桌面 GL 与底层 GLES 的对象 ID 是两套独立命名空间（桌面 ID 由本库全局唯一
+//! 单调分配，跨线程 atomic；GLES ID 由驱动分配）。[`IdMap`] 维护双向映射。
 //!
 //! [`State`] 是 `thread_local` 的 `RefCell`，因为 GL 上下文是线程绑定的。
 //! 访问入口：
 //! - [`with_state`]：可变借用（`borrow_mut`），用于写操作
 //! - [`with_state_ref`]：不可变借用（`borrow`），用于只读查询，开销略低
 //!
-//! 额外维护两类缓存以减少热路径开销：
-//! - `shader_translation_cache`：按 (源码哈希, stage) 缓存翻译结果
+//! 额外维护一个缓存以减少热路径开销：
 //! - `uniform_location_cache`：按 (program, name) 缓存 uniform location
 
 pub mod id_map;
@@ -54,8 +53,6 @@ pub struct State {
     pub framebuffers: IdMap,
     pub renderbuffers: IdMap,
     pub queries: IdMap,
-    /// shader 翻译结果缓存（key = (源码哈希, stage)），避免 F3 重载等场景重复翻译相同源码
-    pub shader_translation_cache: FxHashMap<(u64, u32), String>,
     /// uniform location 缓存（key = (desktop_program_id, uniform_name)）
     pub uniform_location_cache: FxHashMap<(u32, String), i32>,
 
@@ -86,7 +83,6 @@ impl State {
             framebuffers: IdMap::new(),
             renderbuffers: IdMap::new(),
             queries: IdMap::new(),
-            shader_translation_cache: FxHashMap::default(),
             uniform_location_cache: FxHashMap::default(),
 
             bound_buffer: 0,

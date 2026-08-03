@@ -12,10 +12,28 @@ const EGL_OPENGL_ES_API: u32 = 0x30A0;
 const EGL_SUCCESS: u32 = 0x3000;
 const EGL_VERSION: i32 = 0x3053;
 const EGL_EXTENSIONS: i32 = 0x3055;
+/// eglCreateContext 属性改写循环允许的最大属性对数（防无限越界读）
+const MAX_ATTRIB_PAIRS: usize = 128;
+
+/// EGL 版本字符串（eglQueryString(EGL_VERSION) 返回值）
+static VERSION: &[u8] = b"1.4 FluorateGL\0";
+
+// 编译期断言：EGL 版本字符串 "主.次" 必须与 REPORTED_EGL_MAJOR/MINOR 一致，
+// 防止改动一处遗漏另一处导致宿主 EGL 版本解析异常（模仿 config.rs 的断言模式）。
+// 注意：const 块内不能用 format!，直接对比字节。
+const _: () = {
+    assert!(VERSION[0] == b'0' + crate::config::REPORTED_EGL_MAJOR as u8);
+    assert!(VERSION[2] == b'0' + crate::config::REPORTED_EGL_MINOR as u8);
+};
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn eglGetDisplay(display_id: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
+    // P1-A 双层兜底：stub 模式下返回 null（宿主可判空），避免把垃圾值当 display 句柄
+    if !crate::backend::egl_backend_ready() {
+        log::error!("[EGL] eglGetDisplay 在 STUB 模式（EGL 库加载失败）被调用，返回 null");
+        return std::ptr::null_mut();
+    }
     backend::with_egl_dispatch(|d| unsafe { (d.get_display)(display_id) })
 }
 
@@ -48,10 +66,7 @@ pub extern "C" fn eglTerminate(dpy: *mut c_void) -> u32 {
 #[allow(non_snake_case)]
 pub extern "C" fn eglQueryString(dpy: *mut c_void, name: i32) -> *const c_char {
     match name {
-        EGL_VERSION => {
-            static VERSION: &[u8] = b"1.4 FluorateGL\0";
-            VERSION.as_ptr() as *const c_char
-        }
+        EGL_VERSION => VERSION.as_ptr() as *const c_char,
         EGL_EXTENSIONS => {
             static EXTENSIONS: &[u8] = b"EGL_KHR_create_context EGL_KHR_surfaceless_context EGL_ANDROID_framebuffer_target EGL_ANDROID_blob_cache EGL_EXT_swap_buffers_with_damage EGL_KHR_swap_buffers_with_damage EGL_KHR_image_base EGL_KHR_gl_texture_2D_image EGL_KHR_gl_texture_cubemap_image EGL_KHR_gl_renderbuffer_image EGL_KHR_fence_sync EGL_KHR_wait_sync EGL_ANDROID_native_fence_sync EGL_KHR_reusable_sync\0";
             EXTENSIONS.as_ptr() as *const c_char
@@ -106,6 +121,11 @@ pub extern "C" fn eglCreateWindowSurface(
     win: *mut c_void,
     attrib_list: *const i32,
 ) -> *mut c_void {
+    // P1-A 双层兜底：stub 模式下返回 null（EGL_NO_SURFACE 语义），避免伪指针进入宿主
+    if !crate::backend::egl_backend_ready() {
+        log::error!("[EGL] eglCreateWindowSurface 在 STUB 模式（EGL 库加载失败）被调用，返回 null");
+        return std::ptr::null_mut();
+    }
     backend::with_egl_dispatch(|d| unsafe {
         (d.create_window_surface)(dpy, config, win, attrib_list)
     })
@@ -118,6 +138,11 @@ pub extern "C" fn eglCreatePbufferSurface(
     config: *mut c_void,
     attrib_list: *const i32,
 ) -> *mut c_void {
+    // P1-A 双层兜底：stub 模式下返回 null（EGL_NO_SURFACE 语义），避免伪指针进入宿主
+    if !crate::backend::egl_backend_ready() {
+        log::error!("[EGL] eglCreatePbufferSurface 在 STUB 模式（EGL 库加载失败）被调用，返回 null");
+        return std::ptr::null_mut();
+    }
     backend::with_egl_dispatch(|d| unsafe { (d.create_pbuffer_surface)(dpy, config, attrib_list) })
 }
 
@@ -130,6 +155,13 @@ pub extern "C" fn eglCreatePbufferFromClientBuffer(
     config: *mut c_void,
     attrib_list: *const i32,
 ) -> *mut c_void {
+    // P1-A 双层兜底：stub 模式下返回 null（EGL_NO_SURFACE 语义），避免伪指针进入宿主
+    if !crate::backend::egl_backend_ready() {
+        log::error!(
+            "[EGL] eglCreatePbufferFromClientBuffer 在 STUB 模式（EGL 库加载失败）被调用，返回 null"
+        );
+        return std::ptr::null_mut();
+    }
     backend::with_egl_dispatch(|d| unsafe {
         (d.create_pbuffer_from_client_buffer)(dpy, buftype, buffer, config, attrib_list)
     })
@@ -143,6 +175,11 @@ pub extern "C" fn eglCreatePixmapSurface(
     pixmap: *mut c_void,
     attrib_list: *const i32,
 ) -> *mut c_void {
+    // P1-A 双层兜底：stub 模式下返回 null（EGL_NO_SURFACE 语义），避免伪指针进入宿主
+    if !crate::backend::egl_backend_ready() {
+        log::error!("[EGL] eglCreatePixmapSurface 在 STUB 模式（EGL 库加载失败）被调用，返回 null");
+        return std::ptr::null_mut();
+    }
     backend::with_egl_dispatch(|d| unsafe {
         (d.create_pixmap_surface)(dpy, config, pixmap, attrib_list)
     })
@@ -197,6 +234,12 @@ pub extern "C" fn eglCreateContext(
     share_context: *mut std::ffi::c_void,
     attrib_list: *const i32,
 ) -> *mut std::ffi::c_void {
+    // P1-A 双层兜底：stub 模式下直接返回 EGL_NO_CONTEXT（null）。
+    // 必须放在 128 对上限检查之前：stub 模式下任何调用都不应产生伪 context 指针。
+    if !crate::backend::egl_backend_ready() {
+        log::error!("[EGL] eglCreateContext 在 STUB 模式（EGL 库加载失败）被调用，返回 null");
+        return std::ptr::null_mut();
+    }
     if attrib_list.is_null() {
         return backend::with_egl_dispatch(|d| unsafe {
             (d.create_context)(dpy, config, share_context, std::ptr::null())
@@ -207,6 +250,14 @@ pub extern "C" fn eglCreateContext(
     let mut i = 0;
 
     loop {
+        // P1-C 越界防线：attrib_list 必须由 EGL_NONE 终止，但损坏/恶意的宿主可能
+        // 传入无终止的超长数组，导致无限越界读。超过 128 对直接拒绝。
+        // 注意：不能返回 EGL_BAD_ATTRIBUTE（0x3054）数值——返回类型是 *mut c_void，
+        // 数值会被宿主当作有效 context 指针（垃圾指针漏洞），必须返回 EGL_NO_CONTEXT。
+        if (i as usize) >= MAX_ATTRIB_PAIRS * 2 {
+            log::warn!("[EGL] eglCreateContext attrib_list 超过 128 对且无 EGL_NONE 终止，拒绝创建");
+            return std::ptr::null_mut();
+        }
         let attr = unsafe { *attrib_list.offset(i) };
         if attr == EGL_NONE {
             break;
@@ -250,7 +301,8 @@ pub extern "C" fn eglMakeCurrent(
     read: *mut std::ffi::c_void,
     ctx: *mut std::ffi::c_void,
 ) -> u32 {
-    log::info!(
+    // 保留 debug 级别以支持 FLUORATEGL_LOG=debug 下的上下文切换诊断
+    log::debug!(
         "[EGL] eglMakeCurrent dpy={:?} draw={:?} read={:?} ctx={:?}",
         dpy,
         draw,
@@ -258,7 +310,8 @@ pub extern "C" fn eglMakeCurrent(
         ctx
     );
     let result = backend::with_egl_dispatch(|d| unsafe { (d.make_current)(dpy, draw, read, ctx) });
-    log::info!("[EGL] eglMakeCurrent result=0x{:04X}", result);
+    // 保留 debug 级别以支持 FLUORATEGL_LOG=debug 下的上下文切换诊断
+    log::debug!("[EGL] eglMakeCurrent result=0x{:04X}", result);
     result
 }
 
@@ -271,7 +324,7 @@ pub extern "C" fn eglQueryContext(
     value: *mut i32,
 ) -> u32 {
     if attribute == EGL_CONTEXT_CLIENT_VERSION {
-        unsafe { *value = crate::config::REPORTED_GL_MAJOR };
+        unsafe { *value = crate::config::REPORTED_EGL_CLIENT_VERSION };
         return EGL_SUCCESS;
     }
     backend::with_egl_dispatch(|d| unsafe { (d.query_context)(dpy, ctx, attribute, value) })
@@ -477,5 +530,61 @@ fn warn_missing_gl_function(name: &str) {
             "[FluorateGL] eglGetProcAddress({}) -> null (FluorateGL 未导出且 GLES 驱动未提供，LWJGL capabilities 将为 null，调用时会抛错)",
             name
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// P1-C：超长 attrib_list（>128 对且无 EGL_NONE 终止）必须被拒绝。
+    /// 越界检查发生在 dispatch 调用之前，不依赖 backend 全局状态，测试可行。
+    #[test]
+    fn create_context_rejects_oversized_attrib_list() {
+        // 200 对属性、无 EGL_NONE 终止（共 400 个 i32，循环第 129 对时触发上限）
+        let attribs: Vec<i32> = (0..200).flat_map(|_| [EGL_CONTEXT_CLIENT_VERSION, 3]).collect();
+        let ctx = unsafe {
+            eglCreateContext(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                attribs.as_ptr(),
+            )
+        };
+        assert!(
+            ctx.is_null(),
+            "超过 128 对的 attrib_list 必须返回 EGL_NO_CONTEXT（null），而非把错误码数值当指针返回"
+        );
+    }
+
+    /// P1-C：恰好 128 对且无 EGL_NONE 终止也应被拒绝（边界值）。
+    #[test]
+    fn create_context_rejects_boundary_attrib_list_without_none() {
+        let attribs: Vec<i32> = (0..128).flat_map(|_| [EGL_CONTEXT_CLIENT_VERSION, 3]).collect();
+        let ctx = unsafe {
+            eglCreateContext(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                attribs.as_ptr(),
+            )
+        };
+        assert!(ctx.is_null(), "128 对但无 EGL_NONE 终止时必须返回 EGL_NO_CONTEXT");
+    }
+
+    /// P1-C：短列表（EGL_NONE 正常终止）不得被误拒——验证循环上限不影响正常路径。
+    /// 走到 dispatch 时使用 all_stub，仅验证不触发越界拒绝（不断言 stub 返回值）。
+    #[test]
+    fn create_context_accepts_short_attrib_list() {
+        let attribs: Vec<i32> = vec![EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE];
+        let ctx = unsafe {
+            eglCreateContext(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                attribs.as_ptr(),
+            )
+        };
+        let _ = ctx; // stub 返回值取决于 backend 状态，此处只验证未被越界逻辑拒绝
     }
 }

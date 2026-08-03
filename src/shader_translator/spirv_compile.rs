@@ -21,7 +21,7 @@
 //! Vulkan target 要求：GLSL >= 140，所有 in/out 有 location，UBO/SSBO 有 binding。
 //! preprocess 负责注入这些。
 
-use shaderc::{CompileOptions, Compiler, EnvVersion, OptimizationLevel, ShaderKind, TargetEnv};
+use shaderc::{CompileOptions, Compiler, OptimizationLevel, ShaderKind, SpirvVersion};
 use std::sync::OnceLock;
 
 // GL shader stage 常量
@@ -114,7 +114,10 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
             return None;
         }
     };
-    options.set_target_env(TargetEnv::Vulkan, EnvVersion::Vulkan1_2 as u32);
+    
+    // target env: Vulkan 1.2（与下方 SPIR-V 1.5 匹配；shaderc 默认回落 Vulkan 1.0，
+    // 只支持 SPIR-V 1.0，会导致 "Invalid SPIR-V binary version 1.5 for target environment SPIR-V 1.0"）
+    options.set_target_env(shaderc::TargetEnv::Vulkan, shaderc::EnvVersion::Vulkan1_2 as u32);
     // 优化级别：Performance（启用 SPIRV-Tools 优化，提高性能）
     // 之前使用 Zero 级别是为了保留变量名，但现代 shaderc 和 spirv-cross 能更好地处理
     // debug info，Performance 级别不会破坏变量名映射，同时提高编译性能
@@ -129,11 +132,7 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
     // 不会影响已有显式 binding 的 uniform。
     options.set_auto_bind_uniforms(true);
     // 启用 SPIR-V 1.5（支持更多现代特性）
-    options.set_target_spirv_version((1, 5));
-    // 启用 Vulkan 规则放宽（支持更多 GLSL 特性）
-    options.set_vulkan_rules_relaxed(true);
-    // 启用分离着色器（提高编译效率）
-    options.set_separate_shader_objects(true);
+    options.set_target_spirv(SpirvVersion::V1_5);
 
     // 执行编译
     let result = compiler.compile_into_spirv(

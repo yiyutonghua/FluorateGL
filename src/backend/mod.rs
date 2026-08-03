@@ -189,6 +189,15 @@ pub fn egl_dispatch() -> Option<&'static crate::egl_sys::dispatch::EglDispatch> 
     EGL_DISPATCH.get()
 }
 
+/// EGL 后端是否真实可用（EGL_DISPATCH 未设置 = stub 兜底模式）。
+///
+/// exports 层在 stub 模式下应拒绝返回伪指针的创建/获取类调用
+/// （eglGetDisplay / eglCreateContext / eglCreate*Surface 等），
+/// 直接返回 null 而非让宿主持有垃圾指针（P1-A 双层兜底）。
+pub fn egl_backend_ready() -> bool {
+    EGL_DISPATCH.get().is_some()
+}
+
 /// 在首次 GL 调用时（EGL 上下文已创建）查询真实 GLES 版本与扩展，构建能力表。
 ///
 /// 拦截层（drawing.rs / multi_draw.rs）基于此表决定原生转发/模拟/跳过。

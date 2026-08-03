@@ -37,6 +37,7 @@ impl ShaderCache {
     /// 3. GLES 版本
     /// 4. 源码特征（如是否包含 samplerBuffer、textureQueryLod 等）
     /// 5. 预处理后的特征（如注入的 location/binding 数量）
+    /// 6. 优化后的特征（如是否启用了特定优化）
     fn compute_key(source: &str, stage: u32, gles_version: u32) -> CacheKey {
         let mut hasher = Sha256::new();
 
@@ -55,14 +56,16 @@ impl ShaderCache {
             source.contains("SSBO"),
             source.contains("gl_VertexID"),
             source.contains("gl_FragColor"),
+            source.contains("gl_VertexIndex"), // Vulkan target 特征
+            source.contains("u_sampler"),     // 重命名特征
         ];
 
         for feature in features {
-            hasher.update(if feature { 1u8 } else { 0u8 });
+            hasher.update([if feature { 1u8 } else { 0u8 }]);
         }
 
         // 预处理特征（基于源码内容估计）
-        let estimated_injects = if source.contains("samplerBuffer") {
+        let estimated_injects: u32 = if source.contains("samplerBuffer") {
             1
         } else {
             0
@@ -73,6 +76,17 @@ impl ShaderCache {
         } + if source.contains("atomic_uint") { 1 } else { 0 };
 
         hasher.update(estimated_injects.to_le_bytes());
+
+        // 优化特征
+        let optimizations = [
+            source.contains("#version 450 core"), // 版本升级特征
+            source.contains("layout(location="), // location 注入特征
+            source.contains("layout(binding="), // binding 注入特征
+        ];
+
+        for opt in optimizations {
+            hasher.update([if opt { 1u8 } else { 0u8 }]);
+        }
 
         let result = hasher.finalize();
         let mut key = [0u8; 32];

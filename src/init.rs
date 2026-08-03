@@ -35,15 +35,11 @@ fn capture_self_handle() {
     let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
     if unsafe { libc::dladdr(addr as *const _, &mut info) } != 0 {
         if !info.dli_fname.is_null() {
-            // 先尝试 RTLD_NOLOAD（不重新加载，只增加引用计数）
+            // 仅尝试 RTLD_NOLOAD（不重新加载，只增加引用计数）。
+            // 旧平台不支持 RTLD_NOLOAD 时不做二次 dlopen 回退（避免 ctor 重入）；
+            // 长期方向由 P3-A 自建导出符号表替代 dlsym(self_handle)。
             let handle =
                 unsafe { libc::dlopen(info.dli_fname, libc::RTLD_NOW | libc::RTLD_NOLOAD) };
-            // Android 旧版本可能不支持 RTLD_NOLOAD，回退到普通 dlopen
-            let handle = if handle.is_null() {
-                unsafe { libc::dlopen(info.dli_fname, libc::RTLD_NOW) }
-            } else {
-                handle
-            };
             if !handle.is_null() {
                 let _ = SELF_HANDLE.set(handle as usize);
                 log::info!(
@@ -52,9 +48,10 @@ fn capture_self_handle() {
                     unsafe { std::ffi::CStr::from_ptr(info.dli_fname) }
                 );
             } else {
-                log::warn!("[FluorateGL] dlopen failed for self handle: {:?}", unsafe {
-                    std::ffi::CStr::from_ptr(info.dli_fname)
-                });
+                log::warn!(
+                    "[FluorateGL] RTLD_NOLOAD dlopen failed for self handle \
+                     (eglGetProcAddress 将走 RTLD_DEFAULT 兜底)"
+                );
             }
         }
     } else {

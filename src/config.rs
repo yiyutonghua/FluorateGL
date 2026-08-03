@@ -115,3 +115,6 @@ pub const REPORTED_GLSL_VERSION: &str = "3.30";
 pub const REPORTED_EGL_MAJOR: i32 = 1;
 /// 报告的 EGL 次版本号
 pub const REPORTED_EGL_MINOR: i32 = 4;
+/// 报告的 EGL client 版本（eglQueryContext(EGL_CONTEXT_CLIENT_VERSION) 返回值），
+/// 与 GLES3 基线一致，与 REPORTED_GL_MAJOR 解耦
+pub const REPORTED_EGL_CLIENT_VERSION: i32 = 3;

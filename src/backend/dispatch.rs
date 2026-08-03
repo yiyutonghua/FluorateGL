@@ -1,6 +1,7 @@
 use libc::c_char;
 use std::ffi::c_void;
 
+#[repr(C)]
 #[allow(dead_code)]
 pub struct GlesDispatch {
     /// Address of the shared no-op stub used for missing optional functions.
@@ -334,6 +335,9 @@ pub struct GlesDispatch {
     pub get_floati_v: unsafe extern "C" fn(u32, u32, *mut f32),
     pub get_doublei_v: unsafe extern "C" fn(u32, u32, *mut f64),
 }
+
+// 编译期约束：all_stub 逐槽填充依赖"全指针布局"，未来混入非指针字段立即编译失败
+const _: () = assert!(std::mem::size_of::<GlesDispatch>() % std::mem::size_of::<unsafe extern "C" fn()>() == 0);
 
 impl GlesDispatch {
     /// Create a dispatch table where every function pointer is a no-op stub.
