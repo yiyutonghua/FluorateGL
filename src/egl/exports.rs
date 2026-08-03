@@ -426,6 +426,12 @@ pub extern "C" fn eglSwapBuffers(
     dpy: *mut std::ffi::c_void,
     surface: *mut std::ffi::c_void,
 ) -> u32 {
+    // 排查日志：swap 频率（画面呈现链路）
+    log::debug!(
+        "[FluorateGL] eglSwapBuffers(dpy={:p}, surface={:p})",
+        dpy,
+        surface
+    );
     backend::with_egl_dispatch(|d| unsafe { (d.swap_buffers)(dpy, surface) })
 }
 
@@ -496,6 +502,7 @@ fn is_key_gl_function(name: &str) -> bool {
             | "glDetachShader"
             | "glGetProgramiv"
             | "glGetProgramInfoLog"
+            | "glGetFragDataLocation"
             // Indirect draw（诊断 Sodium 是否查询/调用 indirect draw 函数）
             | "glDrawArraysIndirect"
             | "glDrawElementsIndirect"

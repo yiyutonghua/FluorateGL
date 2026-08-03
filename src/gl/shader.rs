@@ -269,12 +269,13 @@ pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state_ref(|s| s.shaders.get_gles(shader).unwrap_or(0));
+        // shader 不在 IdMap 中：可能是跨线程查询（异步线程创建、Render 线程查询）
+        // 或 glCreateShader 时底层 GLES 返回 0（当前线程无 EGL 上下文），此时
+        // 不分配 desktop_id 直接返回 0，故该 id 不会进入 IdMap。
+        // 显式写 *params = 0（GL_FALSE），避免调用方读到未初始化栈值。
         if gles_id == 0 {
-            // shader 不在 IdMap 中：可能是跨线程查询（异步线程创建、Render 线程查询）
-            // 或 glCreateShader 时底层 GLES 返回 0（当前线程无 EGL 上下文），此时
-            // 不分配 desktop_id 直接返回 0，故该 id 不会进入 IdMap。
-            // 本分支不设置 *params，调用方看到 0（GL_FALSE）。
             warn_shader_id_miss(shader);
+            *params = 0;
             return;
         }
 
@@ -457,5 +458,65 @@ pub extern "C" fn glCreateShaderProgramv(
     // 清理 Shader 对象（glCreateShaderProgramv 规范要求隐式删除 shader）
     glDeleteShader(shader_id);
 
-    program_id
+    if program_id == 0 {
+        log::error!(
+            "[FluorateGL] glCreateShaderProgramv: GLES create_program failed (no EGL context?)"
+        );
+        return 0;
+    }
+
+    // S1 修复：把 GLES program id 纳入 IdMap，分配桌面 id 后返回。
+    // 旧实现直接返回裸 GLES id，后续 glUseProgram/glGetProgramiv/
+    // glGetUniformLocation/glDeleteProgram 全部因 ID 映射失败而失效
+    // （use_program(0) 解绑、location 恒 -1、GLES program 泄漏）。
+    let desktop_id = state::with_state(|s| s.programs.alloc(program_id));
+
+    // link 状态检查（fail-fast，不欺骗为 TRUE）：与 glLinkProgram 的失败诊断对齐。
+    // MC 后续 glGetProgramiv(LINK_STATUS) 查询走 IdMap 命中，能拿到真实状态。
+    const GL_LINK_STATUS: u32 = 0x8B82;
+    const GL_INFO_LOG_LENGTH: u32 = 0x8B84;
+    let mut link_status = 0i32;
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_program_iv)(program_id, GL_LINK_STATUS, &mut link_status);
+    });
+    if link_status == 0 {
+        let mut len = 0i32;
+        backend::with_gles_dispatch(|dispatch| unsafe {
+            (dispatch.get_program_iv)(program_id, GL_INFO_LOG_LENGTH, &mut len);
+        });
+        if len > 0 {
+            let mut buf = vec![0u8; len as usize];
+            let mut written = 0i32;
+            backend::with_gles_dispatch(|dispatch| unsafe {
+                (dispatch.get_program_info_log)(
+                    program_id,
+                    len,
+                    &mut written,
+                    buf.as_mut_ptr() as *mut libc::c_char,
+                );
+            });
+            let safe_written = (written.max(0) as usize).min(buf.len());
+            let info = String::from_utf8_lossy(&buf[..safe_written]);
+            log::error!(
+                "[FluorateGL] glCreateShaderProgramv: Program {} (GLES {}) link failed: {}",
+                desktop_id,
+                program_id,
+                info.trim()
+            );
+        } else {
+            log::error!(
+                "[FluorateGL] glCreateShaderProgramv: Program {} (GLES {}) link failed (no info log)",
+                desktop_id,
+                program_id
+            );
+        }
+    } else {
+        log::debug!(
+            "[FluorateGL] glCreateShaderProgramv: Program {} (GLES {}) link OK",
+            desktop_id,
+            program_id
+        );
+    }
+
+    desktop_id
 }

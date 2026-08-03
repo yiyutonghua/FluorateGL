@@ -39,8 +39,11 @@ pub extern "C" fn glCreateProgram() -> u32 {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = (dispatch.create_program)();
         if gles_id == 0 {
-            // GLES 返回 0 通常表示当前线程无 EGL 上下文（如异步加载线程）
+            // GLES 返回 0 通常表示当前线程无 EGL 上下文（如异步加载线程）。
+            // 直接返回 0 不分配 desktop_id（对齐 glCreateShader 的防御），
+            // 避免宿主拿到假 id 后继续 use/query 映射到无效的 gles_id=0。
             warn_program_no_context();
+            return 0;
         }
         state::with_state(|s| s.programs.alloc(gles_id))
     })
@@ -184,8 +187,9 @@ pub extern "C" fn glGetProgramiv(program: u32, pname: u32, params: *mut i32) {
         let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
             // program 不在 IdMap 中：可能是跨线程查询或 GLES 创建失败。
-            // 此时不设置 *params，调用方看到 0（GL_FALSE），可能误判链接失败。
+            // 显式写 *params = 0（GL_FALSE），避免调用方读到未初始化栈值。
             warn_program_id_miss(program);
+            *params = 0;
             return;
         }
         (dispatch.get_program_iv)(gles_id, pname, params);
@@ -244,6 +248,12 @@ pub extern "C" fn glGetUniformLocation(program: u32, name: *const c_char) -> i32
             .get(&(program, name_str.clone()))
             .copied()
     }) {
+        log::debug!(
+            "[FluorateGL] glGetUniformLocation(program={}, name={:?}) = {} (cached)",
+            program,
+            name_str,
+            loc
+        );
         return loc;
     }
     let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
@@ -258,6 +268,13 @@ pub extern "C" fn glGetUniformLocation(program: u32, name: *const c_char) -> i32
     let loc = backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_uniform_location)(gles_id, name)
     });
+    // 排查日志：记录每次真实查询（含成功查询）的名称与返回值
+    log::debug!(
+        "[FluorateGL] glGetUniformLocation(program={}, name={:?}) = {}",
+        program,
+        name_str,
+        loc
+    );
     // 仅记录查询失败的 uniform（返回 -1），帮助定位 shader 翻译问题
     if loc < 0 {
         log::warn!(
@@ -384,6 +401,9 @@ pub extern "C" fn glGetUniformfv(program: u32, location: i32, params: *mut f32) 
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
+            if !params.is_null() {
+                *params = 0.0;
+            }
             return;
         }
         (dispatch.get_uniform_fv)(gles_id, location, params);
@@ -396,6 +416,9 @@ pub extern "C" fn glGetUniformiv(program: u32, location: i32, params: *mut i32) 
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
+            if !params.is_null() {
+                *params = 0;
+            }
             return;
         }
         (dispatch.get_uniform_iv)(gles_id, location, params);
@@ -607,6 +630,7 @@ pub extern "C" fn glGetActiveUniformBlockiv(
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
+            *params = 0;
             return;
         }
         (dispatch.get_active_uniform_block_iv)(gles_id, uniform_block_index, pname, params);
@@ -669,6 +693,7 @@ pub extern "C" fn glGetActiveUniformsiv(
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
+            *params = 0;
             return;
         }
         (dispatch.get_active_uniforms_iv)(gles_id, uniform_count, uniform_indices, pname, params);
@@ -871,6 +896,31 @@ pub extern "C" fn glGetFragDataIndex(program: u32, name: *const c_char) -> i32 {
         name_str
     );
     -1
+}
+
+/// glGetFragDataLocation — GL 3.0 core 函数，GLES 3.0 原生支持，直通。
+///
+/// 语义：查询 fragment shader output 变量的 location。
+/// GLES 3.0 规范原生提供 glGetFragDataLocation，故直接翻译 desktop→GLES id 后直通。
+/// 旧实现未导出此符号：宿主报告 GL 3.3 时 LWJGL GL30 类会 dlsym 加载它，
+/// 失败后函数地址为 0，宿主调用即崩溃（S2 修复）。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetFragDataLocation(program: u32, name: *const c_char) -> i32 {
+    if name.is_null() {
+        return -1;
+    }
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
+        if gles_id == 0 {
+            log::debug!(
+                "[FluorateGL] glGetFragDataLocation: program {} not in IdMap, returning -1",
+                program
+            );
+            return -1;
+        }
+        (dispatch.get_frag_data_location)(gles_id, name)
+    })
 }
 
 /// glGetActiveUniformName — GL 2.0 core 函数，转发 glGetActiveUniform 并提取 name。

@@ -1,11 +1,16 @@
 use crate::backend;
 use crate::state;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 /// texture desktop ID 查找失败首次告警标志
 static TEXTURE_ID_MISS_WARNED: AtomicBool = AtomicBool::new(false);
 /// glCompressedTexImage 收到非压缩格式首次告警标志
 static COMPRESSED_FORMAT_MISMATCH_WARNED: AtomicBool = AtomicBool::new(false);
+/// 桌面 format 参数（GL_BGR/GL_BGRA）首次归一化告警标志
+static FORMAT_PARAM_NORMALIZED_WARNED: AtomicBool = AtomicBool::new(false);
+/// S3TC 上传因驱动不支持被忽略的首次告警标志
+static S3TC_UNSUPPORTED_WARNED: AtomicBool = AtomicBool::new(false);
 
 /// 首次告警：texture desktop ID 未在 IdMap 中找到。
 fn warn_texture_id_miss(fname: &str, target: u32, desktop_id: u32) {
@@ -71,6 +76,8 @@ const GL_RGBA4: u32 = 0x8056;
 const GL_RGB10_A2: u32 = 0x8059;
 const GL_RGBA12: u32 = 0x805A;
 const GL_RGBA16: u32 = 0x805B;
+const GL_RGB16F: u32 = 0x881B;
+const GL_RGBA16F: u32 = 0x881A;
 const GL_BGR: u32 = 0x80E0;
 const GL_BGRA: u32 = 0x80E1;
 const GL_DEPTH_COMPONENT32: u32 = 0x81A7;
@@ -104,7 +111,12 @@ fn normalize_internal_format(internalformat: u32) -> u32 {
         // 3. Legacy Desktop 格式映射
         GL_R3_G3_B2 | GL_RGB4 | GL_RGB5 | GL_RGB12 => GL_RGB8,
         GL_RGB10 => GL_RGB10_A2,
-        GL_RGB16 => GL_RGBA16,
+        // RGB16/RGBA16 在 GLES 3.x 中不存在（GLES 表 3.13/3.14 无 16 位整数颜色格式），
+        // 映射到半浮点版本（GLES 原生支持）而非非法格式。注意：RGBA16F 纹理的像素
+        // 上传需 float 数据，若调用方用 UNSIGNED_SHORT 上传会 INVALID_OPERATION——
+        // 此为 GLES 无 16 位整数格式约束下的最优近似（有损）。
+        GL_RGB16 => GL_RGB16F,
+        GL_RGBA16 => GL_RGBA16F,
         GL_RGBA2 | GL_RGBA4 | GL_RGBA12 => GL_RGBA8,
         GL_BGR => GL_RGB8,
         GL_BGRA => GL_RGBA8,
@@ -153,6 +165,29 @@ fn normalize_depth_internal_format(internalformat: u32, type_: u32) -> u32 {
     }
 }
 
+/// 归一化像素格式参数（glTexImage2D/3D、glTexSubImage2D/3D 的 format 参数）。
+///
+/// GLES 3.x 合法 format 集合不含 GL_BGR(0x80E0)/GL_BGRA(0x80E1)（GLES 表 3.2），
+/// 透传必然 INVALID_ENUM。改名后数据布局仍是 B,G,R / B,G,R,A 顺序而 GLES 按
+/// R,G,B / R,G,B,A 解析——红蓝通道互换，无 CPU swizzle 兜底；至少避免崩溃路径，
+/// 并首次告警提示调用方修正。
+fn normalize_format_param(format: u32) -> u32 {
+    let normalized = match format {
+        GL_BGR => GL_RGB,
+        GL_BGRA => GL_RGBA,
+        _ => return format,
+    };
+    if !FORMAT_PARAM_NORMALIZED_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] format 0x{:04X} is desktop-only, normalized to 0x{:04X} \
+             (数据仍为 BGR/BGRA 布局，红蓝通道互换，无 CPU swizzle 兜底；后续调用将静默归一化)",
+            format,
+            normalized
+        );
+    }
+    normalized
+}
+
 /// 判断 internalformat 是否为已知的压缩纹理格式。
 /// 用于 `glCompressedTexImage*` 系列函数，防止将非压缩格式透传给 GLES 驱动导致 GL_INVALID_ENUM。
 fn is_compressed_format(internalformat: u32) -> bool {
@@ -160,8 +195,12 @@ fn is_compressed_format(internalformat: u32) -> bool {
         internalformat,
         // S3TC / DXT
         0x83F0 | 0x83F1 | 0x83F2 | 0x83F3
-        // ETC2 / EAC
-        | 0x9274 | 0x9275 | 0x9276 | 0x9277 | 0x9278
+        // ETC2 / EAC（含有符号变体 0x9279-0x927B，GLES 3.0 core）
+        | 0x9274 | 0x9275 | 0x9276 | 0x9277 | 0x9278 | 0x9279 | 0x927A | 0x927B
+        // RGTC（BC4/BC5，桌面 GL 3.0+，GLES 需 GL_ARB_texture_compression_rgtc 类扩展）
+        | 0x8DBB | 0x8DBC | 0x8DBD | 0x8DBE
+        // BPTC（BC6H/BC7，桌面 GL 4.2+，GLES 需 GL_ARB_texture_compression_bptc 类扩展）
+        | 0x8E8C | 0x8E8D | 0x8E8E | 0x8E8F
         // ASTC LDR (4x4 ~ 12x12)
         | 0x93B0 | 0x93B1 | 0x93B2 | 0x93B3
         | 0x93B4 | 0x93B5 | 0x93B6 | 0x93B7
@@ -176,6 +215,37 @@ fn is_compressed_format(internalformat: u32) -> bool {
         // PVRTC
         | 0x8C00 | 0x8C01 | 0x8C02 | 0x8C03 | 0x8C04
     )
+}
+
+/// GLES 驱动支持的压缩格式列表缓存（OnceLock，首次查询后恒定）。
+///
+/// S3TC 不是 GLES core 压缩格式（强制格式为 ETC2/EAC），部分移动驱动支持
+/// GL_EXT_texture_compression_s3tc、多数不支持。透传不支持的格式必然
+/// INVALID_ENUM，故上传前按 glGetIntegerv 的格式列表做一次运行时能力判断。
+static COMPRESSED_FORMATS_SUPPORTED: OnceLock<Vec<u32>> = OnceLock::new();
+
+/// 查询 GLES 驱动是否支持指定压缩格式。
+///
+/// 通过 GL_NUM_COMPRESSED_TEXTURE_FORMATS(0x86A2) + GL_COMPRESSED_TEXTURE_FORMATS(0x86A3)
+/// 读取驱动支持的压缩格式列表（需 GL 上下文已绑定，由调用方保证在
+/// with_gles_dispatch 内执行）。结果缓存在 OnceLock，仅首次真正查询。
+fn gles_supports_compressed_format(
+    dispatch: &backend::dispatch::GlesDispatch,
+    format: u32,
+) -> bool {
+    let supported = COMPRESSED_FORMATS_SUPPORTED.get_or_init(|| {
+        const GL_NUM_COMPRESSED_TEXTURE_FORMATS: u32 = 0x86A2;
+        const GL_COMPRESSED_TEXTURE_FORMATS: u32 = 0x86A3;
+        let mut count = 0i32;
+        unsafe { (dispatch.get_integerv)(GL_NUM_COMPRESSED_TEXTURE_FORMATS, &mut count) };
+        if count <= 0 {
+            return Vec::new();
+        }
+        let mut formats = vec![0i32; count as usize];
+        unsafe { (dispatch.get_integerv)(GL_COMPRESSED_TEXTURE_FORMATS, formats.as_mut_ptr()) };
+        formats.into_iter().map(|f| f as u32).collect()
+    });
+    supported.contains(&format)
 }
 
 #[unsafe(no_mangle)]
@@ -244,6 +314,7 @@ pub extern "C" fn glTexImage2D(
     type_: u32,
     pixels: *const std::ffi::c_void,
 ) {
+    let format = normalize_format_param(format);
     let normalized = normalize_depth_internal_format(internalformat as u32, type_) as i32;
     log::debug!(
         "[FluorateGL] glTexImage2D(target=0x{:04X}, level={}, internalformat=0x{:04X}, {}x{}, format=0x{:04X}, type=0x{:04X}, pixels={:?})",
@@ -283,6 +354,20 @@ pub extern "C" fn glTexSubImage2D(
     type_: u32,
     pixels: *const std::ffi::c_void,
 ) {
+    let format = normalize_format_param(format);
+    // 排查日志：记录像素数据上传元数据（不 dump 像素内容，量太大）
+    log::debug!(
+        "[FluorateGL] glTexSubImage2D(target=0x{:04X} level={} offset=({},{}) size=({}x{}) format=0x{:04X} type=0x{:04X} pixels={:p})",
+        target,
+        level,
+        xoffset,
+        yoffset,
+        width,
+        height,
+        format,
+        type_,
+        pixels
+    );
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.tex_sub_image_2d)(
             target, level, xoffset, yoffset, width, height, format, type_, pixels,
@@ -325,6 +410,7 @@ pub extern "C" fn glTexImage3D(
     type_: u32,
     pixels: *const std::ffi::c_void,
 ) {
+    let format = normalize_format_param(format);
     let normalized = normalize_depth_internal_format(internalformat as u32, type_) as i32;
     if normalized != internalformat {
         log::debug!(
@@ -355,6 +441,7 @@ pub extern "C" fn glTexSubImage3D(
     type_: u32,
     pixels: *const std::ffi::c_void,
 ) {
+    let format = normalize_format_param(format);
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.tex_sub_image_3d)(
             target, level, xoffset, yoffset, zoffset, width, height, depth, format, type_, pixels,
@@ -488,6 +575,23 @@ pub extern "C" fn glCompressedTexImage2D(
         imageSize,
         data
     );
+
+    // S3TC 不是 GLES core 压缩格式：先按驱动能力列表判断，不支持则忽略该上传
+    // （不传坏数据，避免 INVALID_ENUM 污染错误队列）。
+    if (0x83F0..=0x83F3).contains(&internalformat) {
+        let supported = backend::with_gles_dispatch(|d| {
+            gles_supports_compressed_format(d, internalformat)
+        });
+        if !supported {
+            if !S3TC_UNSUPPORTED_WARNED.swap(true, Ordering::Relaxed) {
+                log::warn!(
+                    "[FluorateGL] glCompressedTexImage2D: S3TC internalformat 0x{:04X} 不被 GLES 驱动支持，忽略该上传 (后续调用将静默跳过)",
+                    internalformat
+                );
+            }
+            return;
+        }
+    }
 
     // 防止将非压缩格式透传给 GLES 导致 GL_INVALID_ENUM 崩溃
     if !is_compressed_format(internalformat) {
@@ -980,6 +1084,17 @@ pub extern "C" fn glFramebufferTexture3D(
         zoffset
     );
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.framebuffer_texture_layer)(target, attachment, texture, level, zoffset);
+        // 纹理 ID 需从 desktop 翻译为 GLES（与 glFramebufferTexture2D/Layer 一致）。
+        let gles_texture = if texture == 0 {
+            0
+        } else {
+            state::with_state(|s| {
+                s.textures.get_gles(texture).unwrap_or_else(|| {
+                    warn_texture_id_miss("glFramebufferTexture3D", target, texture);
+                    0
+                })
+            })
+        };
+        (dispatch.framebuffer_texture_layer)(target, attachment, gles_texture, level, zoffset);
     });
 }

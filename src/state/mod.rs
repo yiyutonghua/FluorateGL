@@ -36,6 +36,10 @@ pub struct PersistentMapping {
     pub dirty_offset: usize,
     /// 未同步的脏数据长度
     pub dirty_length: usize,
+    /// 该 buffer 当前绑定的 GL target（glBindBuffer / glBindBufferBase /
+    /// glBindBufferRange 更新；sync 时按此 target 定位 glBufferSubData 上传目标，
+    /// 使 GL_UNIFORM_BUFFER 等所有走 shadow 路径的 target 都能被同步）
+    pub bound_target: u32,
 }
 
 // shadow_ptr 由 libc::malloc 分配，跨线程不共享（thread_local State），Send/Sync 安全

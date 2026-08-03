@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // 不支持 PERSISTENT(0x0040)/COHERENT(0x0080)（桌面 GL 4.4 / GL_ARB_buffer_storage 引入）。
 const GL_MAP_READ_BIT: u32 = 0x0001;
 const GL_MAP_WRITE_BIT: u32 = 0x0002;
-const GL_MAP_UNSYNCHRONIZED_BIT: u32 = 0x0020;
 const GL_MAP_PERSISTENT_BIT: u32 = 0x0040;
 const GL_MAP_COHERENT_BIT: u32 = 0x0080;
 
@@ -21,18 +20,16 @@ const GL_COPY_READ_BUFFER: u32 = 0x8F36;
 ///
 /// GLES 3.1 不支持 PERSISTENT/COHERENT 位，需剥离：
 /// - PERSISTENT（映射期间 buffer 仍可被 GPU 使用）：无法完美模拟，剥离后配合
-///   UNSYNCHRONIZED 可近似 Sodium 的流式上传场景（每帧写入新区域 + fence 同步）。
-/// - COHERENT（GPU/CPU 访问自动可见）：用 UNSYNCHRONIZED 替代语义（都是不自动同步），
-///   Sodium 自管理同步，剥离后功能正确。
+///   shadow 路径（持久映射 buffer 走 shadow_ptr）保证数据同步。
+/// - COHERENT（GPU/CPU 访问自动可见）：GLES 无对应语义，直接剥离，保留 GLES
+///   默认的显式 flush 语义（映射后 flush 数据才可见）。
+///   注意：不能转成 UNSYNCHRONIZED——两者语义不同（UNSYNCHRONIZED 是跳过
+///   映射前的同步保护，可能与 in-flight draw 产生竞态），故直接丢弃该位。
 ///
 /// 剥离后若没有任何有效的读写位，补 GL_MAP_WRITE_BIT 避免 GLES 返回 NULL。
 fn translate_map_access(access: u32) -> u32 {
     let mut out = access & !GL_MAP_PERSISTENT_BIT;
-    let had_coherent = out & GL_MAP_COHERENT_BIT != 0;
     out &= !GL_MAP_COHERENT_BIT;
-    if had_coherent {
-        out |= GL_MAP_UNSYNCHRONIZED_BIT;
-    }
     if out & (GL_MAP_READ_BIT | GL_MAP_WRITE_BIT) == 0 {
         out |= GL_MAP_WRITE_BIT;
     }
@@ -207,6 +204,17 @@ pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
             if target == 0x8892 || target == 0x8893 {
                 s.bound_buffer = buffer;
             }
+            // 持久映射 buffer 记录绑定 target（sync 时按 bound_target 定位上传目标）
+            if let Some(pm) = s.persistent_buffers.get_mut(&buffer) {
+                pm.bound_target = target;
+            } else if buffer == 0 {
+                // 解绑：清空该 target 上持久映射条目的绑定标记
+                for pm in s.persistent_buffers.values_mut() {
+                    if pm.bound_target == target {
+                        pm.bound_target = 0;
+                    }
+                }
+            }
         });
     });
 }
@@ -259,6 +267,8 @@ pub extern "C" fn glBufferData(
                                 gles_buffer_id: 0,
                                 dirty_offset: 0,
                                 dirty_length: 0,
+                                // PARAMETER_BUFFER 不下传 GLES，不参与 sync
+                                bound_target: 0,
                             },
                         );
                     }
@@ -316,6 +326,8 @@ pub extern "C" fn glBufferData(
                                 dirty_offset: 0,
                                 // glBufferData 已下传 GLES，无需再 sync
                                 dirty_length: 0,
+                                // 当前绑定 target（glBindBuffer 已先于 BufferData 发生）
+                                bound_target: target,
                             },
                         );
                     }
@@ -406,52 +418,80 @@ fn is_stub(dispatch: &backend::dispatch::GlesDispatch, f: *const ()) -> bool {
 /// GL_BUFFER_STORAGE_FLAGS 查询的 bit（桌面 GL 4.4 / GL_ARB_buffer_storage）
 const GL_MAP_PERSISTENT_BIT_STORAGE: u32 = 0x0040;
 
-/// 同步持久映射 buffer 的 shadow memory 到 GLES buffer（若该 buffer 是持久映射的）。
+/// 同步所有持久映射 buffer 的 shadow memory 到 GLES buffer（若存在脏区域）。
 ///
 /// 在 draw call 前调用，确保 GLES buffer 包含 shadow memory 的最新数据。
-/// 仅同步脏区域（dirty_offset..dirty_offset+dirty_length），用 glBufferSubData 上传。
+/// **全量遍历** `persistent_buffers` 中 `dirty_length > 0` 的条目，按各自记录的
+/// `bound_target` 用 glBufferSubData 上传——GL_UNIFORM_BUFFER / TRANSFORM_FEEDBACK_BUFFER
+/// / SHADER_STORAGE_BUFFER 等所有走 shadow 路径的 target 都被覆盖，不再依赖调用方
+/// 传入的 target（修复：UBO shadow 脏区永不消费导致矩阵恒 0 的黑屏根因）。
+///
+/// `target` 参数保留以兼容既有 28 处调用点（GL_ARRAY_BUFFER / GL_ELEMENT_ARRAY_BUFFER /
+/// GL_DRAW_INDIRECT_BUFFER），但同步范围以全量遍历为准；该参数仅用于命中时的日志过滤。
+///
+/// 借用约束：先在 with_state 中收集待同步列表（同时消费清零 dirty），再在
+/// with_gles_dispatch 中执行 glBufferSubData，避免 RefCell 借用冲突。
+///
+/// 同步目标定位：shadow 条目记录 `bound_target`（glBindBuffer / glBindBufferBase /
+/// glBindBufferRange 更新）。若该 target 当前绑定的 GLES buffer 与 shadow 的
+/// gles_buffer_id 不一致（宿主 flush 后改绑的异常路径），临时改绑原 target 上传后
+/// 恢复原绑定（GLES 的通用绑定点与 BindBufferBase 的索引绑定相互独立，改绑不影响
+/// 索引绑定的实际使用）。
 /// GL_PARAMETER_BUFFER 无对应 GLES buffer（gles_buffer_id=0），跳过同步。
 pub(crate) fn sync_persistent_buffer_if_needed(target: u32) {
-    // GL_PARAMETER_BUFFER 是非法 GLES target，无 GLES buffer 可同步
-    if target == GL_PARAMETER_BUFFER {
-        return;
-    }
-
-    let desktop_id = state::with_state_ref(|s| s.bound_buffers_by_target.get(&target).copied());
-    let Some(desktop_id) = desktop_id else { return };
-
-    let pm_info = state::with_state(|s| {
-        s.persistent_buffers.get_mut(&desktop_id).map(|pm| {
-            let (off, len) = if pm.dirty_length == 0 {
-                (0usize, 0usize)
-            } else {
-                (pm.dirty_offset, pm.dirty_length)
-            };
-            pm.dirty_offset = 0;
-            pm.dirty_length = 0;
-            (pm.shadow_ptr, pm.shadow_size, off, len, pm.gles_buffer_id)
-        })
+    // 收集所有脏区域（消费并清零 dirty，避免重复上传）
+    // 元组：(desktop_id, gles_id, offset, length, shadow_ptr, bound_target)
+    let pending: Vec<(u32, u32, usize, usize, *mut u8, u32)> = state::with_state(|s| {
+        s.persistent_buffers
+            .iter_mut()
+            .filter(|(_, pm)| pm.dirty_length > 0 && pm.gles_buffer_id != 0 && pm.bound_target != 0)
+            .map(|(desktop_id, pm)| {
+                let (off, len) = (pm.dirty_offset, pm.dirty_length);
+                pm.dirty_offset = 0;
+                pm.dirty_length = 0;
+                (
+                    *desktop_id,
+                    pm.gles_buffer_id,
+                    off,
+                    len,
+                    pm.shadow_ptr,
+                    pm.bound_target,
+                )
+            })
+            .collect()
     });
-    let Some((shadow_ptr, _shadow_size, off, len, gles_id)) = pm_info else {
-        return;
-    };
-
-    // gles_buffer_id=0 表示无对应 GLES buffer（理论上仅 GL_PARAMETER_BUFFER 会走到这里，
-    // 但上面已拦截，此处为防御性检查）
-    if len == 0 || gles_id == 0 {
+    if pending.is_empty() {
         return;
     }
 
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let ptr = shadow_ptr.add(off) as *const std::ffi::c_void;
-        (dispatch.buffer_sub_data)(target, off as isize, len as isize, ptr);
-        log::debug!(
-            "[FluorateGL] sync_persistent_buffer: target=0x{:04X} desktop={} offset={} len={}",
-            target,
-            desktop_id,
-            off,
-            len
-        );
+        for (desktop_id, gles_id, off, len, shadow_ptr, bound_target) in &pending {
+            // 校验/恢复：该 target 当前绑定的 GLES buffer 是否就是 shadow 的 GLES buffer
+            let current_gles = state::with_state_ref(|s| {
+                s.bound_buffers_by_target
+                    .get(bound_target)
+                    .copied()
+                    .and_then(|d| s.buffers.get_gles(d))
+                    .unwrap_or(0)
+            });
+            let needs_restore = current_gles != *gles_id;
+            if needs_restore {
+                (dispatch.bind_buffer)(*bound_target, *gles_id);
+            }
+            let ptr = shadow_ptr.add(*off) as *const std::ffi::c_void;
+            (dispatch.buffer_sub_data)(*bound_target, *off as isize, *len as isize, ptr);
+            if needs_restore {
+                (dispatch.bind_buffer)(*bound_target, current_gles);
+            }
+            log::debug!(
+                "[FluorateGL] sync_persistent_buffer: target=0x{:04X} desktop={} offset={} len={} (target_arg=0x{:04X})",
+                bound_target,
+                desktop_id,
+                off,
+                len,
+                target
+            );
+        }
     });
 }
 
@@ -591,6 +631,8 @@ pub extern "C" fn glBufferStorage(
                             // GL_PARAMETER_BUFFER 不需要同步到 GLES（无 GLES buffer），
                             // 持久映射的普通 buffer 初始全量同步
                             dirty_length: if is_parameter_buffer { 0 } else { alloc_size },
+                            // PARAMETER_BUFFER 是非法 GLES target，不参与 sync
+                            bound_target: if is_parameter_buffer { 0 } else { target },
                         },
                     );
                 });
@@ -818,6 +860,21 @@ pub extern "C" fn glBindBufferBase(target: u32, index: u32, buffer: u32) {
         };
 
         (dispatch.bind_buffer_base)(target, index, gles_id);
+
+        // 记录 target → desktop buffer 映射 + 持久映射条目的 bound_target
+        // （UBO 通常经 BindBufferBase 绑定，必须记录否则 sync 无法定位）
+        state::with_state(|s| {
+            s.bound_buffers_by_target.insert(target, buffer);
+            if let Some(pm) = s.persistent_buffers.get_mut(&buffer) {
+                pm.bound_target = target;
+            } else if buffer == 0 {
+                for pm in s.persistent_buffers.values_mut() {
+                    if pm.bound_target == target {
+                        pm.bound_target = 0;
+                    }
+                }
+            }
+        });
     });
 }
 
@@ -843,6 +900,20 @@ pub extern "C" fn glBindBufferRange(
         };
 
         (dispatch.bind_buffer_range)(target, index, gles_id, offset, size);
+
+        // 记录 target → desktop buffer 映射 + 持久映射条目的 bound_target
+        state::with_state(|s| {
+            s.bound_buffers_by_target.insert(target, buffer);
+            if let Some(pm) = s.persistent_buffers.get_mut(&buffer) {
+                pm.bound_target = target;
+            } else if buffer == 0 {
+                for pm in s.persistent_buffers.values_mut() {
+                    if pm.bound_target == target {
+                        pm.bound_target = 0;
+                    }
+                }
+            }
+        });
     });
 }
 
@@ -893,6 +964,20 @@ pub extern "C" fn glGetBufferParameteriv(target: u32, pname: u32, params: *mut i
 pub extern "C" fn glGetBufferPointerv(target: u32, pname: u32, params: *mut *mut std::ffi::c_void) {
     if params.is_null() {
         return;
+    }
+    // GL_BUFFER_MAP_POINTER（0x88BD）：持久映射（shadow）buffer 应返回 shadow_ptr。
+    // shadow 路径下 GLES buffer 从未被 map，直通会返回 null，宿主会误判"未映射"。
+    const GL_BUFFER_MAP_POINTER: u32 = 0x88BD;
+    if pname == GL_BUFFER_MAP_POINTER {
+        if let Some(ptr) = state::with_state_ref(|s| {
+            let desktop_id = s.bound_buffers_by_target.get(&target).copied()?;
+            s.persistent_buffers
+                .get(&desktop_id)
+                .map(|pm| pm.shadow_ptr as *mut std::ffi::c_void)
+        }) {
+            unsafe { *params = ptr };
+            return;
+        }
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_buffer_pointer_v)(target, pname, params);

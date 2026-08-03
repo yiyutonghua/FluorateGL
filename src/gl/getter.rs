@@ -38,15 +38,27 @@ pub extern "C" fn glGetFloatv(pname: u32, data: *mut f32) {
     });
 }
 
+/// glGetDoublev — GLES 无 double 返回查询函数（dispatch.get_double_v 加载必失败，
+/// 原直通为 no-op stub 且不写 data → 宿主读垃圾值）。
+///
+/// 改为经 glGetFloatv 查询后逐元素扩展为 f64（与 glGetVertexAttribdv 同模式）。
+/// 桌面 double 查询（GL_DEPTH_RANGE、GL_COLOR_CLEAR_VALUE 等）最多返回 4 个分量；
+/// pname 非法时 GLES 不写 temp，temp 预填 0 保证调用方至少读到 0。
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetDoublev(pname: u32, data: *mut f64) {
     if data.is_null() {
         return;
     }
+    let mut temp = [0.0f32; 4];
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.get_double_v)(pname, data);
+        (dispatch.get_float_v)(pname, temp.as_mut_ptr());
     });
+    unsafe {
+        for (i, v) in temp.iter().enumerate() {
+            *data.add(i) = *v as f64;
+        }
+    }
 }
 
 /// `glGetIntegerv` 的透传版本，供 exports.rs 中特殊处理回退时调用，
@@ -93,7 +105,8 @@ fn translate_indexed_binding_to_desktop(target: u32, data: *mut i32) {
         // 索引 Buffer 绑定查询 → buffers IdMap
         0x8C8F | // GL_TRANSFORM_FEEDBACK_BUFFER_BINDING
         0x8A28 | // GL_UNIFORM_BUFFER_BINDING
-        0x90D3 // GL_SHADER_STORAGE_BUFFER_BINDING
+        0x90D3 | // GL_SHADER_STORAGE_BUFFER_BINDING
+        0x92C1 // GL_ATOMIC_COUNTER_BUFFER_BINDING（GLES 3.1）
         => {
             state::with_state(|s| s.buffers.get_desktop(gles_id))
         }
@@ -132,26 +145,46 @@ pub extern "C" fn glGetFloati_v(target: u32, index: u32, data: *mut f32) {
     });
 }
 
+/// glGetDoublei_v — GLES 无此函数（dispatch.get_doublei_v 加载必失败，同 glGetDoublev），
+/// 经 glGetFloati_v 查询后扩展为 f64。
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetDoublei_v(target: u32, index: u32, data: *mut f64) {
     if data.is_null() {
         return;
     }
+    let mut temp = [0.0f32; 4];
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.get_doublei_v)(target, index, data);
+        (dispatch.get_floati_v)(target, index, temp.as_mut_ptr());
     });
+    unsafe {
+        for (i, v) in temp.iter().enumerate() {
+            *data.add(i) = *v as f64;
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glIsEnabled(cap: u32) -> u8 {
+    // GLES 无此 cap（或恒开启）时直通会 INVALID_ENUM：按 GLES 对无效 cap 的
+    // 语义返回 GL_FALSE（与 glEnable/glDisable 的过滤对称，见 exports.rs）。
+    if crate::gl::exports::is_unsupported_gles_cap(cap) {
+        return 0;
+    }
+    // 与 glEnable 对称翻译（GL_PRIMITIVE_RESTART 0x8F9D → GLES 3.0
+    // GL_PRIMITIVE_RESTART_FIXED_INDEX 0x8D63，否则查询结果与启用状态错位）。
+    let cap = crate::gl::exports::translate_enable_cap(cap);
     backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.is_enabled)(cap) })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glIsEnabledi(cap: u32, index: u32) -> u8 {
+    if crate::gl::exports::is_unsupported_gles_cap(cap) {
+        return 0;
+    }
+    let cap = crate::gl::exports::translate_enable_cap(cap);
     backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.is_enabled_i)(cap, index) })
 }
 

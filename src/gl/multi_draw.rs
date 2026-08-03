@@ -19,6 +19,10 @@ use crate::backend;
 use crate::backend::dispatch::GlesDispatch;
 use crate::gl::buffer::{read_parameter_buffer_u32, sync_persistent_buffer_if_needed};
 
+/// GL_ARRAY_BUFFER target
+const GL_ARRAY_BUFFER: u32 = 0x8892;
+/// GL_ELEMENT_ARRAY_BUFFER target
+const GL_ELEMENT_ARRAY_BUFFER: u32 = 0x8893;
 /// GL_DRAW_INDIRECT_BUFFER：indirect command buffer 的 target（GLES 3.1 合法）
 const GL_DRAW_INDIRECT_BUFFER: u32 = 0x8F3F;
 
@@ -75,6 +79,8 @@ pub extern "C" fn glMultiDrawArrays(
     if drawcount <= 0 {
         return;
     }
+    // 同步 GL_ARRAY_BUFFER 持久映射的脏区域（若顶点 buffer 是持久映射的）
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
     // GLES 3.1 core（项目前提），恒可用，caps 仅作风格统一的双层判断
     let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -103,6 +109,10 @@ pub extern "C" fn glMultiDrawElements(
     if drawcount <= 0 {
         return;
     }
+    // 同步 GL_ARRAY_BUFFER / GL_ELEMENT_ARRAY_BUFFER 持久映射的脏区域
+    // （若顶点/索引 buffer 是持久映射的）
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
+    sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
     // GLES 3.1 core（项目前提），恒可用，caps 仅作风格统一的双层判断
     let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -132,6 +142,10 @@ pub extern "C" fn glMultiDrawElementsBaseVertex(
     if drawcount <= 0 {
         return;
     }
+    // 同步 GL_ARRAY_BUFFER / GL_ELEMENT_ARRAY_BUFFER 持久映射的脏区域
+    // （若顶点/索引 buffer 是持久映射的）
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
+    sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
     let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
         let supported = caps.multi_draw_elements_base_vertex
@@ -228,6 +242,8 @@ pub extern "C" fn glMultiDrawElementsIndirect(
     );
     // 同步 GL_DRAW_INDIRECT_BUFFER 持久映射的脏区域（若 indirect buffer 是持久映射的）
     sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
+    // 同步 GL_ELEMENT_ARRAY_BUFFER 持久映射的脏区域（若索引 buffer 是持久映射的）
+    sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
     let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
         let supported = caps.multi_draw_indirect

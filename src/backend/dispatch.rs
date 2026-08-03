@@ -125,6 +125,7 @@ pub struct GlesDispatch {
     pub get_program_info_log: unsafe extern "C" fn(u32, i32, *mut i32, *mut c_char),
     pub get_uniform_location: unsafe extern "C" fn(u32, *const c_char) -> i32,
     pub get_attrib_location: unsafe extern "C" fn(u32, *const c_char) -> i32,
+    pub get_frag_data_location: unsafe extern "C" fn(u32, *const c_char) -> i32,
     pub uniform_1f: unsafe extern "C" fn(i32, f32),
     pub uniform_1i: unsafe extern "C" fn(i32, i32),
     pub uniform_2f: unsafe extern "C" fn(i32, f32, f32),
@@ -337,11 +338,11 @@ pub struct GlesDispatch {
 }
 
 // 编译期约束：GlesDispatch 必须全部为函数指针（全指针布局），且字段总数精确匹配。
-// 字段数 = 263（stub 槽 + 262 个 GL 函数指针）。
-// ⚠️ 若结构体字段增减，必须同步更新此处 263，否则编译失败——防止显式初始化
+// 字段数 = 264（stub 槽 + 263 个 GL 函数指针）。
+// ⚠️ 若结构体字段增减，必须同步更新此处 264，否则编译失败——防止显式初始化
 // 遗漏字段时静默出错（原 % 断言只能捕获"总大小非 8 倍数"，捕获不了字段数漂移）。
 const _: () = assert!(
-    std::mem::size_of::<GlesDispatch>() == 263 * std::mem::size_of::<unsafe extern "C" fn()>()
+    std::mem::size_of::<GlesDispatch>() == 264 * std::mem::size_of::<unsafe extern "C" fn()>()
 );
 
 // —— 按签名类别的安全 no-op stub（零参数，忽略入参，返回安全常量）——
@@ -526,6 +527,7 @@ impl GlesDispatch {
             get_program_info_log: stub!(),
             get_uniform_location: stub!(gl_stub_zero_i32 as unsafe extern "C" fn() -> i32),
             get_attrib_location: stub!(gl_stub_zero_i32 as unsafe extern "C" fn() -> i32),
+            get_frag_data_location: stub!(gl_stub_zero_i32 as unsafe extern "C" fn() -> i32),
             uniform_1f: stub!(),
             uniform_1i: stub!(),
             uniform_2f: stub!(),
@@ -908,6 +910,10 @@ impl GlesDispatch {
             get_program_info_log: unsafe { std::mem::transmute(load!("glGetProgramInfoLog")) },
             get_uniform_location: unsafe { std::mem::transmute(load!("glGetUniformLocation")) },
             get_attrib_location: unsafe { std::mem::transmute(load!("glGetAttribLocation")) },
+            // GLES 3.0 core 原生符号（非 load_opt：GLES 3.0 规范保证存在）
+            get_frag_data_location: unsafe {
+                std::mem::transmute(load!("glGetFragDataLocation"))
+            },
             uniform_1f: unsafe { std::mem::transmute(load!("glUniform1f")) },
             uniform_1i: unsafe { std::mem::transmute(load!("glUniform1i")) },
             uniform_2f: unsafe { std::mem::transmute(load!("glUniform2f")) },

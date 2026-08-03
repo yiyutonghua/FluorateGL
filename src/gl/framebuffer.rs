@@ -22,6 +22,36 @@ fn warn_fbo_id_miss(fname: &str, target: u32, desktop_id: u32) {
     }
 }
 
+/// M3：glGetFramebufferAttachmentParameteriv 的 OBJECT_NAME 回译失败首次告警标志。
+/// GLES 返回的原生纹理/RB ID 无对应 desktop ID（跨线程或资源已释放）时触发一次。
+static OBJECT_NAME_TRANSLATE_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// 首次告警：OBJECT_NAME 回译失败，写 0 给宿主（宿主无法用该 ID 操作对象）。
+fn warn_object_name_translate_miss(attachment: u32, gles_id: u32) {
+    if !OBJECT_NAME_TRANSLATE_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glGetFramebufferAttachmentParameteriv(OBJECT_NAME, attachment=0x{:04X}): GLES ID {} 无对应 desktop ID，写 0 (跨线程或资源已释放，后续将静默降级)",
+            attachment,
+            gles_id
+        );
+    }
+}
+
+/// C5：RenderbufferStorage 的 RGB 浮点格式降级（→RGBA 变体）首次告警标志。
+/// GLES 无可渲染的 RGB 浮点格式，RGB32F/RGB16F 降级后透明度恒为 1，RGB 语义等价。
+static RENDERBUFFER_FORMAT_DOWNGRADE_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// 首次告警：RGB 浮点内部格式已降级为 RGBA 变体。
+fn warn_renderbuffer_format_downgrade(original: u32, mapped: u32) {
+    if !RENDERBUFFER_FORMAT_DOWNGRADE_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glRenderbufferStorage: GLES 无 RGB 浮点可渲染格式，internalformat 0x{:04X} -> 0x{:04X} (首次转换后静默)",
+            original,
+            mapped
+        );
+    }
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGenFramebuffers(n: i32, framebuffers: *mut u32) {
@@ -224,8 +254,20 @@ pub extern "C" fn glRenderbufferStorage(target: u32, internalformat: u32, width:
         width,
         height
     );
+    // C5：GLES 无可渲染的 RGB 浮点格式（GL_EXT_color_buffer_float 仅覆盖 RGBA/RG/R 变体），
+    // GL_RGB32F/GL_RGB16F 直通会产生 GL_INVALID_ENUM。降级为 RGBA 变体：
+    // 渲染时 RGB 通道数据逐通道拷贝，A 恒为 1，RGB 语义完全等价。
+    // RGBA32F/RGBA16F 等其余格式直通。
+    let mapped = match internalformat {
+        0x8815 /* GL_RGB32F */ => 0x8814 /* GL_RGBA32F */,
+        0x881B /* GL_RGB16F */ => 0x881A /* GL_RGBA16F */,
+        other => other,
+    };
+    if mapped != internalformat {
+        warn_renderbuffer_format_downgrade(internalformat, mapped);
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.renderbuffer_storage)(target, internalformat, width, height);
+        (dispatch.renderbuffer_storage)(target, mapped, width, height);
     });
 }
 
@@ -361,6 +403,38 @@ pub extern "C" fn glGetFramebufferAttachmentParameteriv(
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_framebuffer_attachment_parameter_iv)(target, attachment, pname, params);
+
+        // M3：GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME 回译——GLES 返回的是原生纹理/RB ID，
+        // 宿主会当 desktop ID 用于后续操作（如 glDeleteTextures/glDeleteRenderbuffers），
+        // 必须先经 IdMap 回译。先查 OBJECT_TYPE 区分对象种类；查不到时告警并写 0。
+        if pname == 0x8CD1 /* GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME */ {
+            let mut obj_type: i32 = 0;
+            (dispatch.get_framebuffer_attachment_parameter_iv)(
+                target,
+                attachment,
+                0x8CD0 /* GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE */,
+                &mut obj_type,
+            );
+            let gles_id = *params as u32;
+            if gles_id != 0 {
+                let desktop_id = match obj_type as u32 {
+                    0x1702 /* GL_TEXTURE */ => {
+                        state::with_state(|s| s.textures.get_desktop(gles_id))
+                    }
+                    0x8D41 /* GL_RENDERBUFFER */ => {
+                        state::with_state(|s| s.renderbuffers.get_desktop(gles_id))
+                    }
+                    _ => None, // GL_NONE(0) 或其他类型：保持原样
+                };
+                match desktop_id {
+                    Some(did) => *params = did as i32,
+                    None => {
+                        warn_object_name_translate_miss(attachment, gles_id);
+                        *params = 0;
+                    }
+                }
+            }
+        }
     });
 }
 

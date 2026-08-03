@@ -51,8 +51,47 @@ pub(crate) fn is_unsupported_gles_cap(cap: u32) -> bool {
         0x0B41 | // GL_POLYGON_SMOOTH
         0x809D | // GL_MULTISAMPLE
         0x0B21 | // GL_LINE_STIPPLE
-        0x0BC0 // GL_ALPHA_TEST
+        0x0BC0 | // GL_ALPHA_TEST
+        0x8DB9 | // GL_FRAMEBUFFER_SRGB（GLES sRGB 由 internal format 控制，无此 cap）
+        0x809F | // GL_SAMPLE_ALPHA_TO_ONE（GLES 无）
+        0x2A02 | // GL_POLYGON_OFFSET_LINE（GLES 仅支持 GL_POLYGON_OFFSET_FILL）
+        0x2A01 // GL_POLYGON_OFFSET_POINT（GLES 仅支持 GL_POLYGON_OFFSET_FILL）
     )
+}
+
+/// 将桌面 GL enable cap 翻译为 GLES 对应 cap。
+///
+/// GL_PRIMITIVE_RESTART（GL 3.1 core cap，0x8F9D）在 GLES 中不存在；
+/// GLES 3.0+ 使用 GL_PRIMITIVE_RESTART_FIXED_INDEX（0x8D63，固定索引
+/// 0xFFFF/0xFFFFFFFF，语义等价：两者均为"启用 primitive restart"，
+/// 区别仅在于 GLES 固定索引值且无法用 glPrimitiveRestartIndex 更改）。
+/// 同时兜底 0x8F3D（GL_PRIMITIVE_RESTART_INDEX 的枚举值，部分宿主误将其
+/// 当作 cap 传递）。其余 cap 原样返回。
+pub(crate) fn translate_enable_cap(cap: u32) -> u32 {
+    match cap {
+        0x8F9D | // GL_PRIMITIVE_RESTART
+        0x8F3D // GL_PRIMITIVE_RESTART_INDEX（宿主误传为 cap 时兜底翻译）
+        => 0x8D63, // GL_PRIMITIVE_RESTART_FIXED_INDEX
+        _ => cap,
+    }
+}
+
+// GL_DEPTH_CLAMP：GLES 3.2 core 才引入此 cap，3.1 及以下无（直通会 INVALID_ENUM）。
+// 版本感知：3.2+ 直通（MC 第三人称深度钳制依赖此 cap），3.1 过滤并首次告警。
+const GL_DEPTH_CLAMP: u32 = 0x864F;
+static DEPTH_CLAMP_UNSUPPORTED_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// GL_DEPTH_CLAMP 版本感知过滤：3.2+ 返回 false（可直通），否则返回 true 并首次告警。
+fn depth_clamp_unsupported() -> bool {
+    if crate::backend::capabilities().version.at_least(3, 2) {
+        return false;
+    }
+    if !DEPTH_CLAMP_UNSUPPORTED_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glEnable/glDisable(GL_DEPTH_CLAMP) ignored: GLES 3.1 无此 cap（需 3.2+），深度钳制将失效（后续调用静默跳过）"
+        );
+    }
+    true
 }
 
 // GL_DEBUG_OUTPUT：MC(blaze3d) 会启用 KHR_debug 回调抓驱动消息，但 Adreno 驱动会刷出
@@ -135,6 +174,11 @@ pub extern "C" fn glEnable(cap: u32) {
         );
         return;
     }
+    // M7：GL_DEPTH_CLAMP 版本感知——GLES 3.2+ 原生支持直通，3.1 过滤 + 首次告警
+    if cap == GL_DEPTH_CLAMP && depth_clamp_unsupported() {
+        return;
+    }
+    let cap = translate_enable_cap(cap);
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.enable)(cap);
     });
@@ -150,6 +194,11 @@ pub extern "C" fn glDisable(cap: u32) {
         );
         return;
     }
+    // M7：GL_DEPTH_CLAMP 版本感知——与 glEnable 对称
+    if cap == GL_DEPTH_CLAMP && depth_clamp_unsupported() {
+        return;
+    }
+    let cap = translate_enable_cap(cap);
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.disable)(cap);
     });
@@ -182,6 +231,8 @@ pub extern "C" fn glBlendFunc(sfactor: u32, dfactor: u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glClearColor(r: f32, g: f32, b: f32, a: f32) {
+    // 排查日志：记录 clear 色值（红屏问题定位）
+    log::debug!("[FluorateGL] glClearColor({}, {}, {}, {})", r, g, b, a);
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.clear_color)(r, g, b, a);
     });
@@ -429,7 +480,6 @@ static BASE_EXTENSIONS: &[&[u8]] = &[
     b"GL_ARB_uniform_buffer_object\0",
     b"GL_ARB_shader_storage_buffer_object\0",
     b"GL_ARB_shader_image_load_store\0",
-    b"GL_ARB_separate_shader_objects\0",
     b"GL_ARB_vertex_attrib_binding\0",
     // 行为依赖型扩展（GL_ARB_draw_indirect / GL_ARB_draw_elements_base_vertex /
     // GL_OES_draw_elements_base_vertex / GL_ARB_base_instance / GL_EXT_base_instance /
@@ -437,7 +487,6 @@ static BASE_EXTENSIONS: &[&[u8]] = &[
     // behavior_dependent 映射表动态声明，本表不再静态包含。
     b"GL_ARB_timer_query\0",
     b"GL_ARB_buffer_storage\0",
-    b"GL_ARB_get_program_binary\0",
     b"GL_ARB_clear_texture\0",
     b"GL_ARB_draw_buffers_blend\0",
     b"GL_ARB_depth_texture\0",
@@ -453,7 +502,6 @@ static BASE_EXTENSIONS: &[&[u8]] = &[
     b"GL_EXT_texture_filter_anisotropic\0",
     b"GL_EXT_texture_sRGB\0",
     b"GL_EXT_color_buffer_float\0",
-    b"GL_EXT_disjoint_timer_query\0",
     b"GL_KHR_debug\0",
     b"GL_KHR_no_error\0",
     b"GL_KHR_texture_compression_astc_ldr\0",
@@ -562,7 +610,8 @@ fn translate_binding_to_desktop(pname: u32, data: *mut i32) {
         0x88ED | // GL_PIXEL_PACK_BUFFER_BINDING
         0x88EF | // GL_PIXEL_UNPACK_BUFFER_BINDING
         0x8F43 | // GL_DRAW_INDIRECT_BUFFER_BINDING
-        0x90D3 // GL_SHADER_STORAGE_BUFFER_BINDING
+        0x90D3 | // GL_SHADER_STORAGE_BUFFER_BINDING
+        0x92C1 // GL_ATOMIC_COUNTER_BUFFER_BINDING
         => {
             state::with_state(|s| s.buffers.get_desktop(gles_id))
         }
@@ -578,7 +627,11 @@ fn translate_binding_to_desktop(pname: u32, data: *mut i32) {
         0x8069 | // GL_TEXTURE_BINDING_2D
         0x806A | // GL_TEXTURE_BINDING_3D
         0x8C1D | // GL_TEXTURE_BINDING_2D_ARRAY
-        0x8514 // GL_TEXTURE_BINDING_CUBE_MAP
+        0x8514 | // GL_TEXTURE_BINDING_CUBE_MAP
+        0x9104 | // GL_TEXTURE_BINDING_2D_MULTISAMPLE
+        0x9105 | // GL_TEXTURE_BINDING_2D_MULTISAMPLE_ARRAY
+        0x900A | // GL_TEXTURE_BINDING_CUBE_MAP_ARRAY
+        0x8C2C // GL_TEXTURE_BINDING_BUFFER
         => {
             state::with_state(|s| s.textures.get_desktop(gles_id))
         }
@@ -628,6 +681,16 @@ pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
         0x9126 => {
             // GL_CONTEXT_PROFILE_MASK
             unsafe { *data = 0x00000001 }; // GL_CONTEXT_CORE_PROFILE_BIT
+        }
+        0x821E => {
+            // GL_CONTEXT_FLAGS：GLES 无此 pname（直通会 INVALID_ENUM 且不写 data），
+            // 拦截返回 0（非 debug / 非 forward-compatible context）
+            unsafe { *data = 0 };
+        }
+        0x8E4F => {
+            // GL_PROVOKING_VERTEX：GLES 无此 pname，固定为 LAST_VERTEX_PROVOKING
+            // （与 glProvokingVertex no-op 的语义一致）
+            unsafe { *data = 0x8E65 }; // GL_LAST_VERTEX_PROVOKING
         }
         _ => {
             getter::get_integerv(pname, data);

@@ -154,7 +154,7 @@ define_symbols![
     "glIsShader",
     "glReleaseShaderCompiler",
     "glCreateShaderProgramv",
-    // ==== GL 导出：src/gl/program.rs（共 51 个）====
+    // ==== GL 导出：src/gl/program.rs（共 52 个）====
     "glCreateProgram",
     "glDeleteProgram",
     "glAttachShader",
@@ -204,6 +204,7 @@ define_symbols![
     "glUniformMatrix3fv",
     "glShaderStorageBlockBinding",
     "glProgramParameteri",
+    "glGetFragDataLocation",
     "glGetFragDataIndex",
     "glGetActiveUniformName",
     // ==== GL 导出：src/gl/query.rs（共 11 个）====
@@ -488,13 +489,13 @@ mod tests {
         assert!(!is_exported(b"glNonexistent\0"));
     }
 
-    /// 表与代码 no_mangle 数量一致性：EGL 34 + GL 307 = 341
+    /// 表与代码 no_mangle 数量一致性：EGL 34 + GL 308 = 342
     #[test]
     fn symbol_count_sanity() {
         let egl = SYMBOLS.iter().filter(|s| s.starts_with(b"egl")).count();
         let gl = SYMBOLS.len() - egl;
         assert_eq!(egl, 34, "EGL 导出数量不符（请核对 src/egl/exports.rs）");
-        assert_eq!(gl, 307, "GL 导出数量不符（请核对 src/gl/*.rs）");
-        assert_eq!(SYMBOLS.len(), 341);
+        assert_eq!(gl, 308, "GL 导出数量不符（请核对 src/gl/*.rs）");
+        assert_eq!(SYMBOLS.len(), 342);
     }
 }

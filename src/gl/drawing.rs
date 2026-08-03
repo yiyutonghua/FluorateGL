@@ -62,6 +62,41 @@ fn is_stub(dispatch: &GlesDispatch, ptr: *const ()) -> bool {
     ptr == dispatch.stub as *const ()
 }
 
+/// 按 basevertex 偏移 indices 指针（BaseVertex 降级分支用）。
+///
+/// GL 3.3 core 语义：实际索引 = 索引值 + basevertex，等价于将 indices 指针按索引
+/// 元素大小前移 basevertex 个元素。负 basevertex 时 offset 为负仍合法——宿主保证
+/// index + basevertex ≥ 0，偏移后的指针仍落在同一 buffer 内。type_size 按 GL 索引
+/// 类型推导：GL_UNSIGNED_BYTE(0x1401)=1、GL_UNSIGNED_SHORT(0x1403)=2、
+/// GL_UNSIGNED_INT(0x1405)=4。
+fn offset_indices(
+    indices: *const std::ffi::c_void,
+    basevertex: i32,
+    type_: u32,
+) -> *const std::ffi::c_void {
+    if basevertex == 0 {
+        return indices;
+    }
+    let type_size = match type_ {
+        // GL_UNSIGNED_BYTE
+        0x1401 => 1,
+        // GL_UNSIGNED_SHORT
+        0x1403 => 2,
+        // GL_UNSIGNED_INT
+        0x1405 => 4,
+        _ => {
+            log::error!(
+                "[FluorateGL] offset_indices: 未知索引类型 0x{:04X}，无法计算 basevertex 偏移，按原指针降级",
+                type_
+            );
+            return indices;
+        }
+    };
+    unsafe {
+        (indices as *const u8).offset(basevertex as isize * type_size) as *const std::ffi::c_void
+    }
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glDrawRangeElements(
@@ -144,10 +179,11 @@ pub extern "C" fn glDrawElementsBaseVertex(
         let supported = caps.draw_elements_base_vertex
             && !is_stub(dispatch, dispatch.draw_elements_base_vertex as *const ());
         if !supported {
-            // 降级为普通 glDrawElements，丢弃 basevertex 偏移。
-            // 注意：索引未偏移会导致顶点错位，仅 best-effort 避免崩溃。
+            // 降级为普通 glDrawElements：用 basevertex 偏移 indices 指针补偿索引错位
+            // （原实现丢弃 basevertex 导致顶点错位，仅 best-effort 避免崩溃）。
             warn_base_vertex_unsupported("glDrawElementsBaseVertex");
-            (dispatch.draw_elements)(mode, count, type_, indices);
+            let offset_indices_ptr = offset_indices(indices, basevertex, type_);
+            (dispatch.draw_elements)(mode, count, type_, offset_indices_ptr);
         } else {
             (dispatch.draw_elements_base_vertex)(mode, count, type_, indices, basevertex);
         }
@@ -171,6 +207,8 @@ pub extern "C" fn glDrawArraysIndirect(mode: u32, indirect: *const std::ffi::c_v
 pub extern "C" fn glDrawElementsIndirect(mode: u32, type_: u32, indirect: *const std::ffi::c_void) {
     // 同步 indirect buffer 持久映射脏区域（若 indirect buffer 是持久映射的）
     sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
+    // M6: 索引 buffer 若为持久映射，数据过期会导致索引错乱，与 indirect buffer 一并同步
+    sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
     log::debug!(
         "[FluorateGL] glDrawElementsIndirect(mode=0x{:04X}, type=0x{:04X})",
         mode,
@@ -271,8 +309,10 @@ pub extern "C" fn glDrawElementsInstancedBaseVertex(
                 dispatch.draw_elements_instanced_base_vertex as *const (),
             );
         if !supported {
+            // 降级为 glDrawElementsInstanced：用 basevertex 偏移 indices 指针补偿索引错位
             warn_base_vertex_unsupported("glDrawElementsInstancedBaseVertex");
-            (dispatch.draw_elements_instanced)(mode, count, type_, indices, instancecount);
+            let offset_indices_ptr = offset_indices(indices, basevertex, type_);
+            (dispatch.draw_elements_instanced)(mode, count, type_, offset_indices_ptr, instancecount);
         } else {
             (dispatch.draw_elements_instanced_base_vertex)(
                 mode,
@@ -309,10 +349,12 @@ pub extern "C" fn glDrawElementsInstancedBaseVertexBaseInstance(
                 dispatch.draw_elements_instanced_base_vertex_base_instance as *const (),
             );
         if !supported {
-            // 同时丢失 basevertex 和 baseinstance，触发两类首次告警
+            // 同时丢失 basevertex 和 baseinstance，触发两类首次告警；
+            // basevertex 用 indices 指针偏移补偿，baseinstance 无法补偿
             warn_base_vertex_unsupported("glDrawElementsInstancedBaseVertexBaseInstance");
             warn_base_instance_unsupported("glDrawElementsInstancedBaseVertexBaseInstance");
-            (dispatch.draw_elements_instanced)(mode, count, type_, indices, instancecount);
+            let offset_indices_ptr = offset_indices(indices, basevertex, type_);
+            (dispatch.draw_elements_instanced)(mode, count, type_, offset_indices_ptr, instancecount);
         } else {
             (dispatch.draw_elements_instanced_base_vertex_base_instance)(
                 mode,

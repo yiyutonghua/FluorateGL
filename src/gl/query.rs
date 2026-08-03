@@ -37,12 +37,31 @@ pub extern "C" fn glIsQuery(id: u32) -> u8 {
     })
 }
 
+/// 桌面查询 target → GLES target（GLES 无 GL_SAMPLES_PASSED，映射到 ANY_SAMPLES_PASSED）。
+///
+/// 桌面 GL 的遮挡查询用 GL_SAMPLES_PASSED(0x8914)，而 GLES 3.0/3.1/3.2 只接受
+/// GL_ANY_SAMPLES_PASSED(0x8C2F)、GL_ANY_SAMPLES_PASSED_CONSERVATIVE(0x8D6A) 与
+/// GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN(0x8B88)。不映射时 GLES 报 INVALID_ENUM，
+/// 查询对象从未激活 → GL_QUERY_RESULT_AVAILABLE 恒 FALSE → MC 遮挡剔除误判"全部被遮挡"
+/// → 跳过渲染（方块消失/闪烁）。
+///
+/// 语义兼容性：ANY_SAMPLES_PASSED 与 SAMPLES_PASSED 都表示片段通过深度/模板测试，
+/// 区别仅在于 ANY 不统计通过数量（结果为 0/1）。宿主（如 MC）只查
+/// RESULT_AVAILABLE 与结果非零判断，不依赖精确计数，映射安全。
+fn translate_query_target(target: u32) -> u32 {
+    if target == 0x8914 {
+        0x8C2F // GL_SAMPLES_PASSED → GL_ANY_SAMPLES_PASSED
+    } else {
+        target
+    }
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glBeginQuery(target: u32, id: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state(|s| s.queries.get_gles(id).unwrap_or(0));
-        (dispatch.begin_query)(target, gles_id);
+        (dispatch.begin_query)(translate_query_target(target), gles_id);
     });
 }
 
@@ -50,7 +69,7 @@ pub extern "C" fn glBeginQuery(target: u32, id: u32) {
 #[allow(non_snake_case)]
 pub extern "C" fn glEndQuery(target: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.end_query)(target);
+        (dispatch.end_query)(translate_query_target(target));
     });
 }
 
@@ -61,7 +80,7 @@ pub extern "C" fn glGetQueryiv(target: u32, pname: u32, params: *mut i32) {
         return;
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.get_query_iv)(target, pname, params);
+        (dispatch.get_query_iv)(translate_query_target(target), pname, params);
     });
 }
 

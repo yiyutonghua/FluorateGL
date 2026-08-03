@@ -474,12 +474,14 @@ pub extern "C" fn glVertexAttrib4Nub(index: u32, x: u8, y: u8, z: u8, w: u8) {
 #[allow(non_snake_case)]
 pub extern "C" fn glVertexAttrib4Nbv(index: u32, v: *const i8) {
     backend::with_gles_dispatch(|dispatch| unsafe {
+        // P7：GL 3.3 §6.1.1 signed normalized 转换 f = max(c/(2^(b-1)-1), -1.0)，
+        // -128/127.0 = -1.00787 需 clamp 到 -1.0（除数 127.0 已正确，不动）
         (dispatch.vertex_attrib_4f)(
             index,
-            *v as f32 / 127.0,
-            *v.offset(1) as f32 / 127.0,
-            *v.offset(2) as f32 / 127.0,
-            *v.offset(3) as f32 / 127.0,
+            (*v as f32 / 127.0).max(-1.0),
+            (*v.offset(1) as f32 / 127.0).max(-1.0),
+            (*v.offset(2) as f32 / 127.0).max(-1.0),
+            (*v.offset(3) as f32 / 127.0).max(-1.0),
         );
     });
 }
@@ -488,12 +490,13 @@ pub extern "C" fn glVertexAttrib4Nbv(index: u32, v: *const i8) {
 #[allow(non_snake_case)]
 pub extern "C" fn glVertexAttrib4Nsv(index: u32, v: *const i16) {
     backend::with_gles_dispatch(|dispatch| unsafe {
+        // P7：-32768/32767.0 = -1.00003，clamp 到 -1.0（除数 32767.0 已正确，不动）
         (dispatch.vertex_attrib_4f)(
             index,
-            *v as f32 / 32767.0,
-            *v.offset(1) as f32 / 32767.0,
-            *v.offset(2) as f32 / 32767.0,
-            *v.offset(3) as f32 / 32767.0,
+            (*v as f32 / 32767.0).max(-1.0),
+            (*v.offset(1) as f32 / 32767.0).max(-1.0),
+            (*v.offset(2) as f32 / 32767.0).max(-1.0),
+            (*v.offset(3) as f32 / 32767.0).max(-1.0),
         );
     });
 }
@@ -502,12 +505,13 @@ pub extern "C" fn glVertexAttrib4Nsv(index: u32, v: *const i16) {
 #[allow(non_snake_case)]
 pub extern "C" fn glVertexAttrib4Niv(index: u32, v: *const i32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
+        // P7：INT_MIN/2147483647.0 = -1.0000000005，clamp 到 -1.0（除数已正确，不动）
         (dispatch.vertex_attrib_4f)(
             index,
-            *v as f32 / 2147483647.0,
-            *v.offset(1) as f32 / 2147483647.0,
-            *v.offset(2) as f32 / 2147483647.0,
-            *v.offset(3) as f32 / 2147483647.0,
+            (*v as f32 / 2147483647.0).max(-1.0),
+            (*v.offset(1) as f32 / 2147483647.0).max(-1.0),
+            (*v.offset(2) as f32 / 2147483647.0).max(-1.0),
+            (*v.offset(3) as f32 / 2147483647.0).max(-1.0),
         );
     });
 }
