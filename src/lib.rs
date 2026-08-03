@@ -23,6 +23,7 @@ mod gl;
 mod init;
 pub mod shader_translator;
 mod state;
+mod symbols;
 mod util;
 
 // 对外公开的初始化与测试辅助 API（保持 crate 根路径兼容）

@@ -24,12 +24,21 @@ static EGL_DISPATCH: OnceLock<crate::egl_sys::dispatch::EglDispatch> = OnceLock:
 static INIT_ONCE: OnceLock<()> = OnceLock::new();
 static GLES_CAPABILITIES: OnceLock<capabilities::GlesCapabilities> = OnceLock::new();
 
+/// 标记后端初始化完成。
+/// 惰性初始化路径（init::ensure_backend_initialized）内部调用；
+/// 当前仅 set 不被读取，保留以兼容旧调用方（历史兼容保留）。
 pub fn mark_initialized() {
     let _ = INIT_ONCE.set(());
 }
 
 pub fn set_config(config: Config) {
     let _ = CONFIG.set(config);
+}
+
+/// 返回当前生效的后端配置。
+/// CONFIG 未设置时（理论上 ctor 必先执行）提供 from_env 兜底，保证惰性初始化可用。
+pub fn config() -> &'static Config {
+    CONFIG.get_or_init(Config::from_env)
 }
 
 pub fn init_gles() -> Result<(), &'static str> {
@@ -62,12 +71,13 @@ pub fn with_gles_dispatch<F, R>(f: F) -> R
 where
     F: FnOnce(&dispatch::GlesDispatch) -> R,
 {
+    crate::init::ensure_backend_initialized(); // 首调惰性初始化（init_gles 内部不走 with_*，无递归）
     static FIRST_CALL: AtomicBool = AtomicBool::new(true);
     if FIRST_CALL.swap(false, Ordering::Relaxed) {
         log::info!("[FluorateGL] === 首次 GL 调用，游戏渲染管线已启动 ===");
         suppress_debug_noise();
         log_gpu_info();
-        query_capabilities();
+        query_capabilities_now();
     }
 
     let dispatch = GLES_DISPATCH.get().unwrap_or_else(|| {
@@ -165,6 +175,7 @@ pub fn with_egl_dispatch<F, R>(f: F) -> R
 where
     F: FnOnce(&crate::egl_sys::dispatch::EglDispatch) -> R,
 {
+    crate::init::ensure_backend_initialized(); // 首调惰性初始化（init_egl 内部不走 with_*，无递归）
     static FIRST_EGL_CALL: AtomicBool = AtomicBool::new(true);
     if FIRST_EGL_CALL.swap(false, Ordering::Relaxed) {
         log::info!("[FluorateGL] === 首次 EGL 调用 ===");
@@ -198,11 +209,33 @@ pub fn egl_backend_ready() -> bool {
     EGL_DISPATCH.get().is_some()
 }
 
+/// GLES 后端是否真实可用（GLES_DISPATCH 未设置 = 纯 stub 场景）。
+///
+/// 供 exports 层判断：GLES_DISPATCH 已设置说明宿主已绑定 GL 上下文，
+/// 此时可以安全地补做能力查询；未设置（纯 stub / 离线测试）则无法查询，
+/// 相关调用方应走兜底路径。
+pub fn gles_dispatch_ready() -> bool {
+    GLES_DISPATCH.get().is_some()
+}
+
+/// GLES 能力表是否已查询并定型（GLES_CAPABILITIES 已 set）。
+///
+/// 能力查询由首次 with_gles_dispatch 调用触发；glGetString / glGetStringi
+/// 等路径不经 with_gles_dispatch，可能早于能力查询到达，调用方
+/// （如 exports::build_fake_extensions）据此判断是否需要补查。
+pub fn caps_queried() -> bool {
+    GLES_CAPABILITIES.get().is_some()
+}
+
 /// 在首次 GL 调用时（EGL 上下文已创建）查询真实 GLES 版本与扩展，构建能力表。
 ///
 /// 拦截层（drawing.rs / multi_draw.rs）基于此表决定原生转发/模拟/跳过。
 /// 必须在 EGL 上下文已创建后调用，否则 glGetString 返回 null。
-fn query_capabilities() {
+/// 公开为 `query_capabilities_now`：exports 层（build_fake_extensions）在
+/// caps 未就绪且 GLES_DISPATCH 已设置时补调，避免扩展表构建拿到兜底 caps
+/// 而错误剔除能力（S2 时序修复）。GLES_CAPABILITIES 为 OnceLock，
+/// 重复调用天然幂等（首次 set 后不再覆盖）。
+pub fn query_capabilities_now() {
     if let Some(dispatch) = GLES_DISPATCH.get() {
         let caps = capabilities::GlesCapabilities::query(dispatch);
         let _ = GLES_CAPABILITIES.set(caps);

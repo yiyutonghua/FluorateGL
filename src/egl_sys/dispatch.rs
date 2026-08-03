@@ -47,16 +47,17 @@ pub struct EglDispatch {
     pub get_proc_address: unsafe extern "C" fn(*const c_char) -> *mut c_void,
 }
 
-// 编译期断言：EglDispatch 全部字段为函数指针，表大小可按指针大小整除
-// （与 backend/dispatch.rs 中 GlesDispatch 的断言写法一致）
+// 编译期断言：EglDispatch 共 34 个字段且全部为函数指针（#[repr(C)] 无 padding），
+// 表大小必须恰好等于 字段数 × 函数指针大小。
+// ⚠️ 字段数变化时必须同步更新 EGL_DISPATCH_FIELD_COUNT。
+const EGL_DISPATCH_FIELD_COUNT: usize = 34;
 const _: () = assert!(
-    std::mem::size_of::<EglDispatch>() % std::mem::size_of::<unsafe extern "C" fn()>() == 0
+    std::mem::size_of::<EglDispatch>()
+        == EGL_DISPATCH_FIELD_COUNT * std::mem::size_of::<unsafe extern "C" fn()>()
 );
 
 // —— 按签名类别的安全 no-op stub（零参数，忽略入参，返回安全常量）——
 // 用于 all_stub()：宿主在 stub 模式下调用时，拿到的是安全值而非寄存器垃圾。
-#[allow(dead_code)]
-unsafe extern "C" fn stub_void() {}
 unsafe extern "C" fn stub_zero_u32() -> u32 {
     0
 }
@@ -72,6 +73,11 @@ unsafe extern "C" fn stub_empty_string() -> *const c_char {
 
 /// 按签名类别将零参数 stub（先 reify 为自身签名的 fn pointer）transmute 为
 /// 目标字段签名。stub 不使用入参（忽略寄存器/栈上的参数），转换安全。
+///
+/// 签名转换约束（重要）：
+/// - 仅限返回 u32 / 指针 / void 的 C ABI 函数签名（stub_zero_u32 / stub_null_ptr / stub_empty_string / stub_true）
+/// - 禁止用于返回 u64 / f64 等 8 字节非整数类型的字段——transmute 位级合法但 stub 只写 w0/x0 低 32 位，高 32 位残留 → UB
+/// - 添加新 stub 签名类型时必须同步更新此注释与下方 stub 函数族
 macro_rules! stub {
     ($e:expr) => {{
         unsafe { std::mem::transmute::<_, _>($e) }

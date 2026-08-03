@@ -1,7 +1,8 @@
 //! FluorateGL 初始化模块
 //!
 //! 负责：
-//! - 通过 `#[ctor]` 在库加载时自动初始化日志、后端、EGL/GLES 加载
+//! - 通过 `#[ctor]` 在库加载时只做配置解析与日志初始化（后端 EGL/GLES 加载
+//!   惰性化到首次 GL/EGL 调用，见 `ensure_backend_initialized`）
 //! - 捕获自身库句柄（用于 `eglGetProcAddress` 返回本库的函数指针）
 //! - 提供 `fluorategl_init` 显式初始化入口（供宿主或测试调用）
 
@@ -19,10 +20,57 @@ static SELF_HANDLE: OnceLock<usize> = OnceLock::new();
 
 #[ctor(unsafe)]
 fn auto_init() {
-    let ret = fluorategl_init();
-    if ret != 0 {
-        eprintln!("FluorateGL auto-init failed: {}", ret);
-    }
+    // P0-A：ctor 只做配置解析与日志初始化，不再 dlopen 后端（后端惰性化见 ensure_backend_initialized）
+    let cfg = Config::from_env();
+    util::log::init(&cfg);
+    crate::backend::set_config(cfg);
+}
+
+/// 后端惰性初始化锁：首次 GL/EGL 调用时执行一次 dlopen 初始化。
+/// 失败后永久保持失败值（Err），后续调用不再重试，走 stub 兜底。
+static BACKEND_INIT: OnceLock<Result<(), &'static str>> = OnceLock::new();
+
+/// 首次 GL/EGL 调用时惰性初始化后端（dlopen EGL/GLES）。
+/// OnceLock 保证并发首调用只执行一次；失败后永久保持失败值，后续调用走 stub 兜底。
+pub fn ensure_backend_initialized() {
+    let _ = BACKEND_INIT.get_or_init(|| {
+        capture_self_handle(); // P0-C 已删回退，无重入风险；直接调用（严禁调用 get_self_handle——闭包内重入 get_or_init 会 panic）
+        let cfg = crate::backend::config(); // 见 backend/mod.rs 的 config() 访问器
+        if cfg.skip_backend {
+            log::info!("[FluorateGL] FLUORATEGL_SKIP_BACKEND=1, skip EGL/GLES loading");
+            return Ok(());
+        }
+        let mut failed: Option<&'static str> = None;
+        if let Err(e) = crate::backend::init_egl() {
+            log::error!(
+                "[FluorateGL] EGL library unavailable ({}): {}",
+                cfg.egl_lib_name(),
+                e
+            );
+            if cfg.fail_fast {
+                log::error!("[FluorateGL] FAIL_FAST: EGL 加载失败，abort");
+                std::process::abort();
+            }
+            failed = Some(e);
+        }
+        if let Err(e) = crate::backend::init_gles() {
+            log::error!(
+                "[FluorateGL] GLES library unavailable ({}): {}",
+                cfg.gles_lib_name(),
+                e
+            );
+            if cfg.fail_fast {
+                log::error!("[FluorateGL] FAIL_FAST: GLES 加载失败，abort");
+                std::process::abort();
+            }
+            failed = Some(e);
+        }
+        crate::backend::mark_initialized();
+        match failed {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    });
 }
 
 /// 捕获自身库句柄（通过 dladdr 定位本库路径再 dlopen）。
@@ -63,53 +111,19 @@ fn capture_self_handle() {
 
 /// 获取我们自己库的句柄，用于 dlsym 查找
 pub fn get_self_handle() -> Option<*mut libc::c_void> {
+    ensure_backend_initialized(); // 保证 SELF_HANDLE 已尝试捕获
     SELF_HANDLE.get().map(|h| *h as *mut libc::c_void)
 }
 
 /// FluorateGL 显式初始化入口
 ///
 /// 在 `#[ctor]` 自动调用之外，也允许宿主或测试显式调用。
-/// 流程：加载配置 → 初始化日志 → 捕获库句柄 → 加载 EGL/GLES 后端。
+/// P0-A 重构后为薄包装：完整初始化（捕获库句柄 + dlopen EGL/GLES 后端）
+/// 惰性化到 `ensure_backend_initialized`，本函数只负责触发一次。
 ///
-/// 返回 0 表示成功，非 0 表示失败（仅 `eprintln` 路径会用，目前始终返回 0）。
+/// 返回 0 表示成功（后端加载失败不在此处报错，仅降级为 stub，见惰性初始化）。
 #[unsafe(no_mangle)]
 pub extern "C" fn fluorategl_init() -> i32 {
-    let cfg = Config::from_env();
-    util::log::init(&cfg);
-
-    log::info!("[FluorateGL] v{} Initializing...", VERSION);
-    log::info!(
-        "[FluorateGL] Backend: {:?}, LogLevel: {:?}",
-        cfg.backend,
-        cfg.log_level
-    );
-
-    // 在初始化日志后立即捕获自己的库句柄（用于 eglGetProcAddress）
-    capture_self_handle();
-
-    crate::backend::set_config(cfg);
-
-    if cfg.skip_backend {
-        log::info!("[FluorateGL] FLUORATEGL_SKIP_BACKEND=1, skip EGL/GLES loading");
-    } else {
-        // 注意：EGL/GLES 加载失败时不返回错误，只发出警告。
-        // 翻译管线（GLSL→SPIR-V→GLSL ES）是纯 CPU 操作，不依赖 EGL/GLES，
-        // 因此即使在无 GLES 后端的环境（如纯翻译测试）也能正常工作。
-        // MC 运行时若 GLES 缺失，GL 调用会走 stub dispatch（已有机制）。
-        if crate::backend::init_egl().is_err() {
-            log::warn!("[FluorateGL] EGL library unavailable (translation pipeline still works)");
-        } else {
-            log::info!("[FluorateGL] EGL library loaded");
-        }
-
-        if crate::backend::init_gles().is_err() {
-            log::warn!("[FluorateGL] GLES library unavailable (translation pipeline still works)");
-        } else {
-            log::info!("[FluorateGL] GLES library loaded");
-        }
-    }
-
-    log::info!("[FluorateGL] v{} Initialized successfully", VERSION);
-    crate::backend::mark_initialized();
+    ensure_backend_initialized();
     0
 }

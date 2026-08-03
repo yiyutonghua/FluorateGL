@@ -347,7 +347,9 @@ pub extern "C" fn glGetError() -> u32 {
 fn get_fake_extensions_string() -> *const c_char {
     static EXT_STRING: OnceLock<CString> = OnceLock::new();
     let s = EXT_STRING.get_or_init(|| {
-        let joined = FAKE_EXTENSIONS
+        // FAKE_EXTENSIONS 惰性构建：嵌套 OnceLock（不同实例）调用合法，无递归
+        let exts = FAKE_EXTENSIONS.get_or_init(build_fake_extensions);
+        let joined = exts
             .iter()
             .map(|ext| std::str::from_utf8(&ext[..ext.len() - 1]).unwrap_or(""))
             .collect::<Vec<_>>()
@@ -406,7 +408,21 @@ pub extern "C" fn glGetString(name: u32) -> *const c_char {
     result
 }
 
-static FAKE_EXTENSIONS: &[&[u8]] = &[
+/// 伪造扩展表（惰性构建）：BASE_EXTENSIONS + 按 capabilities 动态校验的行为依赖型扩展。
+///
+/// 行为依赖型扩展（draw_indirect / multi_draw_indirect / base_vertex / base_instance 等）
+/// 声明了但真实 capabilities 不支持时，宿主查询扩展后调用 stub 函数会崩溃，
+/// 因此由 build_fake_extensions() 在构建时校验剔除，保证声明与真实能力对齐。
+static FAKE_EXTENSIONS: OnceLock<Vec<&'static [u8]>> = OnceLock::new();
+
+/// 基础扩展表：静态声明（桌面名 GL_ARB_* 或 GLES 通用名，均为能力无关的纯特性声明）。
+///
+/// 行为依赖型扩展（draw_indirect / draw_elements_base_vertex / base_instance /
+/// multi_draw_elements_base_vertex 等）已从本表移除，统一由
+/// build_fake_extensions() 内的 behavior_dependent 映射表按 caps 动态声明
+/// （caps=true 才 push），避免 caps=false 时仍被静态声明导致 warn 日志撒谎
+/// 与宿主调用 stub 崩溃（S1 修复）。
+static BASE_EXTENSIONS: &[&[u8]] = &[
     b"GL_ARB_vertex_array_object\0",
     b"GL_ARB_framebuffer_object\0",
     b"GL_ARB_instanced_arrays\0",
@@ -415,22 +431,10 @@ static FAKE_EXTENSIONS: &[&[u8]] = &[
     b"GL_ARB_shader_image_load_store\0",
     b"GL_ARB_separate_shader_objects\0",
     b"GL_ARB_vertex_attrib_binding\0",
-    // Draw 系列扩展：对应 dispatch.rs 中已加载的扩展函数。
-    // 声明必须与 capabilities 检测结果一致，否则宿主查询扩展后调用 stub 函数会崩溃。
-    // GLES 3.1 core：glDrawArraysIndirect / glDrawElementsIndirect
-    b"GL_ARB_draw_indirect\0",
-    // GLES 3.1 core：glMultiDrawArrays / glMultiDrawElements（部分驱动以 stub 加载）
-    // 桌面对应 GL_ARB_multi_draw_indirect，Sodium 0.8+ 查询此扩展决定是否启用 chunk batching
-    b"GL_ARB_multi_draw_indirect\0",
-    b"GL_EXT_multi_draw_indirect\0",
-    // GLES 3.2 / GL_OES_draw_elements_base_vertex：glDrawElementsBaseVertex 系列
-    b"GL_ARB_draw_elements_base_vertex\0",
-    b"GL_OES_draw_elements_base_vertex\0",
-    // GLES 3.2 / GL_EXT_base_instance：glDrawArraysInstancedBaseInstance 系列
-    b"GL_ARB_base_instance\0",
-    b"GL_EXT_base_instance\0",
-    // GLES 3.2 / GL_EXT_multi_draw_elements_base_vertex：glMultiDrawElementsBaseVertex
-    b"GL_EXT_multi_draw_elements_base_vertex\0",
+    // 行为依赖型扩展（GL_ARB_draw_indirect / GL_ARB_draw_elements_base_vertex /
+    // GL_OES_draw_elements_base_vertex / GL_ARB_base_instance / GL_EXT_base_instance /
+    // GL_EXT_multi_draw_elements_base_vertex）已移入 build_fake_extensions() 的
+    // behavior_dependent 映射表动态声明，本表不再静态包含。
     b"GL_ARB_timer_query\0",
     b"GL_ARB_buffer_storage\0",
     b"GL_ARB_get_program_binary\0",
@@ -473,6 +477,65 @@ static FAKE_EXTENSIONS: &[&[u8]] = &[
     b"GL_OES_packed_depth_stencil\0",
     b"GL_OES_rgb8_rgba8\0",
 ];
+
+/// 行为依赖型扩展 → GlesCapabilities 字段的映射校验。
+/// 声明了但 caps=false → 剔除 + warn（防止宿主查询后调用 stub 函数崩溃）。
+///
+/// S1：base 表不再静态包含行为依赖条目，全部由本表按 caps 动态声明
+/// （caps=true 才 push，名字与移除前完全一致，含尾 \0）。
+fn build_fake_extensions() -> Vec<&'static [u8]> {
+    // S2：caps 可能未就绪（glGetString/glGetStringi 不经 with_gles_dispatch，不触发能力查询）。
+    // 宿主在此刻调用说明 GL 上下文已绑定（GLES_DISPATCH 已设置）——先补一次能力查询，
+    // 避免构建时拿到 FALLBACK_CAPS（multi_draw_indirect=false 等）导致行为依赖扩展被
+    // 错误剔除，OnceLock 一次性定型后造成 GLES 3.2 设备性能回归。
+    if backend::gles_dispatch_ready() && !backend::caps_queried() {
+        backend::query_capabilities_now();
+    }
+    let mut result = BASE_EXTENSIONS.to_vec();
+    // 纯 stub 场景（GLES_DISPATCH 未设置）：无真实 GL 上下文，无法查询 caps，
+    // 返回 BASE_EXTENSIONS 原样拷贝（不剔除不添加），与历史兜底行为一致。
+    if !backend::gles_dispatch_ready() {
+        return result;
+    }
+    let caps = crate::backend::capabilities();
+    let behavior_dependent: &[(&[u8], fn(&crate::backend::capabilities::GlesCapabilities) -> bool)] = &[
+        (b"GL_ARB_draw_indirect\0", |c| c.indirect_draw),
+        // 差异 #3：multi_draw_indirect 二选一保留 GL_EXT 名，GL_ARB 名不再声明
+        (b"GL_EXT_multi_draw_indirect\0", |c| c.multi_draw_indirect),
+        (b"GL_ARB_draw_elements_base_vertex\0", |c| c.draw_elements_base_vertex),
+        (b"GL_OES_draw_elements_base_vertex\0", |c| c.draw_elements_base_vertex),
+        (b"GL_ARB_base_instance\0", |c| c.base_instance),
+        (b"GL_EXT_base_instance\0", |c| c.base_instance),
+        (
+            b"GL_EXT_multi_draw_elements_base_vertex\0",
+            |c| c.multi_draw_elements_base_vertex,
+        ),
+    ];
+    // 行为依赖字段全 false 时提示：S2 已保证构建前 caps 就绪（真实查询或 stub 早退），
+    // 此处仅剩"GLES 3.1 无行为依赖特性扩展"的真实剔除场景（如 3.1 设备无
+    // GL_OES_draw_elements_base_vertex / GL_EXT_base_instance / multi_draw_indirect）。
+    if !caps.multi_draw_indirect
+        && !caps.draw_elements_base_vertex
+        && !caps.base_instance
+        && !caps.multi_draw_elements_base_vertex
+    {
+        log::debug!(
+            "[FluorateGL] FAKE_EXTENSIONS 构建时无行为依赖特性支持（multi_draw_indirect/base_vertex/base_instance 全 false），使用保守剔除结果"
+        );
+    }
+    for (ext, pred) in behavior_dependent {
+        let supported = pred(caps);
+        if !supported {
+            log::warn!(
+                "[FluorateGL] FAKE_EXTENSIONS 剔除 {}（capabilities 不支持）",
+                String::from_utf8_lossy(&ext[..ext.len() - 1])
+            );
+        } else if !result.iter().any(|e| *e == *ext) {
+            result.push(*ext);
+        }
+    }
+    result
+}
 
 /// 将 GLES 驱动返回的绑定查询结果中的原始 GLES ID 翻译为桌面 ID。
 /// 如果 pname 不是绑定查询，或返回值为 0，则不做任何修改。
@@ -543,8 +606,10 @@ pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
     }
     match pname {
         0x821D => {
-            // GL_NUM_EXTENSIONS
-            unsafe { *data = FAKE_EXTENSIONS.len() as i32 };
+            // GL_NUM_EXTENSIONS：可能早于 with_gles_dispatch 触发的能力查询到达
+            // （静态分支不经 getter），但 build_fake_extensions 内部已有 S2 能力补查，
+            // 重复 get_or_init 调用天然幂等，安全。
+            unsafe { *data = FAKE_EXTENSIONS.get_or_init(build_fake_extensions).len() as i32 };
         }
         0x821B => {
             // GL_MAJOR_VERSION
@@ -573,8 +638,19 @@ pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetStringi(name: u32, index: u32) -> *const c_char {
-    let result = if name == 0x1F03 && (index as usize) < FAKE_EXTENSIONS.len() {
-        FAKE_EXTENSIONS[index as usize].as_ptr() as *const c_char
+    // L3：FAKE_EXTENSIONS 仅在 GL_EXTENSIONS 分支内惰性构建，
+    // 其他 name 直接走越界空串逻辑，避免无关查询触发扩展表构建。
+    // （构建内部已有 S2 能力补查，与 glGetIntegerv(GL_NUM_EXTENSIONS) /
+    //   get_fake_extensions_string 的 get_or_init 重复调用天然幂等，安全。）
+    let result = if name == 0x1F03 {
+        let exts = FAKE_EXTENSIONS.get_or_init(build_fake_extensions);
+        if (index as usize) < exts.len() {
+            exts[index as usize].as_ptr() as *const c_char
+        } else {
+            // 越界返回空串而非 null：防宿主不判 null 直接解引用崩溃
+            static EMPTY: &[u8] = b"\0";
+            EMPTY.as_ptr() as *const c_char
+        }
     } else {
         // 越界返回空串而非 null：防宿主不判 null 直接解引用崩溃
         static EMPTY: &[u8] = b"\0";

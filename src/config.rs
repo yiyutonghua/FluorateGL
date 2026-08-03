@@ -28,6 +28,9 @@ pub struct Config {
     pub log_level: LogLevel,
     /// 跳过 EGL/GLES 库加载（用于 fork worker 等只需翻译管线的纯 CPU 场景）
     pub skip_backend: bool,
+    /// 排障开关（默认关闭）：EGL/GLES 加载失败时直接 abort 而非静默降级。
+    /// 纯翻译场景（fork worker、离线测试）依赖无后端也能跑，故为 opt-in。
+    pub fail_fast: bool,
 }
 
 impl Config {
@@ -52,10 +55,15 @@ impl Config {
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
+        let fail_fast = env::var("FLUORATEGL_FAIL_FAST")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
         Self {
             backend,
             log_level,
             skip_backend,
+            fail_fast,
         }
     }
 

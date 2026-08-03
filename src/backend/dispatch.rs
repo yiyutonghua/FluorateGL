@@ -336,22 +336,373 @@ pub struct GlesDispatch {
     pub get_doublei_v: unsafe extern "C" fn(u32, u32, *mut f64),
 }
 
-// 编译期约束：all_stub 逐槽填充依赖"全指针布局"，未来混入非指针字段立即编译失败
-const _: () = assert!(std::mem::size_of::<GlesDispatch>() % std::mem::size_of::<unsafe extern "C" fn()>() == 0);
+// 编译期约束：GlesDispatch 必须全部为函数指针（全指针布局），且字段总数精确匹配。
+// 字段数 = 263（stub 槽 + 262 个 GL 函数指针）。
+// ⚠️ 若结构体字段增减，必须同步更新此处 263，否则编译失败——防止显式初始化
+// 遗漏字段时静默出错（原 % 断言只能捕获"总大小非 8 倍数"，捕获不了字段数漂移）。
+const _: () = assert!(
+    std::mem::size_of::<GlesDispatch>() == 263 * std::mem::size_of::<unsafe extern "C" fn()>()
+);
+
+// —— 按签名类别的安全 no-op stub（零参数，忽略入参，返回安全常量）——
+// 用于 all_stub()：GLES 库加载失败时，宿主调用这些槽位拿到的是安全值
+// （null / 0 / 空串），而非 AArch64 x0 残留垃圾（与 egl_sys 侧 P1-A 同类问题）。
+// 命名带 gl_ 前缀，与 egl_sys 模块的 stub_* 区分（避免两个模块概念混淆）。
+#[allow(dead_code)]
+unsafe extern "C" fn gl_stub_void() {}
+unsafe extern "C" fn gl_stub_zero_u32() -> u32 {
+    0
+}
+unsafe extern "C" fn gl_stub_zero_i32() -> i32 {
+    0 // get_uniform_location / get_attrib_location：0 = 无此 attribute/uniform
+}
+unsafe extern "C" fn gl_stub_zero_u8() -> u8 {
+    0 // GL_FALSE：宿主 is_* 查询返回 false，走低配路径（安全）
+}
+unsafe extern "C" fn gl_stub_null_ptr() -> *mut c_void {
+    std::ptr::null_mut()
+}
+unsafe extern "C" fn gl_stub_empty_string() -> *const c_char {
+    b"\0".as_ptr() as *const c_char
+}
+
+/// 按签名类别将零参数 stub（先 reify 为自身签名的 fn pointer）transmute 为
+/// 目标字段签名。stub 不使用入参（忽略寄存器/栈上的参数），转换安全。
+/// 空臂：void 返回字段（目标签名尾部无返回类型）。
+/// ⚠️ 必须先 reify：fn item（gl_stub_void）是零大小类型，直接 transmute 触发
+/// E0591（can't transmute zero-sized type）；reify 为函数指针（8 字节）后
+/// fn pointer → fn pointer 的 transmute 才合法。
+macro_rules! stub {
+    () => {{
+        let f: unsafe extern "C" fn() = gl_stub_void;
+        unsafe { std::mem::transmute::<_, _>(f) }
+    }};
+    ($e:expr) => {{
+        unsafe { std::mem::transmute::<_, _>($e) }
+    }};
+}
 
 impl GlesDispatch {
-    /// Create a dispatch table where every function pointer is a no-op stub.
+    /// Create a dispatch table where every function pointer is a safe no-op stub.
     /// Used as a fallback when the real GLES library fails to load, so that
     /// exported C functions don't panic/abort the host process.
+    ///
+    /// 按签名类别显式初始化（M1 修复，替代原 MaybeUninit 逐槽填充）：
+    /// - void 返回 → gl_stub_void（no-op）
+    /// - 返回 u32（GLenum/GLuint/状态查询/创建类）→ gl_stub_zero_u32（0）
+    /// - 返回 i32（location 查询）→ gl_stub_zero_i32（0）
+    /// - 返回 u8（GLboolean is_* 查询）→ gl_stub_zero_u8（GL_FALSE=0，安全低配路径）
+    /// - 返回 *mut c_void（创建/映射类）→ gl_stub_null_ptr（null，宿主可判空）
+    /// - 返回 *const c_char（字符串查询）→ gl_stub_empty_string（空串，宿主可安全 CStr 解析）
     pub fn all_stub() -> Self {
-        unsafe extern "C" fn stub_fn() {}
-        let mut stub = std::mem::MaybeUninit::<Self>::uninit();
-        let ptr = stub.as_mut_ptr() as *mut unsafe extern "C" fn();
-        let count = std::mem::size_of::<Self>() / std::mem::size_of::<unsafe extern "C" fn()>();
-        for i in 0..count {
-            unsafe { ptr.add(i).write(stub_fn) };
+        Self {
+            // 直接 pass-through
+            stub: stub!(),
+            clear: stub!(),
+            get_string: stub!(gl_stub_empty_string as unsafe extern "C" fn() -> *const c_char),
+            enable: stub!(),
+            disable: stub!(),
+            depth_func: stub!(),
+            depth_mask: stub!(),
+            blend_func: stub!(),
+            clear_color: stub!(),
+            clear_depth: stub!(),
+            clear_stencil: stub!(),
+            viewport: stub!(),
+            scissor: stub!(),
+            cull_face: stub!(),
+            front_face: stub!(),
+            line_width: stub!(),
+            active_texture: stub!(),
+            pixel_store_i: stub!(),
+            draw_arrays: stub!(),
+            draw_elements: stub!(),
+            finish: stub!(),
+            flush: stub!(),
+            generate_mipmap: stub!(),
+            get_error: stub!(gl_stub_zero_u32 as unsafe extern "C" fn() -> u32),
+
+            // Buffer
+            gen_buffers: stub!(),
+            delete_buffers: stub!(),
+            bind_buffer: stub!(),
+            buffer_data: stub!(),
+            buffer_sub_data: stub!(),
+
+            // Buffer 高级
+            map_buffer_range: stub!(gl_stub_null_ptr as unsafe extern "C" fn() -> *mut c_void),
+            unmap_buffer: stub!(gl_stub_zero_u8 as unsafe extern "C" fn() -> u8),
+            flush_mapped_buffer_range: stub!(),
+            copy_buffer_sub_data: stub!(),
+            bind_buffer_base: stub!(),
+            bind_buffer_range: stub!(),
+            buffer_storage: stub!(),
+            get_buffer_sub_data: stub!(),
+            get_buffer_parameter_iv: stub!(),
+            get_buffer_pointer_v: stub!(),
+            is_buffer: stub!(gl_stub_zero_u8 as unsafe extern "C" fn() -> u8),
+
+            // Buffer → Texture 绑定（GL_EXT_texture_buffer / GLES 3.2）
+            tex_buffer: stub!(),
+            tex_buffer_range: stub!(),
+
+            // Debug 输出控制
+            debug_message_control: stub!(),
+
+            // VAO
+            gen_vertex_arrays: stub!(),
+            delete_vertex_arrays: stub!(),
+            bind_vertex_array: stub!(),
+            enable_vertex_attrib_array: stub!(),
+            disable_vertex_attrib_array: stub!(),
+            vertex_attrib_pointer: stub!(),
+            vertex_attrib_i_pointer: stub!(),
+            vertex_attrib_1f: stub!(),
+            vertex_attrib_2f: stub!(),
+            vertex_attrib_3f: stub!(),
+            vertex_attrib_4f: stub!(),
+            vertex_attrib_1fv: stub!(),
+            vertex_attrib_2fv: stub!(),
+            vertex_attrib_3fv: stub!(),
+            vertex_attrib_4fv: stub!(),
+            vertex_attrib_i_1i: stub!(),
+            vertex_attrib_i_2i: stub!(),
+            vertex_attrib_i_3i: stub!(),
+            vertex_attrib_i_4i: stub!(),
+            vertex_attrib_i_1ui: stub!(),
+            vertex_attrib_i_2ui: stub!(),
+            vertex_attrib_i_3ui: stub!(),
+            vertex_attrib_i_4ui: stub!(),
+            vertex_attrib_i_1iv: stub!(),
+            vertex_attrib_i_2iv: stub!(),
+            vertex_attrib_i_3iv: stub!(),
+            vertex_attrib_i_4iv: stub!(),
+            vertex_attrib_i_1uiv: stub!(),
+            vertex_attrib_i_2uiv: stub!(),
+            vertex_attrib_i_3uiv: stub!(),
+            vertex_attrib_i_4uiv: stub!(),
+
+            // VAO/Draw 高级（ARB_vertex_attrib_binding / GLES 3.1）
+            bind_vertex_buffer: stub!(),
+            vertex_attrib_format: stub!(),
+            vertex_attrib_i_format: stub!(),
+            vertex_attrib_binding: stub!(),
+            get_vertex_attrib_fv: stub!(),
+
+            // VAO/Draw 高级
+            vertex_attrib_divisor: stub!(),
+            draw_arrays_instanced: stub!(),
+            draw_elements_instanced: stub!(),
+            draw_range_elements: stub!(),
+            primitive_restart_index: stub!(),
+
+            // Shader
+            create_shader: stub!(gl_stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            delete_shader: stub!(),
+            shader_source: stub!(),
+            compile_shader: stub!(),
+            get_shader_iv: stub!(),
+            get_shader_info_log: stub!(),
+            gl_create_shader_programv: stub!(gl_stub_zero_u32 as unsafe extern "C" fn() -> u32),
+
+            // Program
+            create_program: stub!(gl_stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            delete_program: stub!(),
+            attach_shader: stub!(),
+            link_program: stub!(),
+            use_program: stub!(),
+            get_program_iv: stub!(),
+            get_program_info_log: stub!(),
+            get_uniform_location: stub!(gl_stub_zero_i32 as unsafe extern "C" fn() -> i32),
+            get_attrib_location: stub!(gl_stub_zero_i32 as unsafe extern "C" fn() -> i32),
+            uniform_1f: stub!(),
+            uniform_1i: stub!(),
+            uniform_2f: stub!(),
+            uniform_3f: stub!(),
+            uniform_4f: stub!(),
+            uniform_2i: stub!(),
+            uniform_3i: stub!(),
+            uniform_4i: stub!(),
+            uniform_1fv: stub!(),
+            uniform_2fv: stub!(),
+            uniform_3fv: stub!(),
+            uniform_4fv: stub!(),
+            uniform_1iv: stub!(),
+            uniform_2iv: stub!(),
+            uniform_3iv: stub!(),
+            uniform_4iv: stub!(),
+            uniform_matrix_2fv: stub!(),
+            uniform_matrix_3fv: stub!(),
+            uniform_matrix_4fv: stub!(),
+
+            // Shader/Program 高级
+            detach_shader: stub!(),
+            validate_program: stub!(),
+            get_active_uniform: stub!(),
+            get_active_attrib: stub!(),
+            get_uniform_fv: stub!(),
+            get_uniform_iv: stub!(),
+            get_attached_shaders: stub!(),
+            get_shader_source: stub!(),
+            bind_attrib_location: stub!(),
+            transform_feedback_varyings: stub!(),
+            get_transform_feedback_varying: stub!(),
+            uniform_block_binding: stub!(),
+            get_uniform_block_index: stub!(gl_stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            get_active_uniform_block_iv: stub!(),
+            get_active_uniform_block_name: stub!(),
+            get_uniform_indices: stub!(),
+            get_active_uniforms_iv: stub!(),
+            is_shader: stub!(gl_stub_zero_u8 as unsafe extern "C" fn() -> u8),
+            is_program: stub!(gl_stub_zero_u8 as unsafe extern "C" fn() -> u8),
+            release_shader_compiler: stub!(),
+
+            // Texture
+            gen_textures: stub!(),
+            delete_textures: stub!(),
+            bind_texture: stub!(),
+            tex_image_2d: stub!(),
+            tex_sub_image_2d: stub!(),
+            tex_parameter_i: stub!(),
+
+            // Texture 高级
+            tex_image_3d: stub!(),
+            tex_sub_image_3d: stub!(),
+            tex_storage_2d: stub!(),
+            tex_storage_3d: stub!(),
+            tex_parameter_f: stub!(),
+            tex_parameter_fv: stub!(),
+            tex_parameter_iv: stub!(),
+            compressed_tex_image_2d: stub!(),
+            compressed_tex_sub_image_2d: stub!(),
+            compressed_tex_image_3d: stub!(),
+            compressed_tex_sub_image_3d: stub!(),
+            get_tex_image: stub!(),
+            get_tex_level_parameter_iv: stub!(),
+            get_tex_parameter_iv: stub!(),
+            is_texture: stub!(gl_stub_zero_u8 as unsafe extern "C" fn() -> u8),
+
+            // Framebuffer / Renderbuffer
+            gen_framebuffers: stub!(),
+            delete_framebuffers: stub!(),
+            bind_framebuffer: stub!(),
+            framebuffer_texture_2d: stub!(),
+            framebuffer_texture_layer: stub!(),
+            framebuffer_renderbuffer: stub!(),
+            check_framebuffer_status: stub!(gl_stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            gen_renderbuffers: stub!(),
+            delete_renderbuffers: stub!(),
+            bind_renderbuffer: stub!(),
+            renderbuffer_storage: stub!(),
+            renderbuffer_storage_multisample: stub!(),
+            blit_framebuffer: stub!(),
+            draw_buffers: stub!(),
+            read_buffer: stub!(),
+            read_pixels: stub!(),
+            clear_buffer_fv: stub!(),
+            clear_buffer_iv: stub!(),
+            clear_buffer_uiv: stub!(),
+            clear_buffer_fi: stub!(),
+            get_framebuffer_attachment_parameter_iv: stub!(),
+            is_framebuffer: stub!(gl_stub_zero_u8 as unsafe extern "C" fn() -> u8),
+            is_renderbuffer: stub!(gl_stub_zero_u8 as unsafe extern "C" fn() -> u8),
+
+            // State
+            enable_i: stub!(),
+            disable_i: stub!(),
+            blend_func_separate: stub!(),
+            blend_equation: stub!(),
+            blend_equation_separate: stub!(),
+            blend_func_i: stub!(),
+            blend_func_separate_i: stub!(),
+            blend_equation_i: stub!(),
+            blend_equation_separate_i: stub!(),
+            color_mask: stub!(),
+            color_mask_i: stub!(),
+            depth_range_f: stub!(),
+            stencil_func: stub!(),
+            stencil_func_separate: stub!(),
+            stencil_op: stub!(),
+            stencil_op_separate: stub!(),
+            stencil_mask: stub!(),
+            stencil_mask_separate: stub!(),
+            polygon_offset: stub!(),
+            polygon_mode: stub!(),
+            pixel_store_f: stub!(),
+            point_parameter_f: stub!(),
+            scissor_indexed: stub!(),
+            viewport_indexed: stub!(),
+            is_enabled: stub!(gl_stub_zero_u8 as unsafe extern "C" fn() -> u8),
+            is_enabled_i: stub!(gl_stub_zero_u8 as unsafe extern "C" fn() -> u8),
+
+            // Drawing
+            multi_draw_arrays: stub!(),
+            multi_draw_elements: stub!(),
+            draw_elements_base_vertex: stub!(),
+            draw_range_elements_base_vertex: stub!(),
+            draw_elements_instanced_base_vertex: stub!(),
+            draw_elements_instanced_base_instance: stub!(),
+            draw_elements_instanced_base_vertex_base_instance: stub!(),
+            draw_arrays_instanced_base_instance: stub!(),
+            multi_draw_elements_base_vertex: stub!(),
+            draw_arrays_indirect: stub!(),
+            draw_elements_indirect: stub!(),
+            multi_draw_arrays_indirect: stub!(),
+            multi_draw_elements_indirect: stub!(),
+            multi_draw_arrays_indirect_count: stub!(),
+            multi_draw_elements_indirect_count: stub!(),
+
+            // Query
+            gen_queries: stub!(),
+            delete_queries: stub!(),
+            is_query: stub!(gl_stub_zero_u8 as unsafe extern "C" fn() -> u8),
+            begin_query: stub!(),
+            end_query: stub!(),
+            get_query_iv: stub!(),
+            get_query_object_iv: stub!(),
+            get_query_object_uiv: stub!(),
+
+            // Sync
+            fence_sync: stub!(gl_stub_null_ptr as unsafe extern "C" fn() -> *mut c_void),
+            delete_sync: stub!(),
+            client_wait_sync: stub!(gl_stub_zero_u32 as unsafe extern "C" fn() -> u32),
+            wait_sync: stub!(),
+            is_sync: stub!(gl_stub_zero_u8 as unsafe extern "C" fn() -> u8),
+
+            // Transform Feedback
+            gen_transform_feedbacks: stub!(),
+            delete_transform_feedbacks: stub!(),
+            bind_transform_feedback: stub!(),
+            begin_transform_feedback: stub!(),
+            end_transform_feedback: stub!(),
+            pause_transform_feedback: stub!(),
+            resume_transform_feedback: stub!(),
+            is_transform_feedback: stub!(gl_stub_zero_u8 as unsafe extern "C" fn() -> u8),
+
+            // Sampler
+            gen_samplers: stub!(),
+            delete_samplers: stub!(),
+            bind_sampler: stub!(),
+            sampler_parameter_i: stub!(),
+            sampler_parameter_f: stub!(),
+            sampler_parameter_iv: stub!(),
+            sampler_parameter_fv: stub!(),
+            is_sampler: stub!(gl_stub_zero_u8 as unsafe extern "C" fn() -> u8),
+
+            // 其他
+            get_integerv: stub!(),
+            get_string_i: stub!(gl_stub_empty_string as unsafe extern "C" fn() -> *const c_char),
+
+            // 其他状态查询
+            get_boolean_v: stub!(),
+            get_float_v: stub!(),
+            get_double_v: stub!(),
+            get_integer_64v: stub!(),
+            get_booleani_v: stub!(),
+            get_integeri_v: stub!(),
+            get_floati_v: stub!(),
+            get_doublei_v: stub!(),
         }
-        unsafe { stub.assume_init() }
     }
 
     #[allow(clippy::missing_transmute_annotations)]
