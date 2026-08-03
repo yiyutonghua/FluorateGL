@@ -293,3 +293,66 @@ fn compile_fallback_through_gles_versions() {
         );
     }
 }
+
+// ============ samplerBuffer → GLES 输出（clouds 回归） ============
+
+/// clouds 特征模板：isamplerBuffer + int 坐标 texelFetch
+const CLOUDS_SAMPLER_BUFFER_SHADER: &str = "#version 330\n\
+               uniform isamplerBuffer CloudFaces;\n\
+               in vec2 vUV;\n\
+               out vec4 fragColor;\n\
+               void main() {\n\
+                   int index = int(gl_FragCoord.x);\n\
+                   vec4 color = vec4(texelFetch(CloudFaces, index));\n\
+                   fragColor = color;\n\
+               }\n";
+
+#[test]
+fn test_gles_compile_sampler_buffer_es310() {
+    // ES 310 不支持原生 samplerBuffer，spirv-cross 应 emit
+    // `#extension GL_EXT_texture_buffer : require`；类型与 int 坐标 texelFetch 保留。
+    let spv = make_spirv(CLOUDS_SAMPLER_BUFFER_SHADER, spirv_compile::GL_FRAGMENT_SHADER);
+    let result = gles_compile::compile(&spv, 310);
+    assert!(result.is_ok(), "got Err: {:?}", result.err());
+    let gles_src = result.unwrap();
+    assert!(
+        gles_src.contains("GL_EXT_texture_buffer : require"),
+        "ES 310 应声明 texture buffer 扩展: {}",
+        gles_src
+    );
+    assert!(
+        gles_src.contains("isamplerBuffer"),
+        "isamplerBuffer 类型应保留: {}",
+        gles_src
+    );
+    assert!(
+        gles_src.contains("texelFetch(CloudFaces, index)"),
+        "texelFetch int 坐标应保留: {}",
+        gles_src
+    );
+}
+
+#[test]
+fn test_gles_compile_sampler_buffer_es320() {
+    // ES 320 原生支持 samplerBuffer：spirv-cross 源码在 options.version < 320
+    // 时才 emit GL_EXT_texture_buffer 扩展（T3 实测 320 输出无扩展声明）。
+    let spv = make_spirv(CLOUDS_SAMPLER_BUFFER_SHADER, spirv_compile::GL_FRAGMENT_SHADER);
+    let result = gles_compile::compile(&spv, 320);
+    assert!(result.is_ok(), "got Err: {:?}", result.err());
+    let gles_src = result.unwrap();
+    assert!(
+        !gles_src.contains("GL_EXT_texture_buffer"),
+        "ES 320 不应声明 texture buffer 扩展（原生支持）: {}",
+        gles_src
+    );
+    assert!(
+        gles_src.contains("isamplerBuffer"),
+        "isamplerBuffer 类型应保留: {}",
+        gles_src
+    );
+    assert!(
+        gles_src.contains("texelFetch(CloudFaces, index)"),
+        "texelFetch int 坐标应保留: {}",
+        gles_src
+    );
+}

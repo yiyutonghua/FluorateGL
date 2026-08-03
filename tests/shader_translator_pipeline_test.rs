@@ -438,3 +438,48 @@ fn translate_different_stages_produce_different_output() {
         panic!("expected both Translated");
     }
 }
+
+// ============ clouds samplerBuffer 端到端回归 ============
+
+#[test]
+fn test_translate_clouds_sampler_buffer() {
+    // clouds 特征端到端：fragment stage + isamplerBuffer + int 坐标 texelFetch。
+    // 修复前 SPIR-V 管线失败会落 string_pass 兜底；T1/T2 修复后应走完整
+    // SPIR-V 管线返回 Translated，且 samplerBuffer/texelFetch 原样保留。
+    let src = "#version 330\n\
+               uniform isamplerBuffer CloudFaces;\n\
+               in vec2 vUV;\n\
+               out vec4 fragColor;\n\
+               void main() {\n\
+                   int index = int(gl_FragCoord.x);\n\
+                   vec4 color = vec4(texelFetch(CloudFaces, index));\n\
+                   fragColor = color;\n\
+               }\n";
+    let result = translate(src, GL_FRAGMENT_SHADER);
+    match result {
+        TranslationResult::Translated(out) => {
+            eprintln!(
+                "=== test_translate_clouds_sampler_buffer translated ===\n{}",
+                out
+            );
+            let first_line = out.lines().next().expect("output should not be empty");
+            assert!(
+                first_line.starts_with("#version 3") && first_line.contains("es"),
+                "expected #version 3xx es first line, got: {}",
+                first_line
+            );
+            assert!(
+                out.contains("samplerBuffer"),
+                "missing samplerBuffer: {}",
+                out
+            );
+            assert!(out.contains("texelFetch"), "missing texelFetch: {}", out);
+            assert!(
+                out.contains("precision highp float;"),
+                "missing precision: {}",
+                out
+            );
+        }
+        other => panic!("expected Translated, got {:?}", other),
+    }
+}

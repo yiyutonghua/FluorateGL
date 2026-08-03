@@ -521,3 +521,52 @@ fn preprocess_handles_compute_shader_style() {
     let result = preprocess::preprocess(src, 0x8B31);
     assert!(result.contains("layout(local_size_x=8, local_size_y=8) in;"));
 }
+
+// ============ samplerBuffer 原样保留（clouds 回归） ============
+
+#[test]
+fn test_preprocess_preserves_sampler_buffer() {
+    // clouds 特征：isamplerBuffer + int 坐标 texelFetch。
+    // T1 禁用 convert_sampler_buffer 后，samplerBuffer 不再被改写为
+    // u_BufferTexWidth/bufferCoords/isampler2D 形式，必须原样保留。
+    let src = "#version 330\n\
+               uniform isamplerBuffer CloudFaces;\n\
+               in vec2 vUV;\n\
+               out vec4 fragColor;\n\
+               void main() {\n\
+                   int index = int(gl_FragCoord.x);\n\
+                   vec4 color = vec4(texelFetch(CloudFaces, index));\n\
+                   fragColor = color;\n\
+               }\n";
+    let result = preprocess::preprocess(src, 0x8B30);
+    assert!(
+        result.starts_with("#version 450 core"),
+        "expected #version 450 core, got: {}",
+        result
+    );
+    assert!(
+        result.contains("isamplerBuffer CloudFaces"),
+        "samplerBuffer 声明应原样保留, got: {}",
+        result
+    );
+    assert!(
+        result.contains("texelFetch(CloudFaces, index)"),
+        "texelFetch int 坐标调用应原样保留, got: {}",
+        result
+    );
+    assert!(
+        !result.contains("u_BufferTexWidth"),
+        "不应出现 convert_sampler_buffer 的宽度 uniform 产物, got: {}",
+        result
+    );
+    assert!(
+        !result.contains("bufferCoords"),
+        "不应出现 convert_sampler_buffer 的坐标变量产物, got: {}",
+        result
+    );
+    assert!(
+        !result.contains("isampler2D"),
+        "samplerBuffer 不应被改写为 isampler2D, got: {}",
+        result
+    );
+}

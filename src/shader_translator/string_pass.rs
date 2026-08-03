@@ -48,6 +48,10 @@ pub fn translate(source: &str, stage: u32) -> String {
     // GLSL ES requires explicit precision for float, int and samplers.
     output = inject_precision(&output, stage);
 
+    // 防御性：GL_EXT_texture_buffer 扩展声明，覆盖 ES 300/310 输出场景。
+    // 必须位于 inject_precision 之后（确保 #extension 在 precision 声明之前）。
+    output = inject_texture_buffer_extension(&output);
+
     // gl_FragColor is not built-in in GLSL ES 300.
     output = replace_frag_color(&output);
 
@@ -153,6 +157,10 @@ fn inject_precision(source: &str, stage: u32) -> String {
             "sampler2DArray",
             "sampler2DShadow",
             "samplerCubeShadow",
+            // texture buffer 采样器（clouds shader 等使用 samplerBuffer/texelFetch 的兜底路径）
+            "samplerBuffer",
+            "isamplerBuffer",
+            "usamplerBuffer",
         ];
         for s in samplers {
             if source.contains(s) && !has_precision_for(source, s) {
@@ -168,6 +176,43 @@ fn inject_precision(source: &str, stage: u32) -> String {
     let mut result = source[..insert_pos].to_string();
     result.push_str(&decls);
     result.push_str(&source[insert_pos..]);
+    result
+}
+
+/// 防御性：注入 GL_EXT_texture_buffer 扩展声明，覆盖 ES 300/310 输出场景。
+///
+/// 当源码含 texture buffer 采样器（samplerBuffer / isamplerBuffer / usamplerBuffer）时，
+/// 在 `#version` 行之后插入 `#extension GL_EXT_texture_buffer : require`。
+/// 即使当前 replace_version 输出 320 es（core 自带 texture buffer），该声明也无害
+/// （GLES 3.2 驱动接受 core 扩展声明）；若未来版本逻辑输出 300/310 es 则必不可少。
+///
+/// 注意：必须在 inject_precision 之后调用——inject_precision 将精度声明插入到
+/// 第一个换行之后（即 #version 行后），而 GLSL 要求 #extension 指令位于一切
+/// 非预处理指令（含 precision 声明）之前，故扩展注入需晚于精度注入执行，
+/// 才能得到 `#version → #extension → precision` 的合法顺序。
+fn inject_texture_buffer_extension(source: &str) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"\b(?:i|u)?samplerBuffer\b").unwrap());
+    if !re.is_match(source) {
+        return source.to_string();
+    }
+
+    // 定位 #version 行的行尾（含换行符），在其后插入扩展行，保留原有换行结构
+    let Some(pos) = source.find("#version") else {
+        // 无 #version 行：插入到最前面（translate 流程中保证存在，此处为防御性处理）
+        return format!("#extension GL_EXT_texture_buffer : require\n{}", source);
+    };
+    let rest = &source[pos..];
+    let line_end = rest.find('\n').map(|p| pos + p + 1).unwrap_or(source.len());
+
+    let mut result = String::with_capacity(source.len() + 64);
+    result.push_str(&source[..line_end]);
+    // #version 行位于文件末尾且无换行时补一个，避免扩展指令与版本号同行
+    if line_end == source.len() && !source.ends_with('\n') {
+        result.push('\n');
+    }
+    result.push_str("#extension GL_EXT_texture_buffer : require\n");
+    result.push_str(&source[line_end..]);
     result
 }
 

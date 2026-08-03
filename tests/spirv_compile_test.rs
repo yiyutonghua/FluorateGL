@@ -341,3 +341,32 @@ fn compile_produces_consistent_spirv() {
     assert_eq!(spv1.len(), spv2.len(), "SPIR-V length should be consistent");
     assert_eq!(spv1, spv2, "SPIR-V content should be consistent");
 }
+
+// ============ samplerBuffer 编译成功（clouds 回归） ============
+
+#[test]
+fn test_compile_sampler_buffer_success() {
+    // clouds 特征：fragment stage + isamplerBuffer + int 坐标 texelFetch。
+    // 修复前（convert_sampler_buffer 把 samplerBuffer 改写为 isampler2D +
+    // u_BufferTexWidth）shaderc Vulkan target 下编译失败返回 None；
+    // T1 禁用后 samplerBuffer 原样保留，应编译成功。
+    let src = "#version 330\n\
+               uniform isamplerBuffer CloudFaces;\n\
+               in vec2 vUV;\n\
+               out vec4 fragColor;\n\
+               void main() {\n\
+                   int index = int(gl_FragCoord.x);\n\
+                   vec4 color = vec4(texelFetch(CloudFaces, index));\n\
+                   fragColor = color;\n\
+               }\n";
+    let result = spirv_compile::compile(src, spirv_compile::GL_FRAGMENT_SHADER);
+    assert!(result.is_some(), "expected SPIR-V output, got None");
+    let spv = result.unwrap();
+    assert!(!spv.is_empty(), "SPIR-V should not be empty");
+    // SPIR-V 魔数检查：0x07230203
+    assert_eq!(
+        spv[0], 0x07230203,
+        "invalid SPIR-V magic number: 0x{:08X}",
+        spv[0]
+    );
+}

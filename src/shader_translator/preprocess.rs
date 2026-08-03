@@ -44,8 +44,7 @@ pub fn preprocess(source: &str, stage: u32) -> String {
     // 参考 MobileGlues 的同类修复：setPreamble("#undef VULKAN\n")
     undef_vulkan_macro(&mut result);
     rename_vulkan_builtin_variables(&mut result);
-    // 转换 samplerBuffer 系列 → 2D sampler（GLES 不支持纹理缓冲区，MC 光影 mod 常用）
-    result = convert_sampler_buffer(&result);
+    // samplerBuffer 原样保留（Vulkan target 原生支持 ImageBuffer；转换会破坏 texelFetch 调用，见 convert_sampler_buffer 注释）
     // 注入 textureQueryLod polyfill（GLES 3.0 不支持 GL 4.0 textureQueryLod）
     inject_texture_query_lod(&mut result);
     // 转换独立 uniform 到 UBO（块名按 stage 区分，避免跨 stage type mismatch）
@@ -114,71 +113,28 @@ fn rename_vulkan_builtin_variables(result: &mut String) {
     });
 }
 
-/// 将 samplerBuffer/isamplerBuffer/usamplerBuffer 转换为对应的 2D sampler
+/// 将 samplerBuffer/isamplerBuffer/usamplerBuffer 转换为对应的 2D sampler（**已禁用**）
 ///
-/// GLES 3.2 不支持 samplerBuffer 系列（GL 3.1 纹理缓冲区），但 MC 光影 mod 常用。
-/// 参考 MobileGlues 的 process_sampler_buffer，将其转换为对应的 2D sampler，
-/// 并注入坐标映射辅助函数（buffer 纹理按逻辑宽度折行存储为 2D 纹理）。
+/// 本函数当前为 no-op（原样返回源码），保留仅为未来 GLES 3.0 设备启用参考。
+/// 禁用原因：
+/// 1. Vulkan target 原生支持 texture buffer（SPIR-V Capability ImageBuffer 是
+///    Vulkan 1.0 核心能力），无需转换即可由 shaderc 正常编译。
+/// 2. 类型替换会破坏 texelFetch 调用：旧实现只把 `samplerBuffer → sampler2D`
+///    类型名替换，而调用改写正则仅匹配 `texelFetch(<类型名>,...)`，实际源码
+///    中调用是变量名 `texelFetch(CloudFaces, index)`，正则落空后调用被原样
+///    保留 → `isampler2D`（需要 ivec2 坐标）+ int 坐标 → glslang Vulkan target
+///    报重载失败 → 触发 string_pass 回退 → 崩溃。
+/// 3. 旧方案注入的 `u_BufferTexWidth` uniform 会被 convert_uniforms_to_ubo
+///    包装进 UBO，而 MC 不会设置该 uniform（采样位置错误）。
 ///
-/// 完整实现包括：
-/// 1. 类型替换：samplerBuffer → sampler2D
-/// 2. texelFetch 调用修改：texelFetch(samplerBuffer, index) → texelFetch(sampler2D, bufferCoords(index))
-/// 3. 注入坐标映射辅助函数
+/// 补充：GLES 3.2 core 已含 texture buffer 功能（GL_EXT_texture_buffer 扩展
+/// 在 ES 300/310 下由 spirv-cross 自动声明），转换并非 GLES 侧硬性需求。
+///
+/// 若未来需要在 GLES 3.0 设备上启用（折行模拟 buffer 纹理），应重写调用改写
+/// 逻辑为按变量名匹配，并处理 u_BufferTexWidth 的 uniform 提供方式。
+#[allow(dead_code)]
 fn convert_sampler_buffer(src: &str) -> String {
-    // 快速检查：不含 samplerBuffer 直接返回（避免无谓的正则替换）
-    if !src.contains("samplerBuffer") {
-        return src.to_string();
-    }
-
-    // 词边界匹配三种 buffer sampler 类型，capture group 保留前缀（i/u/空）
-    // \b 保证不会匹配子串（如 xisamplerBuffer 不会被命中）
-    static RE_TYPE: OnceLock<Regex> = OnceLock::new();
-    let re_type =
-        RE_TYPE.get_or_init(|| Regex::new(r"\b(isampler|usampler|sampler)Buffer\b").unwrap());
-    let new_src = re_type.replace_all(src, "${1}2D").into_owned();
-
-    // 检查是否真的发生了类型替换
-    if new_src.len() == src.len() {
-        return new_src;
-    }
-
-    log::debug!(
-        "[ShaderTranslator] preprocess 转换 samplerBuffer → sampler2D ({} → {} chars)",
-        src.len(),
-        new_src.len()
-    );
-
-    // 注入坐标映射辅助代码（在 #version 行之后）
-    // buffer 纹理是一维的，转成 2D 纹理后需要按逻辑宽度折行
-    let helper = "\
-// samplerBuffer → sampler2D 转换辅助
-uniform int u_BufferTexWidth;  // buffer 纹理的逻辑宽度
-ivec2 bufferCoords(int index) {
-  return ivec2(index % u_BufferTexWidth, index / u_BufferTexWidth);
-}
-";
-    let insert_pos = find_insert_position(&new_src);
-    let mut result = String::with_capacity(new_src.len() + helper.len());
-    result.push_str(&new_src[..insert_pos]);
-    result.push_str(helper);
-    result.push_str(&new_src[insert_pos..]);
-
-    // 修改 texelFetch 调用：texelFetch(samplerBuffer, index) → texelFetch(sampler2D, bufferCoords(index))
-    static RE_TEXELFETCH: OnceLock<Regex> = OnceLock::new();
-    let re_texelfetch = RE_TEXELFETCH.get_or_init(|| {
-        Regex::new(r"\btexelFetch\s*\(\s*(?P<sampler>(?:isampler|usampler|sampler)2D)\s*,\s*(?P<index>[^)]+)\s*\)")
-            .unwrap()
-    });
-
-    result = re_texelfetch
-        .replace_all(&result, |caps: &regex::Captures| {
-            let sampler = caps.name("sampler").map(|m| m.as_str()).unwrap_or("");
-            let index = caps.name("index").map(|m| m.as_str()).unwrap_or("");
-            format!("texelFetch({}, bufferCoords({}))", sampler, index)
-        })
-        .to_string();
-
-    result
+    src.to_string()
 }
 
 /// 注入 textureQueryLod polyfill 函数并替换调用点
