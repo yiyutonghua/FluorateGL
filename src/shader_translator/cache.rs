@@ -30,11 +30,50 @@ impl ShaderCache {
     }
 
     /// 计算缓存 key
+    ///
+    /// 动态生成缓存键，考虑更多因素以提高精确性：
+    /// 1. 源码内容
+    /// 2. Shader 阶段
+    /// 3. GLES 版本
+    /// 4. 源码特征（如是否包含 samplerBuffer、textureQueryLod 等）
+    /// 5. 预处理后的特征（如注入的 location/binding 数量）
     fn compute_key(source: &str, stage: u32, gles_version: u32) -> CacheKey {
         let mut hasher = Sha256::new();
+
+        // 基础信息
         hasher.update(source.as_bytes());
         hasher.update(stage.to_le_bytes());
         hasher.update(gles_version.to_le_bytes());
+
+        // 源码特征
+        let features = [
+            source.contains("samplerBuffer"),
+            source.contains("textureQueryLod"),
+            source.contains("atomic_uint"),
+            source.contains("image"),
+            source.contains("UBO"),
+            source.contains("SSBO"),
+            source.contains("gl_VertexID"),
+            source.contains("gl_FragColor"),
+        ];
+
+        for feature in features {
+            hasher.update(if feature { 1u8 } else { 0u8 });
+        }
+
+        // 预处理特征（基于源码内容估计）
+        let estimated_injects = if source.contains("samplerBuffer") {
+            1
+        } else {
+            0
+        } + if source.contains("textureQueryLod") {
+            1
+        } else {
+            0
+        } + if source.contains("atomic_uint") { 1 } else { 0 };
+
+        hasher.update(estimated_injects.to_le_bytes());
+
         let result = hasher.finalize();
         let mut key = [0u8; 32];
         key.copy_from_slice(&result);

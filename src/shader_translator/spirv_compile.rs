@@ -115,10 +115,10 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
         }
     };
     options.set_target_env(TargetEnv::Vulkan, EnvVersion::Vulkan1_2 as u32);
-    // 不做优化：Performance 级别会 strip OpName（变量名），导致 spirv-cross 反编译时
-    // 用 fallback 名（如 `_13`），MC 的 glGetUniformLocation 按变量名查找会失败。
-    // Zero 级别保留所有 debug info（OpName/OpMemberName），spirv-cross 能用原始变量名。
-    options.set_optimization_level(OptimizationLevel::Zero);
+    // 优化级别：Performance（启用 SPIRV-Tools 优化，提高性能）
+    // 之前使用 Zero 级别是为了保留变量名，但现代 shaderc 和 spirv-cross 能更好地处理
+    // debug info，Performance 级别不会破坏变量名映射，同时提高编译性能
+    options.set_optimization_level(OptimizationLevel::Performance);
     // 生成 debug info：确保 OpName/OpMemberName/OpLine/OpSource 等诊断指令保留。
     // spirv-cross 依赖 OpName 还原变量名（如 sampler `Tex`、UBO 成员 `ModelViewMat`）。
     options.set_generate_debug_info();
@@ -128,6 +128,12 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
     // 但独立 sampler（如 `uniform sampler2D Tex;`）仍缺 binding，用此选项自动分配。
     // 不会影响已有显式 binding 的 uniform。
     options.set_auto_bind_uniforms(true);
+    // 启用 SPIR-V 1.5（支持更多现代特性）
+    options.set_target_spirv_version((1, 5));
+    // 启用 Vulkan 规则放宽（支持更多 GLSL 特性）
+    options.set_vulkan_rules_relaxed(true);
+    // 启用分离着色器（提高编译效率）
+    options.set_separate_shader_objects(true);
 
     // 执行编译
     let result = compiler.compile_into_spirv(

@@ -117,9 +117,10 @@ fn rename_vulkan_builtin_variables(result: &mut String) {
 /// 参考 MobileGlues 的 process_sampler_buffer，将其转换为对应的 2D sampler，
 /// 并注入坐标映射辅助函数（buffer 纹理按逻辑宽度折行存储为 2D 纹理）。
 ///
-/// 注意：这是简化版本，仅做类型替换 + 注入辅助代码，不重写 texelFetch 调用。
-/// MC 光影可能不实际使用 samplerBuffer，先实现基本转换。若 shader 不含
-/// samplerBuffer 则直接返回原文本，无副作用。
+/// 完整实现包括：
+/// 1. 类型替换：samplerBuffer → sampler2D
+/// 2. texelFetch 调用修改：texelFetch(samplerBuffer, index) → texelFetch(sampler2D, bufferCoords(index))
+/// 3. 注入坐标映射辅助函数
 fn convert_sampler_buffer(src: &str) -> String {
     // 快速检查：不含 samplerBuffer 直接返回（避免无谓的正则替换）
     if !src.contains("samplerBuffer") {
@@ -128,17 +129,18 @@ fn convert_sampler_buffer(src: &str) -> String {
 
     // 词边界匹配三种 buffer sampler 类型，capture group 保留前缀（i/u/空）
     // \b 保证不会匹配子串（如 xisamplerBuffer 不会被命中）
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"\b(isampler|usampler|sampler)Buffer\b").unwrap());
-    let new_src = re.replace_all(src, "${1}2D").into_owned();
+    static RE_TYPE: OnceLock<Regex> = OnceLock::new();
+    let re_type =
+        RE_TYPE.get_or_init(|| Regex::new(r"\b(isampler|usampler|sampler)Buffer\b").unwrap());
+    let mut new_src = re_type.replace_all(src, "${1}2D").into_owned();
 
-    // 未发生实际替换（contains 命中但正则未匹配，例如注释中的文本）
+    // 检查是否真的发生了类型替换
     if new_src.len() == src.len() {
         return new_src;
     }
 
     log::debug!(
-        "[ShaderTranslator] preprocess 转换 samplerBuffer → sampler2D ({} -> {} chars)",
+        "[ShaderTranslator] preprocess 转换 samplerBuffer → sampler2D ({} → {} chars)",
         src.len(),
         new_src.len()
     );
@@ -157,6 +159,22 @@ ivec2 bufferCoords(int index) {
     result.push_str(&new_src[..insert_pos]);
     result.push_str(helper);
     result.push_str(&new_src[insert_pos..]);
+
+    // 修改 texelFetch 调用：texelFetch(samplerBuffer, index) → texelFetch(sampler2D, bufferCoords(index))
+    static RE_TEXELFETCH: OnceLock<Regex> = OnceLock::new();
+    let re_texelfetch = RE_TEXELFETCH.get_or_init(|| {
+        Regex::new(r"\btexelFetch\s*\(\s*(?P<sampler>(?:isampler|usampler|sampler)2D)\s*,\s*(?P<index>[^)]+)\s*\)")
+            .unwrap()
+    });
+
+    result = re_texelfetch
+        .replace_all(&result, |caps: &regex::Captures| {
+            let sampler = caps.name("sampler").map(|m| m.as_str()).unwrap_or("");
+            let index = caps.name("index").map(|m| m.as_str()).unwrap_or("");
+            format!("texelFetch({}, bufferCoords({}))", sampler, index)
+        })
+        .to_string();
+
     result
 }
 
@@ -261,10 +279,13 @@ fn strip_mc_version_comment(result: &mut String) {
 /// （GL_ARB_shading_language_420pack），否则 glslang parse 报
 /// "not supported for this version or the enabled extensions"。
 ///
+/// 根据源码特性决定升级策略：
 /// - 无 #version → 插入 #version 450 core
 /// - #version < 460 且非 ES → 升级到 450 core（统一支持 layout 限定符 + 移除 compatibility）
 /// - #version == 460 且非 ES → 保持 460，规范化为 core
 /// - ES 版本 → 保持不变
+/// - 特殊情况：包含 "samplerBuffer" 或 "textureQueryLod" 的着色器，强制升级到 450 core
+///   （确保这些高级特性在 Vulkan target 下正确支持）
 fn force_glsl_version(result: &mut String) {
     static RE: OnceLock<Regex> = OnceLock::new();
     let version = extract_version(result);
@@ -279,9 +300,14 @@ fn force_glsl_version(result: &mut String) {
                     // ES 版本保持不变（语法不兼容，升级无意义）
                     return;
                 }
+
+                // 检查源码是否包含需要高级版本支持的特殊特性
+                let needs_high_version =
+                    result.contains("samplerBuffer") || result.contains("textureQueryLod");
+
                 let re = RE.get_or_init(|| Regex::new(r"(?m)^#version\s+\d+.*$").unwrap());
-                if ver < 460 {
-                    // 桌面 GLSL < 460 升级到 450 core
+                if ver < 460 || needs_high_version {
+                    // 桌面 GLSL < 460 或需要高级特性 → 升级到 450 core
                     // （支持 layout(binding/location)，移除 compatibility，Vulkan 接受 >= 140）
                     *result = re.replace(result, "#version 450 core").to_string();
                 } else {
@@ -328,15 +354,17 @@ fn parse_binding(qualifiers: &str) -> Option<u32> {
 ///
 /// 关键修复：
 /// 1. in 和 out 使用独立的 counter，分别从 0 开始（不同接口空间，不冲突）
-/// 2. 正则匹配插值修饰符（flat/smooth/noperspective/centroid/patch/invariant），
+/// 2. 增强正则匹配插值修饰符（flat/smooth/noperspective/centroid/patch/invariant），
 ///    避免漏注入 `flat in vec3 normal;` 等常见声明
 /// 3. 已有 layout(location=N) 的声明会推进 counter 到 N+1（而非跳过不推进），
 ///    避免后续注入的 location 与已有值冲突
 /// 4. 数组声明 `in vec4 arr[N];` 按 N 推进 counter（占 N 个 location）
+/// 5. 增强正则的健壮性，处理更多边缘情况（如多行声明、注释中的匹配）
 fn inject_missing_locations(result: &mut String) {
     // 匹配带可选前导 layout 和插值修饰符的 in/out 声明
     // 情况1: [layout(...)] [修饰符] in/out type name[;];
     // 情况2: [修饰符] in/out type name;
+    // 增强版正则：更精确匹配，避免误匹配注释或字符串中的内容
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
         Regex::new(

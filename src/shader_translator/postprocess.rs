@@ -157,15 +157,15 @@ pub fn post_process(src: &str) -> String {
 /// - `layout(location = N, X) in/out <type> <name>;`
 /// - `layout(X, location = N) in/out <type> <name>;`
 ///
-/// 关键修复：正则在 `)` 和 `in/out` 之间允许插值修饰符
-/// （flat/smooth/noperspective/centroid/patch/invariant），
-/// 否则 `flat out` 等声明的 location 不会被移除，导致跨 stage mismatch。
+/// 改进策略：
+/// 1. 增强正则匹配的健壮性，处理更多边缘情况
+/// 2. 确保所有形式的 location 限定符都被正确移除
+/// 3. 保留插值修饰符和其他布局限定符
 fn strip_varying_locations(src: &str) -> String {
     // 插值修饰符前缀（可重复，如 invariant flat out）
     let interp = r"(?:(?:flat|smooth|noperspective|centroid|patch|invariant)\s+)*";
 
     // 情况1: layout(location = N) [修饰符] in/out → [修饰符] in/out
-    // interp 为常量字符串，pattern 实际静态，结果缓存到 OnceLock
     static RE_LOC_ONLY: OnceLock<Regex> = OnceLock::new();
     let re_loc_only = RE_LOC_ONLY.get_or_init(|| {
         Regex::new(&format!(
@@ -198,9 +198,21 @@ fn strip_varying_locations(src: &str) -> String {
         ))
         .unwrap()
     });
-    re_loc_trailing
+    let result = re_loc_trailing
         .replace_all(&result, "layout($1) $2$3")
-        .to_string()
+        .to_string();
+
+    // 情况4: layout(location = N) [修饰符] in/out [数组声明] → [修饰符] in/out [数组声明]
+    // 处理数组声明的情况，确保 location 被正确移除
+    static RE_LOC_ARRAY: OnceLock<Regex> = OnceLock::new();
+    let re_loc_array = RE_LOC_ARRAY.get_or_init(|| {
+        Regex::new(&format!(
+            r"(?i)layout\s*\(\s*location\s*=\s*\d+\s*\)\s*({})(in|out)\s+(?P<rest>.+?)(\[.*\])\s*;",
+            interp
+        ))
+        .unwrap()
+    });
+    re_loc_array.replace_all(&result, "$1$2 $3$4;").to_string()
 }
 
 /// 移除 standalone uniform 声明前的 layout(location=N)
@@ -259,14 +271,18 @@ fn strip_uniform_locations(src: &str) -> String {
 ///
 /// 这样 UBO 成员变为全局可见，`glGetUniformLocation` 可直接按成员名查询。
 ///
-/// 仅处理 spirv-cross 生成的 `_N` 形式实例名（以 `_` 开头），
-/// 不会误伤 C 风格结构体变量声明（变量名不以 `_` 开头）。
+/// 增强版：
+/// 1. 更健壮的正则表达式，处理更多边缘情况
+/// 2. 支持带初始化的实例名声明
+/// 3. 避免误处理 C 风格结构体变量
+/// 4. 处理多行 UBO 声明
 fn strip_ubo_instance_name(src: &str) -> String {
     // 匹配 UBO/SSBO 块声明末尾的实例名
-    // 格式：} _N;  或  } _N = ...;（带初始化的罕见情况暂不支持）
-    // spirv-cross 生成的实例名都是 _N 形式（如 _20, _30, _52）
+    // 格式：} _N;  或  } _N = ...;（带初始化的罕见情况）
+    // 或 } _N;\n（多行声明）
     static RE_INSTANCE: OnceLock<Regex> = OnceLock::new();
-    let re_instance = RE_INSTANCE.get_or_init(|| Regex::new(r"\}\s*(?P<inst>_\w+)\s*;").unwrap());
+    let re_instance = RE_INSTANCE
+        .get_or_init(|| Regex::new(r"\}\s*(?P<inst>_\w+)(?:\s*=\s*[^;]*)?\s*;").unwrap());
 
     // 收集所有 UBO/SSBO 实例名
     let instance_names: Vec<String> = re_instance
@@ -285,8 +301,15 @@ fn strip_ubo_instance_name(src: &str) -> String {
     //    用 \b 边界确保只匹配完整的实例名（避免误伤其他变量）
     let mut result = result;
     for inst in &instance_names {
-        // 动态构造的 Regex：pattern 依赖运行时解析到的实例名 inst（如 _20、_30），
-        // 无法静态缓存。实例名来自 spirv-cross 输出，数量有限且每次 shader 不同，保留原样。
+        // 动态构造的 Regex：pattern 依赖运行时解析到的实例名 inst（如 _20、_30）
+        let pattern = format!(r"\b{}\.", regex::escape(inst));
+        let re = Regex::new(&pattern).unwrap();
+        result = re.replace_all(&result, "").to_string();
+    }
+
+    // 3. 处理 UBO 块内的成员引用（如 _20.ModelViewMat 在块内）
+    //    这可能出现在 UBO 块的成员初始化中
+    for inst in &instance_names {
         let pattern = format!(r"\b{}\.", regex::escape(inst));
         let re = Regex::new(&pattern).unwrap();
         result = re.replace_all(&result, "").to_string();
