@@ -407,12 +407,14 @@ pub extern "C" fn glGetFramebufferAttachmentParameteriv(
         // M3：GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME 回译——GLES 返回的是原生纹理/RB ID，
         // 宿主会当 desktop ID 用于后续操作（如 glDeleteTextures/glDeleteRenderbuffers），
         // 必须先经 IdMap 回译。先查 OBJECT_TYPE 区分对象种类；查不到时告警并写 0。
-        if pname == 0x8CD1 /* GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME */ {
+        if pname == 0x8CD1
+        /* GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME */
+        {
             let mut obj_type: i32 = 0;
             (dispatch.get_framebuffer_attachment_parameter_iv)(
                 target,
                 attachment,
-                0x8CD0 /* GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE */,
+                0x8CD0, /* GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE */
                 &mut obj_type,
             );
             let gles_id = *params as u32;

@@ -312,7 +312,13 @@ pub extern "C" fn glDrawElementsInstancedBaseVertex(
             // 降级为 glDrawElementsInstanced：用 basevertex 偏移 indices 指针补偿索引错位
             warn_base_vertex_unsupported("glDrawElementsInstancedBaseVertex");
             let offset_indices_ptr = offset_indices(indices, basevertex, type_);
-            (dispatch.draw_elements_instanced)(mode, count, type_, offset_indices_ptr, instancecount);
+            (dispatch.draw_elements_instanced)(
+                mode,
+                count,
+                type_,
+                offset_indices_ptr,
+                instancecount,
+            );
         } else {
             (dispatch.draw_elements_instanced_base_vertex)(
                 mode,
@@ -354,7 +360,13 @@ pub extern "C" fn glDrawElementsInstancedBaseVertexBaseInstance(
             warn_base_vertex_unsupported("glDrawElementsInstancedBaseVertexBaseInstance");
             warn_base_instance_unsupported("glDrawElementsInstancedBaseVertexBaseInstance");
             let offset_indices_ptr = offset_indices(indices, basevertex, type_);
-            (dispatch.draw_elements_instanced)(mode, count, type_, offset_indices_ptr, instancecount);
+            (dispatch.draw_elements_instanced)(
+                mode,
+                count,
+                type_,
+                offset_indices_ptr,
+                instancecount,
+            );
         } else {
             (dispatch.draw_elements_instanced_base_vertex_base_instance)(
                 mode,

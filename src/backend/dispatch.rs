@@ -911,9 +911,7 @@ impl GlesDispatch {
             get_uniform_location: unsafe { std::mem::transmute(load!("glGetUniformLocation")) },
             get_attrib_location: unsafe { std::mem::transmute(load!("glGetAttribLocation")) },
             // GLES 3.0 core 原生符号（非 load_opt：GLES 3.0 规范保证存在）
-            get_frag_data_location: unsafe {
-                std::mem::transmute(load!("glGetFragDataLocation"))
-            },
+            get_frag_data_location: unsafe { std::mem::transmute(load!("glGetFragDataLocation")) },
             uniform_1f: unsafe { std::mem::transmute(load!("glUniform1f")) },
             uniform_1i: unsafe { std::mem::transmute(load!("glUniform1i")) },
             uniform_2f: unsafe { std::mem::transmute(load!("glUniform2f")) },

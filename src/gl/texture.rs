@@ -1,7 +1,7 @@
 use crate::backend;
 use crate::state;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// texture desktop ID 查找失败首次告警标志
 static TEXTURE_ID_MISS_WARNED: AtomicBool = AtomicBool::new(false);
@@ -579,9 +579,8 @@ pub extern "C" fn glCompressedTexImage2D(
     // S3TC 不是 GLES core 压缩格式：先按驱动能力列表判断，不支持则忽略该上传
     // （不传坏数据，避免 INVALID_ENUM 污染错误队列）。
     if (0x83F0..=0x83F3).contains(&internalformat) {
-        let supported = backend::with_gles_dispatch(|d| {
-            gles_supports_compressed_format(d, internalformat)
-        });
+        let supported =
+            backend::with_gles_dispatch(|d| gles_supports_compressed_format(d, internalformat));
         if !supported {
             if !S3TC_UNSUPPORTED_WARNED.swap(true, Ordering::Relaxed) {
                 log::warn!(
