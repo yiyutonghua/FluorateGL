@@ -103,7 +103,7 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
 
     // 构造编译选项
     // - target: Vulkan 1.2（支持现代 SPIR-V 特性）
-    // - optimization: Performance（启用 SPIRV-Tools 优化）
+    // - optimization: Zero（保留变量名/OpName，避免优化消除名称导致 uniform 查找失败）
     let mut options = match CompileOptions::new() {
         Ok(o) => o,
         Err(e) => {
@@ -118,10 +118,12 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
     // target env: Vulkan 1.2（与下方 SPIR-V 1.5 匹配；shaderc 默认回落 Vulkan 1.0，
     // 只支持 SPIR-V 1.0，会导致 "Invalid SPIR-V binary version 1.5 for target environment SPIR-V 1.0"）
     options.set_target_env(shaderc::TargetEnv::Vulkan, shaderc::EnvVersion::Vulkan1_2 as u32);
-    // 优化级别：Performance（启用 SPIRV-Tools 优化，提高性能）
-    // 之前使用 Zero 级别是为了保留变量名，但现代 shaderc 和 spirv-cross 能更好地处理
-    // debug info，Performance 级别不会破坏变量名映射，同时提高编译性能
-    options.set_optimization_level(OptimizationLevel::Performance);
+    // 优化级别：Zero（不做 SPIRV-Tools 优化，保留变量名/OpName/OpMemberName）。
+    // 历史教训：Performance 级别的 aggressive-dce 可能消除未使用变量及其
+    // OpName/OpMemberName，导致 spirv-cross 输出 fallback 名（如 _13），
+    // MC 的 glGetUniformLocation 按变量名查找 uniform 会失败。
+    // 稳妥优先，回退 Zero（shader 编译只在加载时发生一次，性能影响可接受）。
+    options.set_optimization_level(OptimizationLevel::Zero);
     // 生成 debug info：确保 OpName/OpMemberName/OpLine/OpSource 等诊断指令保留。
     // spirv-cross 依赖 OpName 还原变量名（如 sampler `Tex`、UBO 成员 `ModelViewMat`）。
     options.set_generate_debug_info();
