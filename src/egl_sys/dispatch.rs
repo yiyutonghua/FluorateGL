@@ -67,6 +67,7 @@ unsafe extern "C" fn stub_null_ptr() -> *mut c_void {
 unsafe extern "C" fn stub_true() -> u32 {
     1 // EGL_TRUE
 }
+#[allow(clippy::manual_c_str_literals)]
 unsafe extern "C" fn stub_empty_string() -> *const c_char {
     b"\0".as_ptr() as *const c_char
 }
@@ -79,7 +80,14 @@ unsafe extern "C" fn stub_empty_string() -> *const c_char {
 /// - 禁止用于返回 u64 / f64 等 8 字节非整数类型的字段——transmute 位级合法但 stub 只写 w0/x0 低 32 位，高 32 位残留 → UB
 /// - 添加新 stub 签名类型时必须同步更新此注释与下方 stub 函数族
 macro_rules! stub {
-    ($e:expr) => {{ unsafe { std::mem::transmute::<_, _>($e) } }};
+    ($e:expr) => {{
+        unsafe {
+            // transmute 是 stub 初始化的固有产物（M1 按签名 stub 填充）：先 reify 为
+            // 自身签名 fn pointer 再转换到目标字段签名，类型由字段推断。显式豁免。
+            #[allow(clippy::missing_transmute_annotations, clippy::useless_transmute)]
+            std::mem::transmute::<_, _>($e)
+        }
+    }};
 }
 
 impl EglDispatch {

@@ -362,6 +362,7 @@ unsafe extern "C" fn gl_stub_zero_u8() -> u8 {
 unsafe extern "C" fn gl_stub_null_ptr() -> *mut c_void {
     std::ptr::null_mut()
 }
+#[allow(clippy::manual_c_str_literals)]
 unsafe extern "C" fn gl_stub_empty_string() -> *const c_char {
     b"\0".as_ptr() as *const c_char
 }
@@ -375,9 +376,21 @@ unsafe extern "C" fn gl_stub_empty_string() -> *const c_char {
 macro_rules! stub {
     () => {{
         let f: unsafe extern "C" fn() = gl_stub_void;
-        unsafe { std::mem::transmute::<_, _>(f) }
+        unsafe {
+            // transmute 是 stub 初始化的固有产物（M1 按签名 stub 填充）：先 reify 为
+            // 自身签名 fn pointer 再转换到目标字段签名。missing_transmute_annotations：
+            // 未标注显式目标类型（由字段类型推断）；useless_transmute：字段签名恰为
+            // 自身签名（stub 槽）时 clippy 视为自身到自身转换。两者均安全，显式豁免。
+            #[allow(clippy::missing_transmute_annotations, clippy::useless_transmute)]
+            std::mem::transmute::<_, _>(f)
+        }
     }};
-    ($e:expr) => {{ unsafe { std::mem::transmute::<_, _>($e) } }};
+    ($e:expr) => {{
+        unsafe {
+            #[allow(clippy::missing_transmute_annotations, clippy::useless_transmute)]
+            std::mem::transmute::<_, _>($e)
+        }
+    }};
 }
 
 impl GlesDispatch {
