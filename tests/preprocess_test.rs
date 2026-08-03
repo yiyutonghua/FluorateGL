@@ -292,8 +292,16 @@ fn preprocess_packs_non_opaque_uniforms_into_ubo() {
         "expected UBO wrapper, got: {}",
         result
     );
-    assert!(result.contains("mat4 MVP;"), "MVP member should be in UBO, got: {}", result);
-    assert!(result.contains("vec3 color;"), "color member should be in UBO, got: {}", result);
+    assert!(
+        result.contains("mat4 MVP;"),
+        "MVP member should be in UBO, got: {}",
+        result
+    );
+    assert!(
+        result.contains("vec3 color;"),
+        "color member should be in UBO, got: {}",
+        result
+    );
     assert!(
         !result.contains("layout(location="),
         "location should not be injected, got: {}",
@@ -312,7 +320,11 @@ fn preprocess_skips_sampler_uniform_location_injection() {
         "sampler should not get location, got: {}",
         result
     );
-    assert!(result.contains("mat4 MVP;"), "MVP should be packed into UBO, got: {}", result);
+    assert!(
+        result.contains("mat4 MVP;"),
+        "MVP should be packed into UBO, got: {}",
+        result
+    );
     assert!(
         !result.contains("layout(location="),
         "location should not be injected, got: {}",
@@ -328,7 +340,11 @@ fn preprocess_skips_texture_and_image_uniforms() {
     let result = preprocess::preprocess(src, 0x8B31);
     assert!(!result.contains("layout(location=0) uniform texture2D"));
     assert!(!result.contains("layout(location=0) uniform image2D"));
-    assert!(result.contains("float scale;"), "scale should be packed into UBO, got: {}", result);
+    assert!(
+        result.contains("float scale;"),
+        "scale should be packed into UBO, got: {}",
+        result
+    );
     assert!(
         !result.contains("layout(location="),
         "location should not be injected, got: {}",
@@ -349,7 +365,11 @@ fn preprocess_skips_uniform_block_location_injection() {
         "MyBlock should get binding=1, got: {}",
         result
     );
-    assert!(result.contains("float scale;"), "scale should be packed into UBO, got: {}", result);
+    assert!(
+        result.contains("float scale;"),
+        "scale should be packed into UBO, got: {}",
+        result
+    );
     assert!(
         !result.contains("layout(location="),
         "location should not be injected, got: {}",
@@ -369,8 +389,16 @@ fn preprocess_skips_existing_layout_on_uniform() {
         "existing location should be stripped, got: {}",
         result
     );
-    assert!(result.contains("mat4 MVP;"), "MVP should be packed into UBO, got: {}", result);
-    assert!(result.contains("float scale;"), "scale should be packed into UBO, got: {}", result);
+    assert!(
+        result.contains("mat4 MVP;"),
+        "MVP should be packed into UBO, got: {}",
+        result
+    );
+    assert!(
+        result.contains("float scale;"),
+        "scale should be packed into UBO, got: {}",
+        result
+    );
     assert!(
         !result.contains("layout(location="),
         "no location should remain, got: {}",
