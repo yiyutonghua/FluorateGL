@@ -8,7 +8,7 @@
 //! - common.fixup_clipspace = false（MobileGlues 未显式设置，用默认 false）
 //! - common.emit_line_directives = false
 //!
-//! 注意：shaderc 以 Vulkan target 编译（见 spirv_compile.rs），但 shader 源码为
+//! 注意：shaderc 以 OpenGL target 编译（见 spirv_compile.rs），shader 源码为
 //! 桌面 GL 坐标语义（Y-up、clip space [-w,w]），因此 spirv-cross 输出 GL 时
 //! 不应做 flip/fixup 修正，保持默认 false（MobileGlues 同样未显式设置）。
 
@@ -22,7 +22,8 @@ use crate::shader_translator::preprocess;
 
 /// 将 SPIR-V 字节码编译为 GLSL ES 源码
 ///
-/// 流程：SPIR-V → spirv-cross 编译 → 后处理（移除 binding、处理 outColor、precision）
+/// 流程：SPIR-V → spirv-cross 编译 → 后处理（按目标版本条件 strip location/binding、
+/// 处理 outColor、移除 UBO 实例名）
 /// 失败时返回 Err 并携带错误信息。
 pub fn compile(spv: &[u32], version: u16) -> Result<String, SpirvCrossError> {
     // 空 SPIR-V 防护：Module::from_words(&[]) + SpvCompiler::new 会触发 native segfault
@@ -83,8 +84,9 @@ pub fn compile(spv: &[u32], version: u16) -> Result<String, SpirvCrossError> {
         src.len()
     );
 
-    // 后处理：移除 binding、处理 outColor location、确保 precision
-    Ok(postprocess::post_process(&src))
+    // 后处理：按目标版本条件移除 binding/location（310/300 回退时）、
+    // 处理 outColor location、移除 UBO 实例名。
+    Ok(postprocess::post_process(&src, version))
 }
 
 /// 根据原始桌面 GLSL 版本推导候选 GLES 版本列表

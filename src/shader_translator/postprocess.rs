@@ -1,55 +1,101 @@
 //! GLSL ES 后处理模块
 //!
-//! 对齐 MobileGlues 的后处理逻辑：
-//! - stripVaryingLocations：移除 in/out varying 的 layout(location=N)
-//! - removeLayoutBinding：移除非 image 的 layout(binding=X)
-//! - processOutColorLocations：为 outColorN 添加 layout(location=N)
-//! - forceSupporterOutput：确保 precision highp float/int 声明
+//! 按目标 GLES 版本条件执行（OpenGL target 重构后，spirv-cross 输出原生带
+//! location/binding，不同 ES 版本的语法支持不同）：
+//!
+//! | 版本 | in/out location | uniform location | binding |
+//! |------|-----------------|------------------|---------|
+//! | 320  | 保留（ES 3.2 合法） | 保留（ES 3.1+ 合法） | 保留（ES 3.1+ 合法） |
+//! | 310  | strip（跨 stage 保守） | strip（保守） | 保留（ES 3.1 合法） |
+//! | 300  | strip（ES 3.0 varying 不支持 location） | strip（ES 3.0 不支持 uniform location，spike_g 实测） | 移除（ES 3.0 不支持 binding） |
+//!
+//! 无条件执行：
+//! - strip_uniform_binding：glslang OpenGL target 无条件给 standalone uniform
+//!   分配 binding decoration（spirv-cross 输出 `layout(location = 0, binding = 0)
+//!   uniform mat4 MVP;`），但 GLES 中 binding 仅对 block/sampler/image/atomic
+//!   合法（实测报 "binding requires block, or sampler/image, or atomic-counter
+//!   type"），必须从 standalone uniform 上剥离（所有 ES 版本）
+//! - strip_ubo_instance_name：spirv-cross 输出 `} _20;` 实例名（spike_b 实测必留）
+//! - fix_atomic_counter_binding：GLES 要求 atomic counter 用 binding（offset 无效）
+//! - inject_image_format：GLES 要求 image 必须有 format 和 binding
+//! - outColorN location 重注：MC framebuffer 约定 outColorN → color attachment N
 
-use crate::simplify_ubo_processing;
 use regex::Regex;
 use std::sync::OnceLock;
 
 /// GLSL ES 后处理主入口
 ///
-/// 执行顺序：
-/// 0. 移除 in/out varying 的 layout(location=N)（解决跨 stage mismatch）
-/// 0.5 移除 standalone uniform 的 layout(location=N)（清理残留 location）
-/// 1. 移除非 image 的 layout(binding=X)（image 的 binding 不能移除）
-/// 1.5 移除 UBO/SSBO 实例名（spirv-cross 自动添加，导致 uniform 查询失败）
-/// 1.6 把生成的 UBO 拆解为 standalone uniform（解决 uniform 查询失败）
-/// 2. 修复 atomic counter binding（offset → binding，GLES 要求 binding）
-/// 3. 注入 image format 限定符（GLES 要求 image 必须有 format 和 binding）
-/// 4. 处理 outColorN 的 location
-/// 5. 确保 precision highp float/int 声明
-pub fn post_process(src: &str) -> String {
+/// `version` 为目标的 GLES 版本（320/310/300），决定条件 strip 策略
+/// （见模块文档表格）。
+pub fn post_process(src: &str, version: u16) -> String {
     let mut result = src.to_string();
 
-    // 0. 移除 in/out varying 的 layout(location=N)
-    //    MC 桌面 GLSL 不声明 varying location（linker 按变量名匹配），
-    //    但 preprocess 注入了 location（Vulkan target 要求所有 in/out 有 location），
-    //    spirv-cross 保留它。不同 shader pair 中变量数量/顺序不同，
-    //    导致同名 varying 跨 stage location 不一致（mismatch）。
-    //    移除后 GLES linker 按变量名匹配，解决跨 stage 链接失败。
+    // 0. 移除 in/out varying 的 layout(location=N)（310/300 回退时）
+    //    320 保留（ES 3.2 中 in/out location 合法，spike 实测 320 产物原生带
+    //    location）。310/300 保守 strip：ES 3.0 的 varying 不支持 location，
+    //    且 strip 后 GLES linker 按变量名匹配，规避跨 stage 计数不一致风险。
     //    VS attribute 的 location 也被移除——MC 通过 glGetAttribLocation
     //    动态获取 attribute 位置，不依赖硬编码 location。
-    //    outColorN 的 location 由后续 processOutColorLocations 重新添加。
-    result = strip_varying_locations(&result);
+    //    outColorN 的 location 由后续 fix_out_color_locations 重新添加。
+    if version < 320 {
+        result = strip_varying_locations(&result);
 
-    // 0.5 移除 standalone uniform 的 layout(location=N)
-    //     清理历史上/兜底残留的 standalone uniform location（当前 preprocess 已
-    //     不再注入，见 convert_uniforms_to_ubo）。若残留 location，跨 stage 链接时
-    //     不同名 uniform 可能占用同一 location（如 VS 的 Color@1 与 FS 的
-    //     FogColor@1），导致 GLES linker 报 location 冲突。
-    //     GLES 中 standalone uniform 无需显式 location（MC 通过 glGetUniformLocation
-    //     动态查询），移除安全。uniform block（含 `{`，用 binding 不用 location）不受影响。
-    result = strip_uniform_locations(&result);
+        // 0.5 移除 standalone uniform 的 layout(location=N)（310/300 回退时）
+        //     GLSL ES 3.00 不支持 uniform location（spike_g 实测 300 es 输出
+        //     带 location 会编译失败）；310 保守 strip（MC 通过
+        //     glGetUniformLocation 动态查询，无需显式 location）。
+        //     uniform block（含 `{`，用 binding 不用 location）不受影响。
+        result = strip_uniform_locations(&result);
+    }
 
-    // 1. 移除非 image 的 layout(binding=X)（对齐 MobileGlues removeLayoutBinding）
-    //    注意：image 的 binding 不能移除！image 必须通过 layout(binding=N) 与
-    //    glBindImageTexture(unit,...) 的 unit 对应。移除后 image 无法正确绑定。
-    //    MC 的 sampler/UBO binding 可以移除（MC 通过 glUniform1i/glBindBufferBase 设置）。
-    //    策略：按行处理，跳过 image 声明行，对其余行移除 binding。
+    // 1. 移除 layout(binding=X)（仅 300 es：ES 3.0 不支持 binding 限定符；
+    //    ES 3.1+ 合法，320/310 保留）。注意：image 的 binding 不能移除！
+    //    image 必须通过 layout(binding=N) 与 glBindImageTexture(unit,...) 对应。
+    if version < 310 {
+        result = strip_bindings(&result);
+    }
+
+    // 1.3 无条件移除 standalone uniform 上的 binding（所有 ES 版本）
+    //     glslang OpenGL target 给 standalone uniform 分配 binding decoration，
+    //     spirv-cross 输出 `layout(location = 0, binding = 0) uniform mat4 MVP;`，
+    //     GLES 中 binding 仅对 block/sampler/image/atomic 合法 → 必须剥离。
+    //     sampler/image/block 行的 binding 不受影响（按版本条件在上方处理）。
+    result = strip_uniform_binding(&result);
+
+    // 1.5 移除 UBO/SSBO 实例名（关键修复：解决 uniform 查询失败）
+    //    spirv-cross 默认为 UBO/SSBO 添加实例名（如 `} _20;`），导致成员访问
+    //    需要通过 `实例名.成员名`（如 `_20.ModelViewMat`）。MC 通过
+    //    glGetUniformLocation(program, "ModelViewMat") 按成员名查询时返回 -1，
+    //    因为带实例名的 UBO 成员必须用 "块名.成员名" 查询，直接按成员名查不到。
+    //    移除实例名后，函数体变为直接成员访问。
+    result = strip_ubo_instance_name(&result);
+
+    // 2. 修复 atomic counter binding
+    //    spirv-cross 输出 `layout(offset = N) uniform atomic_uint`，
+    //    但 GLES 要求 atomic counter 必须用 `layout(binding = N)` 指定绑定点。
+    //    步骤1 的 binding 移除不影响 offset 限定符，这里单独修复。
+    result = fix_atomic_counter_binding(&result);
+
+    // 3. 注入 image format 限定符
+    //    GLES 要求 image uniform 必须同时有 binding 和 format。
+    //    - 无 layout 前缀的 image：注入 binding + format
+    //    - 有 layout(binding=N) 但无 format 的 image：补充 format
+    //    writeonly image 默认 r32f，可读写 image 默认 r32ui。
+    result = inject_image_format(&result);
+
+    // 4. 处理 outColorN 的 location（对齐 MobileGlues processOutColorLocations）
+    //    先剥离 spirv-cross 可能输出的 layout(...) 前缀，再注入 location=N
+    //    （320 路径保留 location 时同样需要重注：MC framebuffer 约定
+    //    outColorN 必须在 color attachment N）。
+    result = fix_out_color_locations(&result);
+
+    result
+}
+
+/// 剥离所有非 image 行的 layout(binding=X)（仅 300 es 使用）
+///
+/// 按行处理，跳过 image 声明行（保留 image 的 binding）。
+fn strip_bindings(src: &str) -> String {
     let re_is_image = {
         static RE_IS_IMAGE: OnceLock<Regex> = OnceLock::new();
         RE_IS_IMAGE.get_or_init(|| Regex::new(r"(?i)\bimage\w*\s+\w+\s*;").unwrap())
@@ -73,7 +119,7 @@ pub fn post_process(src: &str) -> String {
         RE_EMPTY_LAYOUT.get_or_init(|| Regex::new(r"(?i)layout\s*\(\s*\)\s*").unwrap())
     };
 
-    result = result
+    let mut result = src
         .lines()
         .map(|line| {
             // 跳过 image 声明行（保留 image 的 binding）
@@ -94,47 +140,37 @@ pub fn post_process(src: &str) -> String {
     if src.ends_with('\n') && !result.ends_with('\n') {
         result.push('\n');
     }
+    result
+}
 
-    // 1.5 移除 UBO/SSBO 实例名（关键修复：解决 uniform 查询失败）
-    //    spirv-cross 默认为 UBO/SSBO 添加实例名（如 `} _20;`），导致成员访问
-    //    需要通过 `实例名.成员名`（如 `_20.ModelViewMat`）。MC 通过
-    //    glGetUniformLocation(program, "ModelViewMat") 按成员名查询时返回 -1，
-    //    因为带实例名的 UBO 成员必须用 "块名.成员名" 查询，直接按成员名查不到。
-    //    移除实例名后，函数体变为直接成员访问，为下一步拆解做准备。
-    result = strip_ubo_instance_name(&result);
+/// 处理 outColorN 的 location（对齐 MobileGlues processOutColorLocations）
+///
+/// 分两步：
+/// 1. 剥离 outColorN 声明行上的 layout(...) 前缀（spirv-cross 在 320 输出
+///    时原生带 location，需先剥离才能注入正确值）
+/// 2. 注入 layout(location=N)（MC framebuffer 约定 outColorN → attachment N）
+fn fix_out_color_locations(src: &str) -> String {
+    // 第一步：剥离 outColorN 行上的 layout(...) 前缀
+    static RE_OUT_COLOR_LAYOUT: OnceLock<Regex> = OnceLock::new();
+    let re_out_color_layout = RE_OUT_COLOR_LAYOUT.get_or_init(|| {
+        Regex::new(
+            r"(?m)^(\s*)layout\s*\([^)]*\)\s*((?:(?:flat|smooth|noperspective|centroid|invariant)\s+)*out\s+(?:(?:highp\s+|mediump\s+|lowp\s+)?\w+)\s+outColor\d+\s*;)",
+        )
+        .unwrap()
+    });
+    let result = re_out_color_layout
+        .replace_all(src, "$1$2")
+        .to_string();
 
-    // 1.6 把生成的 UBO 拆解为 standalone uniform（关键：解决 MC uniform 查询失败）
-    //     GLES 规范规定 UBO 成员没有 location，glGetUniformLocation 按成员名查询
-    //     返回 -1。MC 的 Shader 类用 glGetUniformLocation 查询 uniform，UBO 方案
-    //     导致所有 uniform 查不到，红屏。把 UniformBlockVS/FS/Other 拆解为
-    //     standalone uniform（`uniform mat4 ModelViewMat;`）后，MC 可直接查询到。
-    result = unwrap_generated_ubo(&result);
-
-    // 2. 修复 atomic counter binding
-    //    spirv-cross 输出 `layout(offset = N) uniform atomic_uint`，
-    //    但 GLES 要求 atomic counter 必须用 `layout(binding = N)` 指定绑定点。
-    //    步骤1 的 binding 移除不影响 offset 限定符，这里单独修复。
-    result = fix_atomic_counter_binding(&result);
-
-    // 3. 注入 image format 限定符
-    //    GLES 要求 image uniform 必须同时有 binding 和 format。
-    //    - 无 layout 前缀的 image：注入 binding + format
-    //    - 有 layout(binding=N) 但无 format 的 image：补充 format
-    //    writeonly image 默认 r32f，可读写 image 默认 r32ui。
-    result = inject_image_format(&result);
-
-    // 4. 处理 outColorN 的 location（对齐 MobileGlues processOutColorLocations）
-    //    正则容忍前导插值修饰符（flat/smooth/noperspective 等）
-    let re_out_color = {
-        static RE_OUT_COLOR: OnceLock<Regex> = OnceLock::new();
-        RE_OUT_COLOR.get_or_init(|| {
-            Regex::new(
-                r"(?m)^(?P<prefix>(?:(?:flat|smooth|noperspective|centroid|invariant)\s+)*)out\s+(?P<type>(?:highp\s+|mediump\s+|lowp\s+)?\w+)\s+outColor(?P<num>\d+)\s*;",
-            )
-            .unwrap()
-        })
-    };
-    result = re_out_color
+    // 第二步：注入 location（正则容忍前导插值修饰符）
+    static RE_OUT_COLOR: OnceLock<Regex> = OnceLock::new();
+    let re_out_color = RE_OUT_COLOR.get_or_init(|| {
+        Regex::new(
+            r"(?m)^(?P<prefix>(?:(?:flat|smooth|noperspective|centroid|invariant)\s+)*)out\s+(?P<type>(?:highp\s+|mediump\s+|lowp\s+)?\w+)\s+outColor(?P<num>\d+)\s*;",
+        )
+        .unwrap()
+    });
+    re_out_color
         .replace_all(&result, |caps: &regex::Captures| {
             let prefix = caps.name("prefix").map(|m| m.as_str()).unwrap_or("");
             let typ = caps.name("type").map(|m| m.as_str()).unwrap_or("");
@@ -144,12 +180,7 @@ pub fn post_process(src: &str) -> String {
                 num, prefix, typ, num
             )
         })
-        .to_string();
-
-    // 5. 确保 precision 声明（对齐 MobileGlues forceSupporterOutput）
-    result = ensure_precision(&result);
-
-    result
+        .to_string()
 }
 
 /// 移除 in/out varying 声明前的 layout(location=N)
@@ -261,6 +292,64 @@ fn strip_uniform_locations(src: &str) -> String {
         .join("\n")
 }
 
+/// 无条件移除 standalone uniform（non-opaque、非 block）上的 layout(binding=X)
+///
+/// glslang OpenGL target 给 standalone uniform 分配 binding decoration
+/// （spirv-cross 输出 `layout(location = 0, binding = 0) uniform mat4 MVP;`），
+/// 但 GLES 中 binding 仅对 block/sampler/image/atomic 合法（实测报
+/// "binding requires block, or sampler/image, or atomic-counter type"）。
+/// 所有 ES 版本都必须剥离。
+///
+/// 仅处理 standalone non-opaque uniform 行：
+/// - 跳过 block（含 `{`）——block 用 binding，且 320/310 合法保留
+/// - 跳过 opaque（sampler/image/atomic_uint）——binding 合法保留
+/// - 移除 `binding = N`（三种位置：唯一项/前导/中间末尾），清理空 layout()
+fn strip_uniform_binding(src: &str) -> String {
+    let re_binding = {
+        static RE_BINDING: OnceLock<Regex> = OnceLock::new();
+        RE_BINDING
+            .get_or_init(|| Regex::new(r"(?i)layout\s*\(\s*binding\s*=\s*\d+\s*\)\s*").unwrap())
+    };
+    let re_binding_leading = {
+        static RE_BINDING_LEADING: OnceLock<Regex> = OnceLock::new();
+        RE_BINDING_LEADING
+            .get_or_init(|| Regex::new(r"(?i)layout\s*\(\s*binding\s*=\s*\d+\s*,\s*").unwrap())
+    };
+    let re_binding_middle = {
+        static RE_BINDING_MIDDLE: OnceLock<Regex> = OnceLock::new();
+        RE_BINDING_MIDDLE.get_or_init(|| Regex::new(r"(?i),\s*binding\s*=\s*\d+").unwrap())
+    };
+    let re_empty_layout = {
+        static RE_EMPTY_LAYOUT: OnceLock<Regex> = OnceLock::new();
+        RE_EMPTY_LAYOUT.get_or_init(|| Regex::new(r"(?i)layout\s*\(\s*\)\s*").unwrap())
+    };
+
+    src.lines()
+        .map(|line| {
+            // 只处理 standalone non-opaque uniform 行：
+            // - 必须含 uniform 关键字
+            // - 排除 block（含 `{` 的单行 block，或多行 block 的声明行——
+            //   声明行不以 `;` 结尾，`layout(std140, binding=0) uniform Block`）
+            // - 排除 opaque（sampler/image/atomic_uint——binding 合法保留）
+            if !line.contains("uniform")
+                || line.contains('{')
+                || !line.trim_end().ends_with(';')
+                || line.contains("sampler")
+                || line.contains("image")
+                || line.contains("atomic_uint")
+            {
+                return line.to_string();
+            }
+            let l = re_binding_middle.replace_all(line, "");
+            let l = re_binding_leading.replace_all(&l, "layout(");
+            let l = re_binding.replace_all(&l, "");
+            let l = re_empty_layout.replace_all(&l, "");
+            l.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// 移除 UBO/SSBO 的实例名，使成员全局可见
 ///
 /// spirv-cross 默认为 UBO/SSBO 添加实例名（如 `} _20;`），导致成员访问
@@ -280,106 +369,48 @@ fn strip_uniform_locations(src: &str) -> String {
 /// 3. 避免误处理 C 风格结构体变量
 /// 4. 处理多行 UBO 声明
 fn strip_ubo_instance_name(src: &str) -> String {
-    simplify_ubo_processing!({
-        // 匹配 UBO/SSBO 块声明末尾的实例名
-        // 格式：} _N;  或  } _N = ...;（带初始化的罕见情况）
-        // 或 } _N;\n（多行声明）
-        static RE_INSTANCE: OnceLock<Regex> = OnceLock::new();
-        let re_instance = RE_INSTANCE
-            .get_or_init(|| Regex::new(r"\}\s*(?P<inst>_\w+)(?:\s*=\s*[^;]*)?\s*;").unwrap());
+    // 匹配 UBO/SSBO 块声明末尾的实例名
+    // 格式：} _N;  或  } _N = ...;（带初始化的罕见情况）
+    // 或 } _N;\n（多行声明）
+    static RE_INSTANCE: OnceLock<Regex> = OnceLock::new();
+    let re_instance = RE_INSTANCE
+        .get_or_init(|| Regex::new(r"\}\s*(?P<inst>_\w+)(?:\s*=\s*[^;]*)?\s*;").unwrap());
 
-        // 收集所有 UBO/SSBO 实例名
-        let instance_names: Vec<String> = re_instance
-            .captures_iter(src)
-            .filter_map(|c| c.name("inst").map(|m| m.as_str().to_string()))
-            .collect();
+    // 收集所有 UBO/SSBO 实例名
+    let instance_names: Vec<String> = re_instance
+        .captures_iter(src)
+        .filter_map(|c| c.name("inst").map(|m| m.as_str().to_string()))
+        .collect();
 
-        if instance_names.is_empty() {
-            return src.to_string();
-        }
-
-        // 1. 移除实例名声明：`} _20;` → `};`
-        let result = re_instance.replace_all(src, "};").to_string();
-
-        // 2. 替换函数体中的 `实例名.成员` → `成员`
-        //    用 \b 边界确保只匹配完整的实例名（避免误伤其他变量）
-        let mut result = result;
-        for inst in &instance_names {
-            // 动态构造的 Regex：pattern 依赖运行时解析到的实例名 inst（如 _20、_30）
-            let pattern = format!(r"\b{}\.", regex::escape(inst));
-            let re = Regex::new(&pattern).unwrap();
-            result = re.replace_all(&result, "").to_string();
-        }
-
-        // 3. 处理 UBO 块内的成员引用（如 _20.ModelViewMat 在块内）
-        //    这可能出现在 UBO 块的成员初始化中
-        for inst in &instance_names {
-            let pattern = format!(r"\b{}\.", regex::escape(inst));
-            let re = Regex::new(&pattern).unwrap();
-            result = re.replace_all(&result, "").to_string();
-        }
-
-        log::debug!(
-            "[ShaderTranslator] postprocess 移除了 UBO/SSBO 实例名: {:?}",
-            instance_names
-        );
-
-        result
-    })
-}
-
-/// 把 preprocess 生成的 UBO 拆解为 standalone uniform
-///
-/// preprocess 把 standalone uniform 包装进 UniformBlockVS/FS/Other（Vulkan SPIR-V
-/// 要求 non-opaque uniform 必须在 buffer 中）。但 GLES 规范规定 UBO 成员没有
-/// location，`glGetUniformLocation(program, "成员名")` 返回 -1。MC 的 Shader 类
-/// 用 `glGetUniformLocation` 查询 uniform，UBO 方案导致所有 uniform 查不到，红屏。
-///
-/// 此函数把 `layout(...) uniform UniformBlockVS { members };` 拆解为
-/// `uniform <type> <name>;` 列表，使每个 uniform 变为 standalone，MC 可直接查询。
-///
-/// 仅处理 preprocess 生成的 UniformBlockVS/FS/Other，不影响 MC 原生 UBO。
-/// strip_ubo_instance_name 已移除实例名，函数体已是直接成员访问，无需替换引用。
-fn unwrap_generated_ubo(src: &str) -> String {
-    // 匹配我们生成的 UBO 块：layout(...) uniform UniformBlock(VS|FS|Other) { members };
-    // (?s) 让 . 匹配换行，成员是多行的
-    static RE_UBO: OnceLock<Regex> = OnceLock::new();
-    let re_ubo = RE_UBO.get_or_init(|| {
-        Regex::new(
-            r"(?s)layout\s*\([^)]*\)\s*uniform\s+(UniformBlock(?:VS|FS|Other))\s*\{([^}]*)\}\s*;",
-        )
-        .unwrap()
-    });
-
-    let mut unwrapped_count = 0;
-    let result = re_ubo
-        .replace_all(src, |caps: &regex::Captures| {
-            let members = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-            unwrapped_count += 1;
-
-            // 把每个成员声明转为 standalone uniform
-            // 成员格式：`    mat4 ModelViewMat;` 或 `    highp mat4 ModelViewMat;`
-            let mut standalone = String::new();
-            for line in members.lines() {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                // 移除末尾分号，加 uniform 前缀
-                let line = line.trim_end_matches(';').trim();
-                standalone.push_str(&format!("uniform {};\n", line));
-            }
-            // 去掉末尾多余换行（replace_all 的替换文本不需要尾换行）
-            standalone.trim_end().to_string()
-        })
-        .to_string();
-
-    if unwrapped_count > 0 {
-        log::debug!(
-            "[ShaderTranslator] postprocess 拆解了 {} 个 UBO 为 standalone uniform",
-            unwrapped_count
-        );
+    if instance_names.is_empty() {
+        return src.to_string();
     }
+
+    // 1. 移除实例名声明：`} _20;` → `};`
+    let result = re_instance.replace_all(src, "};").to_string();
+
+    // 2. 替换函数体中的 `实例名.成员` → `成员`
+    //    用 \b 边界确保只匹配完整的实例名（避免误伤其他变量）
+    let mut result = result;
+    for inst in &instance_names {
+        // 动态构造的 Regex：pattern 依赖运行时解析到的实例名 inst（如 _20、_30）
+        let pattern = format!(r"\b{}\.", regex::escape(inst));
+        let re = Regex::new(&pattern).unwrap();
+        result = re.replace_all(&result, "").to_string();
+    }
+
+    // 3. 处理 UBO 块内的成员引用（如 _20.ModelViewMat 在块内）
+    //    这可能出现在 UBO 块的成员初始化中
+    for inst in &instance_names {
+        let pattern = format!(r"\b{}\.", regex::escape(inst));
+        let re = Regex::new(&pattern).unwrap();
+        result = re.replace_all(&result, "").to_string();
+    }
+
+    log::debug!(
+        "[ShaderTranslator] postprocess 移除了 UBO/SSBO 实例名: {:?}",
+        instance_names
+    );
 
     result
 }
@@ -523,7 +554,12 @@ fn inject_image_format(src: &str) -> String {
 }
 
 /// 确保 precision highp float/int 声明存在（对齐 MobileGlues forceSupporterOutput）
-/// 始终强制使用 highp，移除所有已有 precision 声明后统一插入
+///
+/// **已移除调用**：spike 实测 spirv-cross 在 es_default_float/int_precision_highp=true
+/// 下自动输出 precision（FS 有、VS 无且合法——VS 的 float/int 默认精度即 highp）。
+/// 保留此函数仅为 310/300 回退路径的防御性备用，若未来出现缺 precision 编译失败
+/// 可恢复调用。
+#[allow(dead_code)]
 fn ensure_precision(source: &str) -> String {
     let mut result = source.to_string();
 
@@ -538,10 +574,7 @@ fn ensure_precision(source: &str) -> String {
 
     // 在 #extension 之后或 #version 之后插入
     let last_ext = result.rfind("#extension");
-    if let Some(pos) = last_ext
-        .map(|p| result[p..].find('\n').map(|n| p + n + 1))
-        .flatten()
-    {
+    if let Some(pos) = last_ext.and_then(|p| result[p..].find('\n').map(|n| p + n + 1)) {
         result.insert_str(pos, precision_decl);
     } else if let Some(version_end) = result.find('\n') {
         result.insert_str(version_end + 1, precision_decl);
@@ -636,15 +669,16 @@ mod tests {
 
     #[test]
     fn test_remove_binding_only() {
+        // binding 移除仅在 300 es 执行（ES 3.0 不支持 binding）
         let input = "layout(binding = 0) uniform sampler2D tex;";
-        let result = post_process(input);
+        let result = post_process(input, 300);
         assert!(!result.contains("binding"));
     }
 
     #[test]
     fn test_remove_binding_leading() {
         let input = "layout(binding = 0, std140) uniform Block { mat4 m; };";
-        let result = post_process(input);
+        let result = post_process(input, 300);
         assert!(!result.contains("binding"));
         assert!(result.contains("layout(std140)"));
     }
@@ -652,7 +686,7 @@ mod tests {
     #[test]
     fn test_remove_binding_middle() {
         let input = "layout(std140, binding = 2, column_major) uniform Block { mat4 m; };";
-        let result = post_process(input);
+        let result = post_process(input, 300);
         assert!(!result.contains("binding"));
         assert!(result.contains("std140"));
         assert!(result.contains("column_major"));
@@ -660,9 +694,9 @@ mod tests {
 
     #[test]
     fn test_image_binding_preserved() {
-        // image 的 binding 不应被移除
+        // image 的 binding 不应被移除（300 移除 binding 时跳过 image 行）
         let input = "layout(binding = 0, rgba32f) uniform writeonly highp image2D img;";
-        let result = post_process(input);
+        let result = post_process(input, 300);
         assert!(
             result.contains("binding = 0"),
             "image binding should be preserved, got: {}",
@@ -671,10 +705,19 @@ mod tests {
     }
 
     #[test]
+    fn test_320_keeps_binding() {
+        // 320 es 保留 binding（ES 3.1+ 支持，spike_c 实测 spirv-cross 输出
+        // layout(binding = 0) 且 11/11 通过）
+        let input = "layout(binding = 0) uniform sampler2D tex;";
+        let result = post_process(input, 320);
+        assert!(result.contains("binding"), "got: {}", result);
+    }
+
+    #[test]
     fn test_out_color_location() {
-        // outColorN 的 location 在 strip 之后由 processOutColorLocations 重新添加
+        // outColorN 的 location 由 fix_out_color_locations 注入（320 同样重注）
         let input = "out vec4 outColor0;";
-        let result = post_process(input);
+        let result = post_process(input, 320);
         assert!(result.contains("layout(location=0) out vec4 outColor0;"));
     }
 
@@ -682,15 +725,28 @@ mod tests {
     fn test_out_color_flat_location() {
         // 带插值修饰符的 outColor（如 flat out ivec4 outColor1）
         let input = "flat out ivec4 outColor1;";
-        let result = post_process(input);
+        let result = post_process(input, 320);
         assert!(result.contains("layout(location=1) flat out ivec4 outColor1;"));
     }
 
     #[test]
-    fn test_post_process_strips_varying_locations() {
-        // 端到端：spirv-cross 输出 → post_process → varying location 被移除
-        let input = "#version 320 es\nlayout(location = 0) in vec2 texCoord0;\nlayout(location = 0) out vec4 fragColor;\nvoid main() { fragColor = vec4(texCoord0, 0.0, 1.0); }\n";
-        let result = post_process(input);
+    fn test_out_color_320_strips_existing_layout_first() {
+        // 320 保留 location 路径：spirv-cross 输出带 layout(location = N) 的
+        // outColorN，应剥离原 location 再注入正确值（MC framebuffer 约定）
+        let input = "layout(location = 2) out vec4 outColor0;";
+        let result = post_process(input, 320);
+        assert!(
+            result.contains("layout(location=0) out vec4 outColor0;"),
+            "outColor0 应重注为 location=0（而非保留 spirv-cross 的 2），got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_post_process_300_strips_varying_locations() {
+        // 300 es 回退：spirv-cross 输出 → post_process → varying location 被移除
+        let input = "#version 300 es\nlayout(location = 0) in vec2 texCoord0;\nlayout(location = 0) out vec4 fragColor;\nvoid main() { fragColor = vec4(texCoord0, 0.0, 1.0); }\n";
+        let result = post_process(input, 300);
         assert!(result.contains("in vec2 texCoord0;"));
         assert!(result.contains("out vec4 fragColor;"));
         // varying 的 location 应被移除
@@ -699,19 +755,59 @@ mod tests {
     }
 
     #[test]
-    fn test_ensure_precision() {
-        let input = "#version 320 es\nvoid main() {}\n";
-        let result = post_process(input);
-        assert!(result.contains("precision highp float;"));
-        assert!(result.contains("precision highp int;"));
+    fn test_post_process_300_strips_uniform_location() {
+        // 300 es 回退：standalone uniform location 应被移除（ES 3.0 不支持）
+        let input = "#version 300 es\nlayout(location = 0) uniform mat4 ProjMat;\nlayout(location = 0) in vec3 Position;\nvoid main() { gl_Position = ProjMat * vec4(Position, 1.0); }\n";
+        let result = post_process(input, 300);
+        assert!(
+            result.contains("uniform mat4 ProjMat;"),
+            "uniform 应保留但无 location，got: {}",
+            result
+        );
+        assert!(
+            !result.contains("location"),
+            "300 es 不应残留任何 location，got: {}",
+            result
+        );
     }
 
     #[test]
-    fn test_ensure_precision_replace_existing() {
-        let input = "#version 320 es\nprecision mediump float;\nvoid main() {}\n";
-        let result = post_process(input);
-        assert!(result.contains("precision highp float;"));
-        assert!(!result.contains("precision mediump float;"));
+    fn test_post_process_320_keeps_locations() {
+        // 320 es：in/out 与 uniform location 全部保留（ES 3.2 合法）
+        let input = "#version 320 es\nlayout(location = 0) uniform mat4 ProjMat;\nlayout(location = 0) in vec3 Position;\nlayout(location = 0) out vec4 fragColor;\nvoid main() { gl_Position = ProjMat * vec4(Position, 1.0); fragColor = vec4(1.0); }\n";
+        let result = post_process(input, 320);
+        assert!(
+            result.contains("layout(location = 0) uniform mat4 ProjMat"),
+            "320 应保留 uniform location，got: {}",
+            result
+        );
+        assert!(
+            result.contains("layout(location = 0) in vec3 Position"),
+            "320 应保留 in location，got: {}",
+            result
+        );
+        assert!(
+            result.contains("layout(location = 0) out vec4 fragColor"),
+            "320 应保留 out location，got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_post_process_310_strips_locations_keeps_binding() {
+        // 310 es：strip location（保守），保留 binding（ES 3.1 支持）
+        let input = "#version 310 es\nlayout(location = 0) uniform mat4 ProjMat;\nlayout(location = 0) in vec3 Position;\nlayout(binding = 0) uniform sampler2D tex;\nvoid main() { gl_Position = ProjMat * vec4(Position, 1.0); }\n";
+        let result = post_process(input, 310);
+        assert!(
+            !result.contains("location"),
+            "310 不应残留 location（保守 strip），got: {}",
+            result
+        );
+        assert!(
+            result.contains("binding = 0"),
+            "310 应保留 binding，got: {}",
+            result
+        );
     }
 
     #[test]
@@ -783,8 +879,8 @@ mod tests {
     fn test_post_process_strips_ubo_instance_name() {
         // 端到端：spirv-cross 输出 → post_process → UBO 实例名被移除
         // 模拟日志中的实际 VS 输出
-        let input = "#version 310 es\nprecision highp float;\nprecision highp int;\nlayout(std140) uniform UniformBlockVS\n{\n    mat4 ModelViewMat;\n    mat4 ProjMat;\n} _20;\nin vec3 Position;\nvoid main()\n{\n    gl_Position = (_20.ProjMat * _20.ModelViewMat) * vec4(Position, 1.0);\n}\n";
-        let result = post_process(input);
+        let input = "#version 320 es\nprecision highp float;\nprecision highp int;\nlayout(std140) uniform DynamicTransforms\n{\n    mat4 ModelViewMat;\n    mat4 ProjMat;\n} _20;\nin vec3 Position;\nvoid main()\n{\n    gl_Position = (_20.ProjMat * _20.ModelViewMat) * vec4(Position, 1.0);\n}\n";
+        let result = post_process(input, 320);
         assert!(
             !result.contains("} _20;"),
             "instance name should be removed, got: {}",
@@ -798,95 +894,11 @@ mod tests {
         // 成员名应保留（用于 glGetUniformLocation 查询）
         assert!(result.contains("ModelViewMat"));
         assert!(result.contains("ProjMat"));
-    }
-
-    #[test]
-    fn test_unwrap_generated_ubo_basic() {
-        // UniformBlockVS 块应被拆解为 standalone uniform
-        let input = "layout(std140) uniform UniformBlockVS\n{\n    mat4 ModelViewMat;\n    mat4 ProjMat;\n};\nvoid main() { gl_Position = ProjMat * ModelViewMat * vec4(0); }\n";
-        let result = unwrap_generated_ubo(input);
-        assert!(
-            !result.contains("uniform UniformBlockVS"),
-            "UBO block should be removed, got: {}",
-            result
-        );
-        assert!(
-            result.contains("uniform mat4 ModelViewMat;"),
-            "should have standalone uniform ModelViewMat, got: {}",
-            result
-        );
-        assert!(
-            result.contains("uniform mat4 ProjMat;"),
-            "should have standalone uniform ProjMat, got: {}",
-            result
-        );
-        // 函数体直接成员访问保留（strip_ubo_instance_name 已处理）
-        assert!(result.contains("ProjMat * ModelViewMat"));
-    }
-
-    #[test]
-    fn test_unwrap_generated_ubo_fragment() {
-        // UniformBlockFS 块也应被拆解
-        let input = "layout(std140) uniform UniformBlockFS\n{\n    vec4 ColorModulator;\n};\nvoid main() { fragColor = ColorModulator; }\n";
-        let result = unwrap_generated_ubo(input);
-        assert!(
-            result.contains("uniform vec4 ColorModulator;"),
-            "should have standalone uniform ColorModulator, got: {}",
-            result
-        );
-        assert!(!result.contains("uniform UniformBlockFS"));
-    }
-
-    #[test]
-    fn test_unwrap_generated_ubo_preserves_native_ubo() {
-        // MC 原生 UBO（非 UniformBlockVS/FS/Other）不应被拆解
-        let input =
-            "layout(std140) uniform DynamicTransforms\n{\n    mat4 m;\n};\nvoid main() {}\n";
-        let result = unwrap_generated_ubo(input);
+        // 原生 UBO 块（非 UniformBlock）应保留（不再拆解）
         assert!(
             result.contains("uniform DynamicTransforms"),
-            "native UBO should be preserved, got: {}",
+            "原生 UBO 应保留，got: {}",
             result
         );
-    }
-
-    #[test]
-    fn test_unwrap_generated_ubo_with_precision() {
-        // 带 precision 限定符的成员
-        let input = "layout(std140) uniform UniformBlockVS\n{\n    highp mat4 ModelViewMat;\n    mediump float FogStart;\n};\nvoid main() {}\n";
-        let result = unwrap_generated_ubo(input);
-        assert!(
-            result.contains("uniform highp mat4 ModelViewMat;"),
-            "should preserve precision, got: {}",
-            result
-        );
-        assert!(result.contains("uniform mediump float FogStart;"));
-    }
-
-    #[test]
-    fn test_post_process_unwraps_ubo_to_standalone() {
-        // 端到端：spirv-cross 输出（带实例名） → post_process → standalone uniform
-        let input = "#version 310 es\nprecision highp float;\nprecision highp int;\nlayout(std140) uniform UniformBlockVS\n{\n    mat4 ModelViewMat;\n    mat4 ProjMat;\n} _20;\nin vec3 Position;\nvoid main()\n{\n    gl_Position = (_20.ProjMat * _20.ModelViewMat) * vec4(Position, 1.0);\n}\n";
-        let result = post_process(input);
-        // UBO 块应被拆解
-        assert!(
-            !result.contains("uniform UniformBlockVS"),
-            "UBO block should be unwrapped, got: {}",
-            result
-        );
-        // 应有 standalone uniform 声明
-        assert!(
-            result.contains("uniform mat4 ModelViewMat;"),
-            "should have standalone uniform, got: {}",
-            result
-        );
-        assert!(result.contains("uniform mat4 ProjMat;"));
-        // 函数体应直接访问成员（无实例名前缀）
-        assert!(
-            result.contains("ProjMat * ModelViewMat"),
-            "should access members directly, got: {}",
-            result
-        );
-        assert!(!result.contains("_20."));
     }
 }

@@ -77,14 +77,6 @@ macro_rules! gles_dispatch {
     };
 }
 
-/// 简化Vulkan workarounds的宏
-#[macro_export]
-macro_rules! simplify_vulkan_workarounds {
-    ($code:expr) => {
-        $code
-    };
-}
-
 /// 优化SPIR-V编译逻辑的宏
 macro_rules! optimize_spirv_compile {
     ($options:expr) => {
@@ -97,13 +89,5 @@ macro_rules! optimize_spirv_compile {
         $options.set_generate_debug_info();
         $options.set_auto_bind_uniforms(true);
         $options.set_target_spirv(shaderc::SpirvVersion::V1_5);
-    };
-}
-
-/// 简化UBO处理的宏
-#[macro_export]
-macro_rules! simplify_ubo_processing {
-    ($code:expr) => {
-        $code
     };
 }

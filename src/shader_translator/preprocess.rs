@@ -1,19 +1,28 @@
 //! GLSL 源码预处理模块
 //!
-//! 本分支（glslang-targetvk）使用 Vulkan target 编译 GLSL → SPIR-V。
-//! Vulkan target 要求 GLSL >= 140，#version 150 可直接处理，无需版本升级。
-//! Vulkan 拒绝独立 non-opaque uniform（必须包装进 UBO），因此不再注入
-//! uniform 的 layout(location)。
+//! 本分支（glslang-targetgl）使用 OpenGL target 编译 GLSL → SPIR-V。
+//! OpenGL target 要求（spike 实测）：
+//! - 桌面 GLSL >= 330（#version 150 被拒）→ 统一升级到 450 core
+//! - 所有 in/out 有 location → 注入 layout(location)
+//! - UBO/SSBO 有 binding → 注入 layout(binding)
+//! - non-opaque standalone uniform 需要 location（但无需 UBO 包装）→ 注入
+//! - attribute/varying 老语法在 450 core 被移除 → 关键字迁移
 //!
 //! 保留的注入：
-//! - in/out varying 的 layout(location)（Vulkan 要求所有 in/out 有 location）
-//! - UBO/SSBO 的 layout(binding)（Vulkan 要求所有 buffer 有 binding）
+//! - in/out varying 的 layout(location)（OpenGL SPIR-V 要求所有 in/out 有 location）
+//! - non-opaque standalone uniform 的 layout(location)（独立计数，与 in/out 空间隔离）
+//! - UBO/SSBO 的 layout(binding)
+//! - textureQueryLod polyfill（GLES 3.0 不支持 GL 4.0 textureQueryLod，Adreno 老驱动保险）
+//!
+//! 不再需要（对比 Vulkan target）：
+//! - convert_uniforms_to_ubo（standalone uniform 原生合法）
+//! - undef_vulkan_macro（OpenGL target 下 glslang 不定义 VULKAN 宏，spike_h 实测）
+//! - rename_vulkan_builtin_variables（gl_VertexID 保留原名，spike_e 实测）
 //!
 //! 重要：in/out varying 的 location 注入使用独立的 in_counter 和 out_counter。
 //! in 和 out 是独立的接口空间（SPIR-V Input/Output StorageClass），
 //! 分别从 0 计数，保证 VS out 和 FS in 的同名 varying location 一致。
 
-use crate::simplify_vulkan_workarounds;
 use regex::Regex;
 use rustc_hash::FxHashSet;
 use std::sync::OnceLock;
@@ -27,105 +36,91 @@ pub const GL_FRAGMENT_SHADER: u32 = 0x8B30;
 /// 执行顺序：
 /// 1. 移除 #line 指令
 /// 2. 移除 MC 的 `/*#version N*\/` 注释（moj_import 文本拼接产物，会干扰 glslang parse）
-/// 3. 规范化 GLSL 版本（无版本插入 450，< 140 升级到 140，移除 compatibility profile）
-/// 4. 为缺少 location 的 in/out 变量自动添加 layout(location=X)（in/out 独立计数）
-/// 5. 为缺少 binding 的 UBO/SSBO 自动添加 layout(binding=X)
+/// 3. 规范化 GLSL 版本（无版本插入 450，桌面版本统一升级为 450 core）
+/// 4. 迁移 attribute/varying 老语法为 in/out（按 stage 区分方向）
+/// 5. 为缺少 location 的 in/out 变量自动添加 layout(location=X)（in/out 独立计数）
+/// 6. 为缺少 location 的 non-opaque standalone uniform 注入 layout(location=X)
+/// 7. 为缺少 binding 的 UBO/SSBO 自动添加 layout(binding=X)
 ///
-/// `stage` 参数用于给 convert_uniforms_to_ubo 生成的 UBO 起唯一块名，
-/// 避免 VS/FS 各自的 UniformBlock 跨 stage 链接时 type mismatch。
+/// `stage` 参数用于 attribute/varying 关键字迁移：
+/// - VS：attribute → in，varying → out
+/// - FS：varying → in
 pub fn preprocess(source: &str, stage: u32) -> String {
     let mut result = remove_line_directives(source);
     strip_mc_version_comment(&mut result);
     force_glsl_version(&mut result);
-    // 取消 glslang Vulkan target 默认定义的 VULKAN 宏。
-    // Sodium 等 mod 的 shader 通过 #ifdef VULKAN 区分 Vulkan/GL 后端，
-    // 若 VULKAN 被定义，shader 走 Vulkan 分支（可能使用不同 attribute 布局
-    // 或内置变量），转回 GLES 后导致方块无法渲染。
-    // 参考 MobileGlues 的同类修复：setPreamble("#undef VULKAN\n")
-    undef_vulkan_macro(&mut result);
-    rename_vulkan_builtin_variables(&mut result);
-    // samplerBuffer 原样保留（Vulkan target 原生支持 ImageBuffer；转换会破坏 texelFetch 调用，见 convert_sampler_buffer 注释）
+    // attribute/varying 老语法在 450 core 被移除（"removed in version 420"），
+    // 按 stage 迁移为 in/out（必须先于 inject_missing_locations，让迁移后的
+    // 变量也能获得 location 注入）。
+    migrate_legacy_variables(&mut result, stage);
+    // samplerBuffer 原样保留（OpenGL target 原生支持 ImageBuffer；转换会破坏 texelFetch 调用）
     // 注入 textureQueryLod polyfill（GLES 3.0 不支持 GL 4.0 textureQueryLod）
     inject_texture_query_lod(&mut result);
-    // 转换独立 uniform 到 UBO（块名按 stage 区分，避免跨 stage type mismatch）
-    result = convert_uniforms_to_ubo(&result, stage);
     inject_missing_locations(&mut result);
+    inject_missing_uniform_locations(&mut result);
     inject_missing_bindings(&mut result);
     result
 }
 
-/// 根据 stage 生成唯一的 UniformBlock 块名
+/// 迁移 GLSL 老语法的 attribute/varying 关键字为 in/out
 ///
-/// 每个 shader 独立 preprocess，各自把本 stage 的独立 uniform 包装进 UBO。
-/// 若所有 stage 共用同一个块名，VS/FS 的成员不同会导致 GLES 链接器报
-/// "UniformBlock type mismatch with other stage"。
-/// 按 stage 命名（VS→UniformBlockVS, FS→UniformBlockFS）后，块名不同，
-/// 链接器不会尝试匹配，各自独立绑定。MC 通过 glGetUniformLocation 按成员名
-/// 查询 uniform（块名不影响成员查询），功能不受影响。
-fn uniform_block_name(stage: u32) -> &'static str {
+/// 450 core profile 已移除 attribute/varying（"removed in version 420"），
+/// preprocess 统一升级到 450 后老语法编译必然失败（spike_f 实测）。
+/// 按 stage 迁移：
+/// - VS：attribute → in，varying → out
+/// - FS：varying → in
+///
+/// attribute/varying 都是 GLSL 保留关键字，不可能作为标识符出现，
+/// 词边界全局替换安全（与 string_pass::replace_legacy_syntax 同策略）。
+fn migrate_legacy_variables(result: &mut String, stage: u32) {
+    static RE_ATTRIBUTE: OnceLock<Regex> = OnceLock::new();
+    static RE_VARYING: OnceLock<Regex> = OnceLock::new();
+    let re_attribute = RE_ATTRIBUTE.get_or_init(|| Regex::new(r"\battribute\b").unwrap());
+    let re_varying = RE_VARYING.get_or_init(|| Regex::new(r"\bvarying\b").unwrap());
+
+    let mut changed = false;
     match stage {
-        GL_VERTEX_SHADER => "UniformBlockVS",
-        GL_FRAGMENT_SHADER => "UniformBlockFS",
-        _ => "UniformBlockOther",
-    }
-}
-
-/// 取消 glslang Vulkan target 默认定义的 VULKAN 宏
-///
-/// shaderc 以 Vulkan 为 target 编译 GLSL 时，glslang 会自动定义 `VULKAN` 宏。
-/// Sodium 等 mod 的 shader 用 `#ifdef VULKAN` 区分后端：
-/// - Vulkan 分支可能使用不同的 attribute 布局、内置变量或 uniform 绑定方式
-/// - GL 分支才是桌面 GL 的正常逻辑
-///
-/// 若不取消，shader 走 Vulkan 分支，生成的 SPIR-V 转回 GLES 后可能导致
-/// 方块无法渲染（attribute/uniform 不匹配）。
-///
-/// 实现：在 `#version` 行之后插入 `#undef VULKAN`。
-/// `#undef` 必须在 `#version` 之后（GLSL 要求 #version 为首行）。
-fn undef_vulkan_macro(result: &mut String) {
-    // 查找 #version 行的结束位置（第一个换行符）
-    // force_glsl_version 已确保 #version 在首行（可能前面无注释）
-    if let Some(version_end) = result.find('\n') {
-        result.insert_str(version_end + 1, "#undef VULKAN\n");
-    } else {
-        // 无换行（极端情况），直接追加
-        result.push_str("\n#undef VULKAN\n");
-    }
-}
-
-/// 将桌面 GLSL 的内置变量重命名为 Vulkan GLSL 对应的名称
-fn rename_vulkan_builtin_variables(result: &mut String) {
-    simplify_vulkan_workarounds!({
-        // 1. gl_VertexID -> gl_VertexIndex
-        static RE_VERTEX: OnceLock<Regex> = OnceLock::new();
-        let re_vertex = RE_VERTEX.get_or_init(|| Regex::new(r"\bgl_VertexID\b").unwrap());
-        *result = re_vertex.replace_all(result, "gl_VertexIndex").into_owned();
-
-        // 2. 变量名 sampler -> u_sampler (避免与关键字冲突)
-        // \b 保证了 sampler2D 中的 sampler 不会被替换
-        static RE_SAMPLER: OnceLock<Regex> = OnceLock::new();
-        let re_sampler = RE_SAMPLER.get_or_init(|| Regex::new(r"\bsampler\b").unwrap());
-        let new_result = re_sampler.replace_all(result, "u_sampler").into_owned();
-        if new_result.len() != result.len() {
-            log::debug!("[ShaderTranslator] preprocess 重命名了变量 sampler -> u_sampler");
-            *result = new_result;
+        GL_VERTEX_SHADER => {
+            let s = re_attribute.replace_all(result, "in").into_owned();
+            if s != *result {
+                changed = true;
+                *result = s;
+            }
+            let s = re_varying.replace_all(result, "out").into_owned();
+            if s != *result {
+                changed = true;
+                *result = s;
+            }
         }
-    });
+        GL_FRAGMENT_SHADER => {
+            let s = re_varying.replace_all(result, "in").into_owned();
+            if s != *result {
+                changed = true;
+                *result = s;
+            }
+        }
+        _ => {}
+    }
+    if changed {
+        log::debug!(
+            "[ShaderTranslator] preprocess 迁移 attribute/varying → in/out (stage 0x{:04X})",
+            stage
+        );
+    }
 }
 
 /// 将 samplerBuffer/isamplerBuffer/usamplerBuffer 转换为对应的 2D sampler（**已禁用**）
 ///
 /// 本函数当前为 no-op（原样返回源码），保留仅为未来 GLES 3.0 设备启用参考。
 /// 禁用原因：
-/// 1. Vulkan target 原生支持 texture buffer（SPIR-V Capability ImageBuffer 是
-///    Vulkan 1.0 核心能力），无需转换即可由 shaderc 正常编译。
+/// 1. OpenGL target 原生支持 texture buffer（SPIR-V Capability ImageBuffer 是
+///    OpenGL/Vulkan 通用能力），无需转换即可由 shaderc 正常编译。
 /// 2. 类型替换会破坏 texelFetch 调用：旧实现只把 `samplerBuffer → sampler2D`
 ///    类型名替换，而调用改写正则仅匹配 `texelFetch(<类型名>,...)`，实际源码
 ///    中调用是变量名 `texelFetch(CloudFaces, index)`，正则落空后调用被原样
-///    保留 → `isampler2D`（需要 ivec2 坐标）+ int 坐标 → glslang Vulkan target
-///    报重载失败 → 触发 string_pass 回退 → 崩溃。
-/// 3. 旧方案注入的 `u_BufferTexWidth` uniform 会被 convert_uniforms_to_ubo
-///    包装进 UBO，而 MC 不会设置该 uniform（采样位置错误）。
+///    保留 → `isampler2D`（需要 ivec2 坐标）+ int 坐标 → glslang 报重载失败
+///    → 触发 string_pass 回退 → 崩溃。
+/// 3. 旧方案注入的 `u_BufferTexWidth` uniform 需额外设置（采样位置错误）。
 ///
 /// 补充：GLES 3.2 core 已含 texture buffer 功能（GL_EXT_texture_buffer 扩展
 /// 在 ES 300/310 下由 spirv-cross 自动声明），转换并非 GLES 侧硬性需求。
@@ -231,48 +226,33 @@ fn strip_mc_version_comment(result: &mut String) {
     }
 }
 
-/// 规范化 GLSL 版本以满足 Vulkan target + layout 限定符要求
+/// 规范化 GLSL 版本以满足 OpenGL target + layout 限定符要求
 ///
-/// Vulkan target 要求 GLSL >= 140，且拒绝 compatibility profile。
-/// preprocess 注入的 `layout(binding=)` 和 `layout(location=)` 需要 GLSL 420+
-/// （GL_ARB_shading_language_420pack），否则 glslang parse 报
-/// "not supported for this version or the enabled extensions"。
+/// OpenGL SPIR-V 要求桌面 GLSL >= 330，且 preprocess 注入的
+/// `layout(binding=)` 需要 GLSL 420+、`layout(location=)` 对 uniform 需要 430+，
+/// 统一升级到 450 core 可全覆盖。
 ///
-/// 根据源码特性决定升级策略：
+/// 策略：
 /// - 无 #version → 插入 #version 450 core
-/// - #version < 460 且非 ES → 升级到 450 core（统一支持 layout 限定符 + 移除 compatibility）
-/// - #version == 460 且非 ES → 保持 460，规范化为 core
+/// - 桌面 GLSL 任意版本 → 统一升级/规范化为 450 core（移除 compatibility profile）
 /// - ES 版本 → 保持不变
-/// - 特殊情况：包含 "samplerBuffer" 或 "textureQueryLod" 的着色器，强制升级到 450 core
-///   （确保这些高级特性在 Vulkan target 下正确支持）
 fn force_glsl_version(result: &mut String) {
-    static RE: OnceLock<Regex> = OnceLock::new();
     let version = extract_version(result);
     match version {
         None => {
             result.insert_str(0, "#version 450 core\n");
         }
         Some(v) => {
-            if let Some(ver) = parse_version_number(v) {
-                let is_es = is_es_version(v);
-                if is_es {
+            if let Some(_ver) = parse_version_number(v) {
+                if is_es_version(v) {
                     // ES 版本保持不变（语法不兼容，升级无意义）
                     return;
                 }
 
-                // 检查源码是否包含需要高级版本支持的特殊特性
-                let needs_high_version =
-                    result.contains("samplerBuffer") || result.contains("textureQueryLod");
-
+                static RE: OnceLock<Regex> = OnceLock::new();
                 let re = RE.get_or_init(|| Regex::new(r"(?m)^#version\s+\d+.*$").unwrap());
-                if ver < 460 || needs_high_version {
-                    // 桌面 GLSL < 460 或需要高级特性 → 升级到 450 core
-                    // （支持 layout(binding/location)，移除 compatibility，Vulkan 接受 >= 140）
-                    *result = re.replace(result, "#version 450 core").to_string();
-                } else {
-                    // 460 保持版本号，仅规范化为 core
-                    *result = re.replace(result, "#version 460 core").to_string();
-                }
+                // 统一升级到 450 core（支持 layout(binding/location)，移除 compatibility）
+                *result = re.replace(result, "#version 450 core").to_string();
             }
         }
     }
@@ -404,21 +384,24 @@ fn parse_layout_location(layout_qual: &str) -> Option<u32> {
 /// 解析变量声明中的数组大小（用于计算 location 占用数）
 /// 输入如 "vec4 colors[4];" → 返回 4，"vec4 color;" → 返回 1
 fn parse_array_size(rest: &str) -> u32 {
-    if let Some(bracket_start) = rest.find('[') {
-        if let Some(bracket_end) = rest[bracket_start..].find(']') {
-            let size_str = &rest[bracket_start + 1..bracket_start + bracket_end];
-            if let Ok(size) = size_str.trim().parse::<u32>() {
-                return size.max(1);
-            }
-        }
+    let Some(bracket_start) = rest.find('[') else {
+        return 1;
+    };
+    let Some(bracket_end_rel) = rest[bracket_start..].find(']') else {
+        return 1;
+    };
+    let size_str = &rest[bracket_start + 1..bracket_start + bracket_end_rel];
+    match size_str.trim().parse::<u32>() {
+        Ok(size) => size.max(1),
+        Err(_) => 1,
     }
-    1
 }
 
 /// 为缺少 binding 的 UBO/SSBO 自动添加 layout(binding=X)
 ///
-/// Vulkan SPIR-V 要求所有 uniform buffer 和 shader storage buffer 必须有 binding。
-/// 桌面 GLSL 允许省略 binding（由链接器分配），但 Vulkan 不允许。
+/// OpenGL SPIR-V 要求所有 uniform buffer 和 shader storage buffer 必须有 binding
+/// （spike_b 实测：无 binding 报 "uniform/buffer blocks require layout(binding=X)"）。
+/// 桌面 GLSL 允许省略 binding（由链接器分配），但 SPIR-V 不允许。
 ///
 /// 策略：扫描 `layout(...) uniform/buffer Name {...}` 和 `uniform block Name {...}`，
 /// 为缺少 binding 的声明按出现顺序分配递增 binding 编号。
@@ -447,9 +430,8 @@ fn inject_missing_bindings(result: &mut String) -> bool {
     });
 
     // 初始 binding_counter 从已有 binding 的最大值+1 开始，避免与
-    // convert_uniforms_to_ubo 注入的 UniformBlock 或原生带 binding 的块冲突。
-    // 例如：UniformBlock 已占 binding=0，此处 counter 应从 1 开始，
-    // 否则会给后续无 binding 的块分配 binding=0 造成链接冲突。
+    // 已有带 binding 的块冲突（sampler 的 binding 由 glslang 自动分配，
+    // 此处 find_available_binding 扫描所有已有 binding，从 0 找第一个空闲）。
     let mut binding_counter: u32 = find_available_binding(result);
     let mut injected = false;
     let mut modified = String::with_capacity(result.len());
@@ -526,96 +508,95 @@ fn inject_missing_bindings(result: &mut String) -> bool {
     injected
 }
 
-/// 将全局非不透明 uniform 包装进一个无实例名 UBO。
+/// 为缺少 location 的 non-opaque standalone uniform 注入 layout(location=N)
 ///
-/// Vulkan target 拒绝独立 non-opaque uniform（必须包装进 UBO）。
-/// 本函数扫描单行 `uniform T name;` 声明，收集后包装进无实例名 UBO：
-/// ```glsl
-/// layout(std140, binding = N) uniform UniformBlockVS {
-///     mat4 ModelViewMat;
-///     vec4 ColorModulator;
-/// };
-/// ```
+/// OpenGL SPIR-V 要求 non-opaque standalone uniform 必须有 location
+/// （spike_0 实测："non-opaque uniform variables need a layout(location=L)"）。
+/// 与 Vulkan target 不同，standalone uniform 原生合法，无需包装进 UBO。
 ///
-/// 无实例名 UBO 的成员全局可见，源码中的引用 `ModelViewMat` 无需替换即可继续使用。
-/// 这避免了引用替换的所有风险（历史 Bug：替换污染 UBO 声明块内部、误改局部变量等）。
-///
-/// 块名按 stage 区分（VS→UniformBlockVS, FS→UniformBlockFS），避免跨 stage
-/// 同名 UBO 成员不一致导致 GLES 链接器报 "type mismatch with other stage"。
-///
-/// 流程：
-/// 1. 扫描收集 non-opaque uniform，同时产出删除了 uniform 行的 cleaned_src
-/// 2. 确定 binding（在 cleaned_src 上查找，避免与已有 binding 冲突）
-/// 3. 构建 UBO 声明（成员名用原始 name）并插入到 #version 之后
-fn convert_uniforms_to_ubo(src: &str, stage: u32) -> String {
-    // 匹配单行全局 uniform 声明（不包括块，不包括 sampler/image/atomic_uint）
-    // 例如：uniform mat4 ModelViewMat;
-    //        uniform vec4 ColorModulator;
-    //        layout(location=3) uniform mat4 MVP;  ← 容忍可选 layout(...) 前缀
-    // 带 layout 前缀的 non-opaque uniform 在旧代码中逃逸 UBO 包装，Vulkan target
-    // 下 shaderc 编译失败（真实缺陷）。匹配后整行删除、只取 type/name 收集进 UBO，
-    // location 前缀自然剥离（location 在 UBO 内无意义，且原值可能跨 stage 冲突）。
-    static UNIFORM_RE: OnceLock<Regex> = OnceLock::new();
-    let uniform_re = UNIFORM_RE.get_or_init(|| {
+/// 计数规则：
+/// - 独立 counter（从 0 开始），与 in/out 的 location 空间互不冲突
+///   （spike_a 实测：`layout(location=0) uniform mat4` 与 `layout(location=0) in`
+///   并存合法）
+/// - 只处理单行声明 `uniform T name;`（可选 layout(...) 前缀、可选精度限定符）
+/// - 跳过 opaque 类型（sampler/image/atomic_uint——sampler 不需要 location，
+///   binding 由 glslang 自动分配）
+/// - 跳过 block 声明（`uniform Name {` 无分号结尾，天然不匹配；单行 block
+///   `uniform Block { mat4 m; };` 因 `\s*;` 紧跟在 name 之后的要求而不匹配）
+/// - 已有 location 的声明保留原值，并推进 counter 到 location+1（避免冲突）
+/// - 多行声明（如 `uniform mat4\nModelViewMat;`）不注入：无法安全改写行首，
+///   此类 shader 走 string_pass 兜底
+fn inject_missing_uniform_locations(result: &mut String) {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
         Regex::new(
-            r"(?m)^\s*(?:layout\s*\([^)]*\)\s*)?uniform\s+(?P<type>[a-zA-Z_][\w]*(\s*\*\s*)?(?:[a-zA-Z_][\w]*\s*)?)\s+(?P<name>[a-zA-Z_][\w]*)\s*;"
-        ).unwrap()
+            r"(?m)^(?P<indent>\s*)(?:layout\s*\(\s*(?P<layout_qual>[^)]*)\s*\)\s*)?uniform\s+(?P<type>(?:highp\s+|mediump\s+|lowp\s+)?[a-zA-Z_][\w]*)\s+(?P<name>[a-zA-Z_][\w]*)\s*;"
+        )
+        .unwrap()
     });
 
-    let mut uniforms = Vec::new();
-    // cleaned_lines 收集非 uniform 行（uniform 声明行被删除）
-    let mut cleaned_lines = Vec::new();
+    let mut counter: u32 = 0;
+    let mut injected = false;
+    let mut modified = String::with_capacity(result.len());
 
-    for line in src.lines() {
-        if let Some(caps) = uniform_re.captures(line) {
-            let ty = caps.name("type").unwrap().as_str();
-            let name = caps.name("name").unwrap().as_str();
-            // 排除不透明类型：sampler, image, atomic_uint, buffer（不透明）
-            if !ty.contains("sampler")
-                && !ty.contains("image")
-                && !ty.contains("atomic_uint")
-                && !ty.contains("buffer")
-            {
-                uniforms.push((ty.to_string(), name.to_string()));
-                continue; // 删除此行（不加入 cleaned_lines）
+    for line in result.lines() {
+        if let Some(caps) = re.captures(line) {
+            let indent = caps.name("indent").map(|m| m.as_str()).unwrap_or("");
+            let layout_qual = caps.name("layout_qual").map(|m| m.as_str()).unwrap_or("");
+            let ty = caps.name("type").map(|m| m.as_str()).unwrap_or("");
+            let name = caps.name("name").map(|m| m.as_str()).unwrap_or("");
+
+            // 跳过 opaque 类型（sampler/image/atomic_uint）：不需要 location
+            if ty.contains("sampler") || ty.contains("image") || ty.contains("atomic_uint") {
+                modified.push_str(line);
+                modified.push('\n');
+                continue;
             }
+
+            // 已有 location：保留原值，推进 counter 避免后续注入冲突
+            if layout_qual.contains("location") {
+                if let Some(loc) = parse_layout_location(layout_qual) {
+                    counter = counter.max(loc + 1);
+                }
+                modified.push_str(line);
+                modified.push('\n');
+                continue;
+            }
+
+            // 注入 layout(location=N)。已有非 location 限定符（如 column_major）
+            // 保留并追加 location，避免丢失矩阵布局信息。
+            let new_line = if layout_qual.trim().is_empty() {
+                format!("{}layout(location={}) uniform {} {};", indent, counter, ty, name)
+            } else {
+                format!(
+                    "{}layout({}, location={}) uniform {} {};",
+                    indent,
+                    layout_qual.trim(),
+                    counter,
+                    ty,
+                    name
+                )
+            };
+            modified.push_str(&new_line);
+            modified.push('\n');
+            counter += 1;
+            injected = true;
+        } else {
+            modified.push_str(line);
+            modified.push('\n');
         }
-        cleaned_lines.push(line);
     }
 
-    if uniforms.is_empty() {
-        return src.to_string(); // 无变化
+    // 移除末尾多余的换行
+    if modified.ends_with('\n') && !result.ends_with('\n') {
+        modified.pop();
     }
 
-    // 用 cleaned_lines（已删除 uniform 行）拼成 cleaned_src。
-    // lines() 会丢弃末尾换行，用 join 重建；若原始 src 末尾有换行则补回。
-    let mut cleaned_src = cleaned_lines.join("\n");
-    if src.ends_with('\n') && !cleaned_src.ends_with('\n') {
-        cleaned_src.push('\n');
+    if injected {
+        log::debug!("[ShaderTranslator] preprocess 注入了 standalone uniform location");
     }
 
-    // 确定 binding（在 cleaned_src 上查找，避免与已有 UBO/SSBO/sampler binding 冲突）
-    let binding = find_available_binding(&cleaned_src);
-
-    // 构建 UBO 声明（无实例名，成员全局可见；块名按 stage 区分避免跨 stage冲突）
-    let block_name = uniform_block_name(stage);
-    let mut ubo_decl = format!(
-        "layout(std140, binding = {}) uniform {} {{\n",
-        binding, block_name
-    );
-    for (ty, name) in &uniforms {
-        ubo_decl.push_str(&format!("    {} {};\n", ty, name));
-    }
-    ubo_decl.push_str("};\n");
-
-    // 插入 UBO 声明到 #version 行之后
-    let insert_pos = find_insert_position(&cleaned_src);
-    let mut final_result = String::with_capacity(cleaned_src.len() + ubo_decl.len());
-    final_result.push_str(&cleaned_src[..insert_pos]);
-    final_result.push_str(&ubo_decl);
-    final_result.push_str(&cleaned_src[insert_pos..]);
-
-    final_result
+    *result = modified;
 }
 
 /// 扫描源中所有已使用的 binding 编号（包括 UBO、SSBO、sampler 等），
@@ -626,10 +607,8 @@ fn find_available_binding(src: &str) -> u32 {
     let binding_re = BINDING_RE.get_or_init(|| Regex::new(r"binding\s*=\s*(\d+)").unwrap());
     let mut used = FxHashSet::default();
     for caps in binding_re.captures_iter(src) {
-        if let Some(m) = caps.get(1) {
-            if let Ok(val) = m.as_str().parse::<u32>() {
-                used.insert(val);
-            }
+        if let Some(val) = caps.get(1).and_then(|m| m.as_str().parse::<u32>().ok()) {
+            used.insert(val);
         }
     }
     let mut candidate = 0;
@@ -645,13 +624,12 @@ fn find_insert_position(src: &str) -> usize {
         // 找到该行结束位置（包括换行符）
         let line_end = version_line.as_ptr() as usize + version_line.len() - src.as_ptr() as usize;
         // 加上换行符偏移（如果有）
-        let pos = line_end
+        line_end
             + if src[line_end..].starts_with('\n') {
                 1
             } else {
                 0
-            };
-        pos
+            }
     } else {
         0
     }
@@ -709,10 +687,10 @@ mod tests {
 
     #[test]
     fn test_force_glsl_version_keep_460() {
-        // #version 460 保持版本号，仅规范化为 core
+        // #version 460 也统一升级到 450 core（OpenGL target 统一 450 策略）
         let mut result = "#version 460\nvoid main() {}".to_string();
         force_glsl_version(&mut result);
-        assert!(result.starts_with("#version 460 core"));
+        assert!(result.starts_with("#version 450 core"));
     }
 
     #[test]
@@ -790,17 +768,21 @@ mod tests {
         let result = preprocess(input, 0x8B31);
         // 版本升级到 450 core（layout 限定符需要 420+）
         assert!(result.contains("#version 450 core"));
-        // UBO 应有 binding。注意：独立 uniform MVP 被 convert_uniforms_to_ubo 包装成
-        // UniformBlock（binding=0），原生 MyBlock 被 inject_missing_bindings 分配 binding=1。
-        // 只验证 MyBlock 有 binding，不关心具体值（避免 binding 编号分配顺序耦合）。
+        // UBO 应有 binding（无 UniformBlock 包装占位，MyBlock 从 binding=0 开始）
         assert!(
-            result.contains("layout(std140, binding=") && result.contains("uniform MyBlock"),
-            "MyBlock 应有 binding，实际: {}",
+            result.contains("layout(std140, binding=0) uniform MyBlock"),
+            "MyBlock 应有 binding=0，实际: {}",
             result
         );
         // in/out 应有 location，且 in/out 独立计数（都从 0 开始）
         assert!(result.contains("layout(location=0) in vec4 color;"));
         assert!(result.contains("layout(location=0) out vec4 fragColor;"));
+        // standalone uniform 保留原样并注入 location（独立计数空间，从 0 开始）
+        assert!(
+            result.contains("layout(location=0) uniform mat4 MVP;"),
+            "MVP 应为 standalone uniform 且带 location，实际: {}",
+            result
+        );
     }
 
     /// 验证移除 MC moj_import 产生的 /*#version N*/ 注释
@@ -843,75 +825,200 @@ mod tests {
         assert!(result.contains("layout(location=0) out vec4 vertexColor;"));
     }
 
-    /// Bug 1 回归：UBO 声明块内部成员名不应被替换成 UniformBlock.name（带点号非法）
-    /// 复现日志中的 "unexpected DOT, expecting COMMA or SEMICOLON" 错误。
+    /// 验证 non-opaque standalone uniform 被注入 location（OpenGL target 要求）
+    /// 且保留为 standalone 声明（不再包装进 UBO）
     #[test]
-    fn test_convert_uniforms_ubo_member_no_dot() {
-        let input = "#version 150\n\
+    fn test_inject_uniform_locations_basic() {
+        let input = "#version 450 core\n\
             uniform mat4 ModelViewMat;\n\
-            uniform mat4 ProjMat;\n\
+            uniform vec4 ColorModulator;\n\
+            uniform float FogStart;\n\
+            void main() {}\n";
+        let mut result = input.to_string();
+        inject_missing_uniform_locations(&mut result);
+        assert!(
+            result.contains("layout(location=0) uniform mat4 ModelViewMat;"),
+            "got: {}",
+            result
+        );
+        assert!(
+            result.contains("layout(location=1) uniform vec4 ColorModulator;"),
+            "got: {}",
+            result
+        );
+        assert!(
+            result.contains("layout(location=2) uniform float FogStart;"),
+            "got: {}",
+            result
+        );
+        // standalone 声明保留（无 UBO 包装）
+        assert!(result.contains("uniform mat4 ModelViewMat"), "got: {}", result);
+        assert!(!result.contains("UniformBlock"), "got: {}", result);
+    }
+
+    /// 验证 opaque（sampler/image/atomic_uint）不注入 location，且不占用计数
+    #[test]
+    fn test_inject_uniform_locations_skips_opaque() {
+        let input = "#version 450 core\n\
+            uniform sampler2D Tex;\n\
+            uniform mat4 MVP;\n\
+            uniform image2D img;\n\
+            uniform atomic_uint counter;\n\
+            uniform vec3 scale;\n\
+            void main() {}\n";
+        let mut result = input.to_string();
+        inject_missing_uniform_locations(&mut result);
+        assert!(
+            result.contains("uniform sampler2D Tex;"),
+            "sampler 不应有 location，got: {}",
+            result
+        );
+        assert!(
+            result.contains("uniform image2D img;"),
+            "image 不应有 location，got: {}",
+            result
+        );
+        assert!(
+            result.contains("uniform atomic_uint counter;"),
+            "atomic_uint 不应有 location，got: {}",
+            result
+        );
+        // sampler/image/atomic 不占用计数：MVP=0、scale=1
+        assert!(
+            result.contains("layout(location=0) uniform mat4 MVP;"),
+            "got: {}",
+            result
+        );
+        assert!(
+            result.contains("layout(location=1) uniform vec3 scale;"),
+            "got: {}",
+            result
+        );
+    }
+
+    /// 验证已有 location 的 uniform 保留原值并推进 counter
+    #[test]
+    fn test_inject_uniform_locations_skips_existing() {
+        let input = "#version 450 core\n\
+            layout(location=5) uniform mat4 MVP;\n\
+            uniform vec4 color;\n\
+            void main() {}\n";
+        let mut result = input.to_string();
+        inject_missing_uniform_locations(&mut result);
+        assert!(
+            result.contains("layout(location=5) uniform mat4 MVP;"),
+            "已有 location 应保留，got: {}",
+            result
+        );
+        // counter 推进到 6，避免与已有 location=5 冲突
+        assert!(
+            result.contains("layout(location=6) uniform vec4 color;"),
+            "后续 uniform 应从 location=6 开始，got: {}",
+            result
+        );
+    }
+
+    /// 验证 uniform location 与 in/out location 使用独立计数空间
+    /// （spike_a 实测：两者可共存且都从 0 开始）
+    #[test]
+    fn test_inject_uniform_locations_independent_from_varying() {
+        let input = "#version 450 core\n\
+            uniform mat4 MVP;\n\
+            in vec3 Position;\n\
+            out vec4 fragColor;\n\
+            void main() {}\n";
+        let result = preprocess(input, 0x8B31);
+        assert!(
+            result.contains("layout(location=0) uniform mat4 MVP;"),
+            "uniform location 独立空间从 0 开始，got: {}",
+            result
+        );
+        assert!(
+            result.contains("layout(location=0) in vec3 Position;"),
+            "in location 独立空间从 0 开始，got: {}",
+            result
+        );
+        assert!(
+            result.contains("layout(location=0) out vec4 fragColor;"),
+            "out location 独立空间从 0 开始，got: {}",
+            result
+        );
+    }
+
+    /// 验证 VS 的 attribute/varying 老语法迁移为 in/out
+    #[test]
+    fn test_migrate_legacy_variables_vertex() {
+        let input = "#version 150\n\
+            attribute vec3 Position;\n\
+            attribute vec4 Color;\n\
+            varying vec4 vertexColor;\n\
+            void main() {\n\
+                gl_Position = vec4(Position, 1.0);\n\
+                vertexColor = Color;\n\
+            }\n";
+        let result = preprocess(input, 0x8B31);
+        assert!(
+            !result.contains("attribute"),
+            "attribute 应迁移为 in，got: {}",
+            result
+        );
+        assert!(
+            !result.contains("varying"),
+            "varying 应迁移为 out，got: {}",
+            result
+        );
+        // 迁移后仍应注入 location（in/out 独立计数）
+        assert!(
+            result.contains("layout(location=0) in vec3 Position;"),
+            "got: {}",
+            result
+        );
+        assert!(
+            result.contains("layout(location=1) in vec4 Color;"),
+            "got: {}",
+            result
+        );
+        assert!(
+            result.contains("layout(location=0) out vec4 vertexColor;"),
+            "got: {}",
+            result
+        );
+    }
+
+    /// 验证 FS 的 varying 迁移为 in（VS 的 attribute 不处理）
+    #[test]
+    fn test_migrate_legacy_variables_fragment() {
+        let input = "#version 150\n\
+            varying vec4 vertexColor;\n\
+            void main() {\n\
+                gl_FragColor = vertexColor;\n\
+            }\n";
+        let result = preprocess(input, 0x8B30);
+        assert!(
+            result.contains("layout(location=0) in vec4 vertexColor;"),
+            "FS 的 varying 应迁移为 in 并注入 location，got: {}",
+            result
+        );
+        assert!(!result.contains("varying"), "got: {}", result);
+    }
+
+    /// 验证 attribute/varying 迁移不误伤 in/out 新语法和 sampler2D 类型
+    #[test]
+    fn test_migrate_legacy_variables_no_collateral() {
+        let input = "#version 330\n\
             in vec3 Position;\n\
             out vec4 vertexColor;\n\
-            void main() {\n\
-                gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);\n\
-                vertexColor = vec4(1.0);\n\
-            }\n";
+            uniform sampler2D Sampler0;\n\
+            void main() {}\n";
         let result = preprocess(input, 0x8B31);
-        // UBO 声明块内部成员名应保持原样（不带点号）
-        assert!(
-            result.contains("mat4 ModelViewMat;"),
-            "UBO 成员名应保持原样，实际: {}",
-            result
-        );
-        assert!(
-            result.contains("mat4 ProjMat;"),
-            "UBO 成员名应保持原样，实际: {}",
-            result
-        );
-        // 不应出现带点号的成员声明（Bug 1 的症状）
-        assert!(
-            !result.contains("mat4 UniformBlock."),
-            "UBO 成员名不应带点号（Bug 1），实际: {}",
-            result
-        );
+        assert!(result.contains("in vec3 Position;"), "got: {}", result);
+        assert!(result.contains("out vec4 vertexColor;"), "got: {}", result);
+        assert!(result.contains("sampler2D"), "got: {}", result);
     }
 
-    /// Bug 2 回归：原始 uniform 声明行应被删除（不残留）。
-    /// 无实例名 UBO 方案：引用保持原样（全局可见），不替换为 UniformBlock.name。
-    #[test]
-    fn test_convert_uniforms_original_line_removed() {
-        let input = "#version 150\n\
-            uniform mat4 ModelViewMat;\n\
-            in vec3 Position;\n\
-            void main() {\n\
-                gl_Position = ModelViewMat * vec4(Position, 1.0);\n\
-            }\n";
-        let result = preprocess(input, 0x8B31);
-        // 原始独立 uniform 声明行应被删除（不残留 `uniform mat4 ModelViewMat;`）
-        // UBO 块内的成员声明不是 `uniform mat4`，是 `mat4 ModelViewMat;`
-        assert!(
-            !result.contains("uniform mat4 ModelViewMat;"),
-            "原始 uniform 声明行应被删除（Bug 2），实际: {}",
-            result
-        );
-        // 无实例名 UBO：引用保持原样（成员全局可见），不替换为 UniformBlock.name
-        assert!(
-            result.contains("gl_Position = ModelViewMat *"),
-            "引用应保持原样（无实例名 UBO 成员全局可见），实际: {}",
-            result
-        );
-        // 不应出现 UniformBlock. 前缀引用（无实例名方案的特征）
-        assert!(
-            !result.contains("UniformBlock."),
-            "不应替换为 UniformBlock.name（无实例名方案），实际: {}",
-            result
-        );
-    }
-
-    /// Bug 3 回归：独立 uniform UBO 与原生 UBO 的 binding 不应冲突
-    /// 场景：shader 同时有独立 uniform 和原生 layout(std140) UBO，
-    /// convert_uniforms_to_ubo 给 UniformBlock 分配 binding=0，
-    /// inject_missing_bindings 给原生 UBO 也应分配不冲突的 binding。
+    /// 回归：standalone uniform 与原生 UBO 共存（standalone 不再包装 UBO）
+    /// 原生 UBO 的 binding 从 0 开始（无 UniformBlock 占位），
+    /// standalone uniform 带 location 且与 in/out 空间独立
     #[test]
     fn test_ubo_binding_no_conflict_with_native_ubo() {
         let input = "#version 330\n\
@@ -926,40 +1033,24 @@ mod tests {
                 vertexColor = ColorModulator;\n\
             }\n";
         let result = preprocess(input, 0x8B31);
-        // 两个 UBO 应有不同 binding
-        // UniformBlock（独立 uniform 包装）和 DynamicTransforms（原生 UBO）
-        // 验证两者 binding 编号不同
-        // 注意：binding 写法可能带空格（`binding = 0`，convert_uniforms_to_ubo 生成）
-        // 或不带空格（`binding=1`，inject_missing_bindings 生成），用正则统一提取。
-        let binding_num_re = regex::Regex::new(r"binding\s*=\s*(\d+)").unwrap();
-        let mut nums: Vec<u32> = Vec::new();
-        for line in result.lines() {
-            if line.contains("uniform") && line.contains("binding") {
-                if let Some(caps) = binding_num_re.captures(line) {
-                    if let Ok(b) = caps[1].parse::<u32>() {
-                        nums.push(b);
-                    }
-                }
-            }
-        }
+        // 原生 UBO 从 binding=0 开始（无 UniformBlock 包装占位）
         assert!(
-            nums.len() >= 2,
-            "应有至少 2 个 UBO（UniformBlock + DynamicTransforms），实际编号: {:?}\n{}",
-            nums,
+            result.contains("layout(std140, binding=0) uniform DynamicTransforms"),
+            "got: {}",
             result
         );
-        let unique: rustc_hash::FxHashSet<u32> = nums.iter().copied().collect();
-        assert_eq!(
-            nums.len(),
-            unique.len(),
-            "UBO binding 编号不应重复（Bug 3），实际编号: {:?}\n{}",
-            nums,
+        // standalone uniform 保留并注入 location（不占用 binding 空间）
+        assert!(
+            result.contains("layout(location=0) uniform vec4 ColorModulator;"),
+            "got: {}",
             result
         );
+        // 不应有 UniformBlock 包装
+        assert!(!result.contains("UniformBlock"), "got: {}", result);
     }
 
     /// 复现日志中 shader 3（vertex）的完整场景：MC 核心 vertex shader
-    /// 验证修复后 preprocess 输出合法 GLSL（无点号成员名、uniform 行已删除、引用已替换）
+    /// 验证修复后 preprocess 输出合法 GLSL（standalone uniform 保留 + location 注入）
     #[test]
     fn test_mc_core_vertex_shader_preprocess() {
         let input = "#version 150\n\
@@ -975,33 +1066,31 @@ mod tests {
         let result = preprocess(input, 0x8B31);
         // 1. 版本升级
         assert!(result.contains("#version 450 core"));
-        // 2. UBO 包装：应有 UniformBlockVS 声明（vertex stage），成员名不带点号
-        assert!(result.contains("uniform UniformBlockVS"));
-        assert!(result.contains("mat4 ModelViewMat;"));
-        assert!(result.contains("mat4 ProjMat;"));
-        // 3. 原始 uniform 行已删除
-        assert!(!result.contains("uniform mat4 ModelViewMat;"));
-        assert!(!result.contains("uniform mat4 ProjMat;"));
-        // 4. 无实例名 UBO：引用保持原样（成员全局可见），不替换为 UniformBlock.name
+        // 2. standalone uniform 保留原样（无 UBO 包装），并注入独立计数的 location
+        assert!(result.contains("uniform mat4 ModelViewMat;"));
+        assert!(result.contains("uniform mat4 ProjMat;"));
+        assert!(result.contains("layout(location=0) uniform mat4 ModelViewMat;"));
+        assert!(result.contains("layout(location=1) uniform mat4 ProjMat;"));
+        assert!(
+            !result.contains("UniformBlock"),
+            "不应有 UBO 包装，实际: {}",
+            result
+        );
+        // 3. 引用保持原样
         assert!(
             result.contains("gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);"),
-            "引用应保持原样（无实例名 UBO 成员全局可见），实际: {}",
+            "引用应保持原样，实际: {}",
             result
         );
-        assert!(
-            !result.contains("UniformBlock."),
-            "不应替换为 UniformBlock.name（无实例名方案），实际: {}",
-            result
-        );
-        // 5. in/out 有 location
+        // 4. in/out 有 location
         assert!(result.contains("layout(location=0) in vec3 Position;"));
         assert!(result.contains("layout(location=1) in vec4 Color;"));
         assert!(result.contains("layout(location=0) out vec4 vertexColor;"));
     }
 
-    /// 验证 gl_VertexID → gl_VertexIndex 重命名（Vulkan target 要求）
+    /// 验证 gl_VertexID 保留原名（OpenGL target 语义，spike_e 实测）
     #[test]
-    fn test_rename_gl_vertex_id() {
+    fn test_gl_vertex_id_preserved() {
         let input = "#version 150\n\
             uniform mat4 ProjMat;\n\
             void main() {\n\
@@ -1010,20 +1099,20 @@ mod tests {
             }\n";
         let result = preprocess(input, 0x8B31);
         assert!(
-            result.contains("gl_VertexIndex"),
-            "gl_VertexID 应重命名为 gl_VertexIndex，实际: {}",
+            result.contains("gl_VertexID"),
+            "gl_VertexID 应保留原名，实际: {}",
             result
         );
         assert!(
-            !result.contains("gl_VertexID"),
-            "不应残留 gl_VertexID，实际: {}",
+            !result.contains("gl_VertexIndex"),
+            "不应出现 Vulkan 名 gl_VertexIndex，实际: {}",
             result
         );
     }
 
-    /// 验证 sampler 作为参数名被重命名（避免与 GLSL 关键字冲突）
+    /// 验证 sampler 作为参数名不再被重命名（OpenGL target 无关键字冲突 hack）
     #[test]
-    fn test_rename_sampler_param() {
+    fn test_sampler_param_preserved() {
         let input = "#version 330\n\
             uniform sampler2D Tex;\n\
             in vec2 vUV;\n\
@@ -1035,17 +1124,18 @@ mod tests {
                 fragColor = sampleNearest(Tex, vUV);\n\
             }\n";
         let result = preprocess(input, 0x8B31);
-        // sampler 作为参数名应被重命名为 u_sampler
+        // sampler 参数名应保留原样（无 u_sampler 重命名）
         assert!(
-            result.contains("u_sampler"),
-            "sampler 参数名应重命名为 u_sampler，实际: {}",
+            result.contains("sampler2D sampler, vec2 uv"),
+            "sampler 参数名应保留，实际: {}",
             result
         );
-        // sampler2D 类型名不应被替换（\b 词边界保护）
         assert!(
-            result.contains("sampler2D"),
-            "sampler2D 类型名应保留，实际: {}",
+            !result.contains("u_sampler"),
+            "不应出现 u_sampler 重命名产物，实际: {}",
             result
         );
+        // sampler2D 类型名应保留
+        assert!(result.contains("sampler2D"), "实际: {}", result);
     }
 }

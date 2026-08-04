@@ -10,15 +10,18 @@
 //! shaderc 的优势：
 //! - 高层 safe Rust API，无需手动管理 shader/program 生命周期
 //! - 内部用 C++ try/catch 兜底，即使底层 glslang 崩溃也返回 `Error` 而非 native crash
-//! - 默认 target 为 Vulkan，自动处理 VULKAN_RULES_RELAXED 等规则
 //! - `Error::CompilationError(String)` 直接携带 glslang 完整诊断信息
 //!
 //! ## 编译流程
 //!
-//! 1. preprocess：移除 #line、移除 /*#version*/ 注释、规范化版本、注入 location/binding
-//! 2. shaderc compile_into_spirv：GLSL → SPIR-V（target=Vulkan1_2, SPIRV1_5）
+//! 1. preprocess：移除 #line、移除 /*#version*/ 注释、统一版本 450 core、
+//!    迁移 attribute/varying 老语法、注入 location/binding
+//! 2. shaderc compile_into_spirv：GLSL → SPIR-V（target=OpenGL, env=450, SPIRV1_5）
 //!
-//! Vulkan target 要求：GLSL >= 140，所有 in/out 有 location，UBO/SSBO 有 binding。
+//! OpenGL target 要求（spike 实测）：桌面 GLSL >= 330，所有 in/out 有 location，
+//! UBO/SSBO 有 binding，non-opaque standalone uniform 有 location。
+//! 与 Vulkan target 不同：standalone uniform 合法（无需 UBO 包装）、
+//! gl_VertexID 保留原名、glslang 不定义 VULKAN 宏。
 //! preprocess 负责注入这些。
 
 use shaderc::{CompileOptions, Compiler, OptimizationLevel, ShaderKind, SpirvVersion};
@@ -84,12 +87,14 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
         }
     };
 
-    // 预处理 GLSL：移除 #line、移除 /*#version*/ 注释、规范化版本、注入 location/binding
-    // stage 用于给 UniformBlock 起唯一块名（UniformBlockVS/UniformBlockFS），避免跨 stage type mismatch
+    // 预处理 GLSL：移除 #line、移除 /*#version*/ 注释、统一版本 450 core、
+    // 迁移 attribute/varying、注入 location/binding
+    // stage 用于 attribute/varying → in/out 的关键字迁移（VS: attribute→in,
+    // varying→out；FS: varying→in）
     let preprocessed = crate::shader_translator::preprocess::preprocess(source, stage);
 
-    // 诊断：记录原始 shader 源码前 300 字符，确认是否有 VULKAN 条件编译
-    // 以及 #undef VULKAN 是否生效（preprocessed 中会包含 #undef VULKAN）
+    // 诊断：记录原始 shader 源码前 300 字符，确认 VULKAN 条件编译分支走向
+    // （OpenGL target 下 glslang 不定义 VULKAN 宏，spike_h 实测）
     log::debug!(
         "[ShaderTranslator] ENTERING shaderc compile for stage 0x{:04X} (source {} chars, preprocessed {} chars)",
         stage,
@@ -102,7 +107,8 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
     );
 
     // 构造编译选项
-    // - target: Vulkan 1.2（支持现代 SPIR-V 特性）
+    // - target: OpenGL 450（glslang OpenGL 语义模式，spike 实测：standalone
+    //   uniform 合法只需 location、gl_VertexID 保留原名、不定义 VULKAN 宏）
     // - optimization: Zero（保留变量名/OpName，避免优化消除名称导致 uniform 查找失败）
     let mut options = match CompileOptions::new() {
         Ok(o) => o,
@@ -115,12 +121,10 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
         }
     };
 
-    // target env: Vulkan 1.2（与下方 SPIR-V 1.5 匹配；shaderc 默认回落 Vulkan 1.0，
-    // 只支持 SPIR-V 1.0，会导致 "Invalid SPIR-V binary version 1.5 for target environment SPIR-V 1.0"）
-    options.set_target_env(
-        shaderc::TargetEnv::Vulkan,
-        shaderc::EnvVersion::Vulkan1_2 as u32,
-    );
+    // target env: OpenGL（版本 450 = 桌面 GLSL 版本号，shaderc 接受裸 u32，见 spike）。
+    // OpenGL target 要求桌面 GLSL >= 330；preprocess 已统一升级到 450 core
+    // （uniform location 注入需 430+，binding 注入需 420+，450 全覆盖）。
+    options.set_target_env(shaderc::TargetEnv::OpenGL, 450);
     // 优化级别：Zero（不做 SPIRV-Tools 优化，保留变量名/OpName/OpMemberName）。
     // 历史教训：Performance 级别的 aggressive-dce 可能消除未使用变量及其
     // OpName/OpMemberName，导致 spirv-cross 输出 fallback 名（如 _13），
@@ -131,12 +135,10 @@ pub fn compile(source: &str, stage: u32) -> Option<Vec<u32>> {
     // spirv-cross 依赖 OpName 还原变量名（如 sampler `Tex`、UBO 成员 `ModelViewMat`）。
     options.set_generate_debug_info();
     // 自动给没有显式 binding 的 uniform（包括 sampler）分配 binding point。
-    // Vulkan target 要求所有 opaque uniform（sampler/image/UBO/SSBO）必须有 binding。
-    // 桌面 GLSL 允许省略 binding（由链接器分配），preprocess 已给 UBO/SSBO 注入 binding，
-    // 但独立 sampler（如 `uniform sampler2D Tex;`）仍缺 binding，用此选项自动分配。
-    // 不会影响已有显式 binding 的 uniform。
+    // OpenGL target 下 sampler 无 binding 也能编译（spike_c 实测，glslang 自动
+    // 分配 binding=0），此选项保持显式分配，行为确定、无害。
     options.set_auto_bind_uniforms(true);
-    // 启用 SPIR-V 1.5（支持更多现代特性）
+    // 启用 SPIR-V 1.5（spike 实测 OpenGL env 下显式设置 V1_5 编译成功）
     options.set_target_spirv(SpirvVersion::V1_5);
 
     // 执行编译

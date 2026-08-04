@@ -1,11 +1,12 @@
 //! SPIR-V 翻译管线编排模块
 //!
 //! 协调以下子模块完成桌面 GLSL → GLSL ES 的完整翻译：
-//! 1. preprocess：GLSL 预处理（移除 #line、规范化版本、注入 location/binding）
-//! 2. spirv_compile：GLSL → SPIR-V 编译（shaderc, Vulkan target）
+//! 1. preprocess：GLSL 预处理（移除 #line、统一版本 450、迁移 attribute/varying、
+//!    注入 location/binding）
+//! 2. spirv_compile：GLSL → SPIR-V 编译（shaderc, OpenGL target）
 //! 3. spirv_pass：SPIR-V 中间处理 Pass（预留扩展点，当前为直通）
 //! 4. gles_compile：SPIR-V → GLSL ES 编译（spirv-cross2）
-//! 5. postprocess：GLSL ES 后处理（移除 binding、处理 outColor、precision）
+//! 5. postprocess：GLSL ES 后处理（按版本条件 strip location/binding、处理 outColor）
 
 use crate::shader_translator::{cache, gles_compile, spirv_compile, string_pass};
 
@@ -18,13 +19,8 @@ pub enum TranslationResult {
 
 /// 判断输入是否为 GLSL ES shader（#version NNN es）。
 ///
-/// ES shader 已是 GLES 语法，不应走桌面→GLES 的 Vulkan target SPIR-V 管线：
-/// - preprocess 会注入桌面语义的 layout(binding/location) 并包装 UBO，
-///   UBO 声明插在 #version 之后、precision 声明之前 → 违反 ES 规范
-///   （"default precision statement must appear before first declaration"），
-///   shaderc 报 "float requires default precision"
-/// - 版本推导按桌面语义（gles_version_candidates 把 320 当 < 330 → 输出 310 es），
-///   且 postprocess 会剥离 in/out 的 layout(location)
+/// ES shader 已是 GLES 语法，不应走桌面→GLES 的 SPIR-V 管线：
+/// - 版本推导按桌面语义（gles_version_candidates 把 320 当 < 330 → 输出 310 es）
 /// - 实测（差分测试 b01s/h01s）：VS/FS 翻译结果版本不一致
 ///   （"all shaders must use same shading language version" 链接失败）
 ///
@@ -45,8 +41,8 @@ fn is_es_shader(source: &str) -> bool {
 /// 这避免了 shader.rs 的 Failed 分支透传桌面 GLSL 给 GLES 导致崩溃。
 pub fn translate(source: &str, stage: u32) -> TranslationResult {
     // GLSL ES 输入直接透传：已是 GLES 语法，无需（也不能）走桌面→GLES 翻译。
-    // 旧行为：ES shader 被喂给 Vulkan target 管线后版本被改写（320→310 es）、
-    // location 被剥离、UBO 包装破坏 precision 声明位置，导致 link 失败。
+    // 旧行为：ES shader 被喂给 SPIR-V 管线后版本被改写（320→310 es）、
+    // location 被剥离，导致 link 失败。
     if is_es_shader(source) {
         log::debug!(
             "[ShaderTranslator] GLSL ES input detected (stage 0x{:04X}), passing through unchanged",
@@ -289,8 +285,8 @@ void main() {
 
     #[test]
     fn test_ubo_shader() {
-        // MC vanilla 风格的 standalone uniform（preprocess 会转成 UniformBlockVS，
-        // postprocess 再拆解回 standalone uniform）
+        // MC vanilla 风格的 standalone uniform（OpenGL target 下原生保留为
+        // standalone uniform，无需 UBO 包装/拆解往返）
         let src = r#"#version 330
 uniform mat4 ModelViewMat;
 uniform vec4 ColorModulator;
@@ -312,13 +308,11 @@ void main() {
             translated.contains("ColorModulator"),
             "uniform ColorModulator 应保留"
         );
-        // GLES 规范规定 UBO 成员没有 location，MC 通过 glGetUniformLocation
-        // 按成员名查询返回 -1。postprocess 必须把 UniformBlockVS/FS/Other
-        // 拆解为 standalone uniform（`uniform mat4 ModelViewMat;`），
-        // MC 才能查询到 location。
+        // standalone uniform 原生保留（无 UBO 包装/拆解往返），
+        // MC 通过 glGetUniformLocation 按名查询可命中。
         assert!(
             !translated.contains("uniform UniformBlock"),
-            "不应有 UniformBlock 块声明（应拆解为 standalone uniform），got: {}",
+            "不应有 UniformBlock 块声明（standalone uniform 原生保留），got: {}",
             translated
         );
         assert!(
@@ -442,11 +436,10 @@ void main() {
     #[test]
     fn test_es_shader_passes_through_unchanged() {
         // 差分测试 b01s/h01s 用例模板：GLSL ES 输入必须原样透传，不走
-        // 桌面→GLES 的 Vulkan target SPIR-V 管线。
+        // 桌面→GLES 的 SPIR-V 管线。
         // 旧行为（bug）：ES shader 被喂给 preprocess（注入桌面语义的
-        // location/binding、包装 UBO）+ shaderc Vulkan target 编译，
-        // 导致 glLinkProgram 报 "all shaders must use same shading language
-        // version"、shaderc 报 "float requires default precision"。
+        // location/binding）+ shaderc 编译，导致 glLinkProgram 报 "all shaders
+        // must use same shading language version"。
         let vs = r#"#version 320 es
 layout(location=0) in vec2 aPos;
 void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
