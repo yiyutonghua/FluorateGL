@@ -138,10 +138,10 @@ fn translate_fragment_with_multiple_samplers_succeeds() {
     let result = translate(src, GL_FRAGMENT_SHADER);
     match result {
         TranslationResult::Translated(out) => {
-            // binding 应被后处理移除
+            // 320 es 保留 binding（ES 3.1+ 合法，spike 实测），sampler 声明保留
             assert!(
-                !out.contains("binding"),
-                "binding should be removed: {}",
+                out.contains("Sampler0") && out.contains("Sampler1"),
+                "sampler 应保留: {}",
                 out
             );
         }
@@ -224,8 +224,15 @@ fn translate_output_contains_gles_version() {
 
 #[test]
 fn translate_output_contains_precision() {
-    let src = "#version 330 core\nvoid main() { gl_Position = vec4(1.0); }\n";
-    let result = translate(src, GL_VERTEX_SHADER);
+    // spirv-cross 在 es_default_float/int_precision_highp=true 下自动输出 precision
+    // （FS 有、VS 无且合法——VS 的 float/int 默认精度即 highp，spike 实测）。
+    // 用 fragment shader 验证 FS 输出带 precision。
+    let src = "#version 330 core\n\
+               uniform sampler2D tex;\n\
+               in vec2 uv;\n\
+               out vec4 fragColor;\n\
+               void main() { fragColor = texture(tex, uv); }\n";
+    let result = translate(src, GL_FRAGMENT_SHADER);
     if let TranslationResult::Translated(out) = result {
         assert!(
             out.contains("precision highp float;"),
@@ -239,7 +246,31 @@ fn translate_output_contains_precision() {
 }
 
 #[test]
-fn translate_output_does_not_contain_binding() {
+fn translate_output_does_not_contain_binding_in_300_fallback() {
+    // 320 主路径保留 binding（ES 3.1+ 合法）；仅在 300 es 回退时移除。
+    // 此测试直接验证 300 es 的编译产物（通过 gles_compile 层）——
+    // spirv_pass 层默认输出 320，binding 保留（见 translate_output_keeps_binding）。
+    let src = "#version 450\n\
+               layout(binding = 0) uniform sampler2D tex;\n\
+               layout(location = 0) in vec2 uv;\n\
+               layout(location = 0) out vec4 fragColor;\n\
+               void main() { fragColor = texture(tex, uv); }\n";
+    // 先编译 SPIR-V，再以 300 es 输出验证 binding 移除（300 条件 strip）
+    let spv = spirv_compile::compile(src, GL_FRAGMENT_SHADER)
+        .expect("SPIR-V compile failed");
+    let es300 = fluorategl::shader_translator::gles_compile::compile(&spv, 300)
+        .expect("300 es output failed");
+    assert!(
+        !es300.contains("binding"),
+        "300 es 应移除 binding: {}",
+        es300
+    );
+}
+
+#[test]
+fn translate_output_keeps_binding_in_320() {
+    // 320 es 保留 binding（ES 3.1+ 支持，spike_c 实测 spirv-cross 输出
+    // layout(binding = 0) 且 11/11 通过）
     let src = "#version 450\n\
                layout(binding = 0) uniform sampler2D tex;\n\
                layout(location = 0) in vec2 uv;\n\
@@ -248,8 +279,8 @@ fn translate_output_does_not_contain_binding() {
     let result = translate(src, GL_FRAGMENT_SHADER);
     if let TranslationResult::Translated(out) = result {
         assert!(
-            !out.contains("binding"),
-            "binding should be removed: {}",
+            out.contains("binding"),
+            "320 应保留 binding: {}",
             out
         );
     } else {

@@ -91,11 +91,12 @@ fn preprocess_keeps_450_unchanged() {
 
 #[test]
 fn preprocess_keeps_460_unchanged() {
+    // #version 460 也统一升级到 450 core（OpenGL target 统一 450 策略）
     let src = "#version 460 core\nvoid main() {}\n";
     let result = preprocess::preprocess(src, 0x8B31);
     assert!(
-        result.starts_with("#version 460 core"),
-        "expected 460 unchanged, got: {}",
+        result.starts_with("#version 450 core"),
+        "expected 460 upgraded to 450, got: {}",
         result
     );
 }
@@ -278,130 +279,110 @@ fn preprocess_skips_existing_location_on_in_out() {
     assert!(result.contains("layout(location=0) out vec4 fragColor;"));
 }
 
-// ============ preprocess: uniform 处理（UBO 包装） ============
+// ============ preprocess: uniform 处理（standalone 保留 + location 注入） ============
 
 #[test]
 fn preprocess_packs_non_opaque_uniforms_into_ubo() {
-    // Vulkan target 拒绝独立 non-opaque uniform（必须包装进 UBO），
-    // 不注入 location（7a39023/bae79dc）。块名按 stage 命名（VS→UniformBlockVS），
-    // binding 从 0 开始（无已有 binding 时）。
+    // OpenGL target：standalone uniform 原生合法（无需 UBO 包装），
+    // 注入独立计数的 location（与 in/out 空间隔离）
     let src = "#version 330\nuniform mat4 MVP;\nuniform vec3 color;\nvoid main() {}\n";
     let result = preprocess::preprocess(src, 0x8B31);
     assert!(
-        result.contains("layout(std140, binding = 0) uniform UniformBlockVS"),
-        "expected UBO wrapper, got: {}",
+        result.contains("layout(location=0) uniform mat4 MVP;"),
+        "MVP 应有 location=0，got: {}",
         result
     );
     assert!(
-        result.contains("mat4 MVP;"),
-        "MVP member should be in UBO, got: {}",
+        result.contains("layout(location=1) uniform vec3 color;"),
+        "color 应有 location=1，got: {}",
         result
     );
+    // standalone 声明保留（不包装 UBO）
     assert!(
-        result.contains("vec3 color;"),
-        "color member should be in UBO, got: {}",
-        result
-    );
-    assert!(
-        !result.contains("layout(location="),
-        "location should not be injected, got: {}",
+        !result.contains("UniformBlock"),
+        "不应有 UBO 包装，got: {}",
         result
     );
 }
 
 #[test]
 fn preprocess_skips_sampler_uniform_location_injection() {
-    // sampler 是 opaque，不应注入 location（binding 由 shaderc auto_bind_uniforms 分配）；
-    // non-opaque MVP 被包装进 UBO 而非注入 location
+    // sampler 是 opaque，不注入 location（glslang 自动分配 binding）；
+    // non-opaque MVP 注入 location
     let src = "#version 330\nuniform sampler2D tex;\nuniform mat4 MVP;\nvoid main() {}\n";
     let result = preprocess::preprocess(src, 0x8B31);
     assert!(
-        !result.contains("layout(location=0) uniform sampler2D"),
-        "sampler should not get location, got: {}",
+        result.contains("uniform sampler2D tex;"),
+        "sampler 应为裸声明（无 location 前缀），got: {}",
         result
     );
     assert!(
-        result.contains("mat4 MVP;"),
-        "MVP should be packed into UBO, got: {}",
-        result
-    );
-    assert!(
-        !result.contains("layout(location="),
-        "location should not be injected, got: {}",
+        result.contains("layout(location=0) uniform mat4 MVP;"),
+        "MVP 应注入 location=0，got: {}",
         result
     );
 }
 
 #[test]
 fn preprocess_skips_texture_and_image_uniforms() {
-    // texture2D/image2D 无 location（负断言，旧语义保留）；
-    // scale 被包装进 UBO 而非注入 location
-    let src = "#version 330\nuniform texture2D tex;\nuniform image2D img;\nuniform float scale;\nvoid main() {}\n";
+    // opaque 类型（sampler/image）无 location；
+    // scale 注入 location
+    let src = "#version 330\nuniform isampler2D tex;\nuniform image2D img;\nuniform float scale;\nvoid main() {}\n";
     let result = preprocess::preprocess(src, 0x8B31);
-    assert!(!result.contains("layout(location=0) uniform texture2D"));
-    assert!(!result.contains("layout(location=0) uniform image2D"));
     assert!(
-        result.contains("float scale;"),
-        "scale should be packed into UBO, got: {}",
+        result.contains("uniform isampler2D tex;"),
+        "isampler2D 应为裸声明（无 location 前缀），got: {}",
         result
     );
     assert!(
-        !result.contains("layout(location="),
-        "location should not be injected, got: {}",
+        result.contains("uniform image2D img;"),
+        "image2D 应为裸声明（无 location 前缀），got: {}",
+        result
+    );
+    assert!(
+        result.contains("layout(location=0) uniform float scale;"),
+        "scale 应注入 location=0（opaque 不占用计数），got: {}",
         result
     );
 }
 
 #[test]
 fn preprocess_skips_uniform_block_location_injection() {
-    // uniform block 不应注入 location（负断言保留）；
-    // scale 被包装进 UniformBlockVS（binding=0），MyBlock 由 inject_missing_bindings
-    // 分配 binding=1（UniformBlockVS 先占 0），均不出现 location
+    // uniform block 不应注入 location（block 用 binding 不用 location）；
+    // scale 是 standalone uniform，注入 location
     let src = "#version 330\nuniform MyBlock {\n    mat4 data;\n};\nuniform float scale;\nvoid main() {}\n";
     let result = preprocess::preprocess(src, 0x8B31);
-    assert!(!result.contains("layout(location=0) uniform MyBlock"));
     assert!(
-        result.contains("layout(std140, binding=1) uniform MyBlock"),
-        "MyBlock should get binding=1, got: {}",
+        result.contains("uniform MyBlock"),
+        "block 声明应保留，got: {}",
         result
     );
     assert!(
-        result.contains("float scale;"),
-        "scale should be packed into UBO, got: {}",
+        result.contains("layout(std140, binding=0) uniform MyBlock"),
+        "MyBlock 应注入 binding=0，got: {}",
         result
     );
     assert!(
-        !result.contains("layout(location="),
-        "location should not be injected, got: {}",
+        result.contains("layout(location=0) uniform float scale;"),
+        "scale 应注入 location=0，got: {}",
         result
     );
 }
 
 #[test]
 fn preprocess_skips_existing_layout_on_uniform() {
-    // 带 layout(location) 前缀的 uniform 也被包装进 UBO 且 location 剥离
-    // （gap 修复：旧 UNIFORM_RE 只匹配行首 uniform，带前缀行逃逸包装，
-    //   Vulkan target 下 shaderc 编译失败）
+    // 带 layout(location) 前缀的 uniform 保留原 location 并推进 counter，
+    // 后续无 location 的 uniform 从 location+1 开始（避免冲突）
     let src = "#version 330\nlayout(location=3) uniform mat4 MVP;\nuniform float scale;\nvoid main() {}\n";
     let result = preprocess::preprocess(src, 0x8B31);
     assert!(
-        !result.contains("layout(location=3)"),
-        "existing location should be stripped, got: {}",
+        result.contains("layout(location=3) uniform mat4 MVP;"),
+        "已有 location=3 应保留，got: {}",
         result
     );
     assert!(
-        result.contains("mat4 MVP;"),
-        "MVP should be packed into UBO, got: {}",
-        result
-    );
-    assert!(
-        result.contains("float scale;"),
-        "scale should be packed into UBO, got: {}",
-        result
-    );
-    assert!(
-        !result.contains("layout(location="),
-        "no location should remain, got: {}",
+        result.contains("layout(location=4) uniform float scale;"),
+        "scale 应从 location=4 开始（推进 counter），got: {}",
         result
     );
 }
@@ -567,6 +548,143 @@ fn test_preprocess_preserves_sampler_buffer() {
     assert!(
         !result.contains("isampler2D"),
         "samplerBuffer 不应被改写为 isampler2D, got: {}",
+        result
+    );
+}
+
+// ============ attribute/varying 老语法迁移 ============
+
+#[test]
+fn preprocess_migrates_attribute_varying_vertex() {
+    // #version 150 的 attribute/varying 老语法在 450 core 被移除
+    // （"removed in version 420"），应按 stage 迁移为 in/out
+    let src = "#version 150\n\
+               attribute vec3 Position;\n\
+               attribute vec4 Color;\n\
+               varying vec4 vertexColor;\n\
+               void main() {\n\
+                   gl_Position = vec4(Position, 1.0);\n\
+                   vertexColor = Color;\n\
+               }\n";
+    let result = preprocess::preprocess(src, 0x8B31);
+    assert!(
+        !result.contains("attribute"),
+        "attribute 应迁移为 in，got: {}",
+        result
+    );
+    assert!(
+        !result.contains("varying"),
+        "varying 应迁移为 out，got: {}",
+        result
+    );
+    // 迁移后的 in/out 仍注入 location（in/out 独立计数）
+    assert!(result.contains("layout(location=0) in vec3 Position;"));
+    assert!(result.contains("layout(location=1) in vec4 Color;"));
+    assert!(result.contains("layout(location=0) out vec4 vertexColor;"));
+}
+
+#[test]
+fn preprocess_migrates_varying_fragment() {
+    // FS 的 varying 迁移为 in
+    let src = "#version 150\n\
+               varying vec4 vertexColor;\n\
+               void main() {\n\
+                   gl_FragColor = vertexColor;\n\
+               }\n";
+    let result = preprocess::preprocess(src, 0x8B30);
+    assert!(
+        result.contains("layout(location=0) in vec4 vertexColor;"),
+        "FS 的 varying 应迁移为 in 并注入 location，got: {}",
+        result
+    );
+    assert!(!result.contains("varying"), "got: {}", result);
+}
+
+#[test]
+fn preprocess_legacy_attribute_with_layout_prefix() {
+    // 带 layout 前缀的 attribute 也应迁移（如 Sodium 等 mod 的 150 语法）
+    let src = "#version 150\n\
+               layout(location=0) attribute vec3 Position;\n\
+               void main() {\n\
+                   gl_Position = vec4(Position, 1.0);\n\
+               }\n";
+    let result = preprocess::preprocess(src, 0x8B31);
+    assert!(
+        result.contains("layout(location=0) in vec3 Position;"),
+        "带 layout 前缀的 attribute 应迁移为 in，got: {}",
+        result
+    );
+    assert!(!result.contains("attribute"), "got: {}", result);
+}
+
+#[test]
+fn preprocess_new_syntax_untouched() {
+    // in/out 新语法不应被迁移逻辑影响
+    let src = "#version 330\n\
+               in vec3 Position;\n\
+               out vec4 vertexColor;\n\
+               uniform sampler2D Sampler0;\n\
+               void main() {}\n";
+    let result = preprocess::preprocess(src, 0x8B31);
+    assert!(result.contains("in vec3 Position;"), "got: {}", result);
+    assert!(result.contains("out vec4 vertexColor;"), "got: {}", result);
+    assert!(result.contains("sampler2D"), "got: {}", result);
+}
+
+// ============ uniform location 注入 ============
+
+#[test]
+fn preprocess_injects_uniform_locations_independent_of_varying() {
+    // uniform location 独立计数空间（与 in/out 不冲突，spike_a 实测）
+    let src = "#version 330\n\
+               uniform mat4 ProjMat;\n\
+               uniform vec4 ColorModulator;\n\
+               in vec3 Position;\n\
+               out vec4 vertexColor;\n\
+               void main() {\n\
+                   gl_Position = ProjMat * vec4(Position, 1.0);\n\
+                   vertexColor = ColorModulator;\n\
+               }\n";
+    let result = preprocess::preprocess(src, 0x8B31);
+    assert!(result.contains("layout(location=0) uniform mat4 ProjMat;"));
+    assert!(result.contains("layout(location=1) uniform vec4 ColorModulator;"));
+    // in/out 也各自从 0 开始（独立空间）
+    assert!(result.contains("layout(location=0) in vec3 Position;"));
+    assert!(result.contains("layout(location=0) out vec4 vertexColor;"));
+}
+
+#[test]
+fn preprocess_uniform_location_skips_opaque_and_blocks() {
+    // opaque（sampler/image/atomic）与 block 不注入 uniform location；
+    // 非 opaque standalone uniform 注入 location
+    let src = "#version 330\n\
+               uniform sampler2D Tex;\n\
+               uniform image2D img;\n\
+               uniform atomic_uint counter;\n\
+               layout(std140) uniform MyBlock {\n\
+                   mat4 data;\n\
+               };\n\
+               uniform float FogStart;\n\
+               void main() {}\n";
+    let result = preprocess::preprocess(src, 0x8B31);
+    assert!(
+        result.contains("uniform sampler2D Tex;"),
+        "sampler 不应有 location，got: {}",
+        result
+    );
+    assert!(
+        result.contains("uniform image2D img;"),
+        "image 不应有 location，got: {}",
+        result
+    );
+    assert!(
+        result.contains("layout(std140, binding=0) uniform MyBlock"),
+        "block 注入 binding 而非 location，got: {}",
+        result
+    );
+    assert!(
+        result.contains("layout(location=0) uniform float FogStart;"),
+        "FogStart 注入 location=0（opaque/block 不占用计数），got: {}",
         result
     );
 }

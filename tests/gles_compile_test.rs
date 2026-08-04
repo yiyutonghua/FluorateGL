@@ -208,8 +208,15 @@ fn compile_removes_binding_in_output() {
 
 #[test]
 fn compile_injects_precision_in_output() {
-    let src = "#version 330 core\nvoid main() { gl_Position = vec4(1.0); }\n";
-    let spv = make_spirv(src, spirv_compile::GL_VERTEX_SHADER);
+    // spirv-cross 在 es_default_float/int_precision_highp=true 下自动输出 precision
+    // （FS 有、VS 无且合法——VS 的 float/int 默认精度即 highp，spike 实测）。
+    // 用 fragment shader 验证 FS 输出带 precision。
+    let src = "#version 330 core\n\
+               uniform sampler2D tex;\n\
+               in vec2 uv;\n\
+               out vec4 fragColor;\n\
+               void main() { fragColor = texture(tex, uv); }\n";
+    let spv = make_spirv(src, spirv_compile::GL_FRAGMENT_SHADER);
     let result = gles_compile::compile(&spv, 300);
     assert!(result.is_ok());
     let gles_src = result.unwrap();
