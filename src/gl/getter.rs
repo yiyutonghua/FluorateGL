@@ -27,10 +27,43 @@ pub extern "C" fn glGetBooleanv(pname: u32, data: *mut u8) {
     });
 }
 
+/// 填充 GL_LINE_WIDTH_RANGE / GL_LINE_WIDTH_GRANULARITY 查询（GLES 无此 pname，
+/// 直通会产生 INVALID_ENUM 且不写 data，宿主读到垃圾值）。
+///
+/// - 0x0B22 (GL_LINE_WIDTH_RANGE) → 用 GLES 的 GL_ALIASED_LINE_WIDTH_RANGE (0x846E)
+///   查询值填充（GLES 3.0 core；llvmpipe 实测 [1,255] 与桌面一致）。
+/// - 0x0B23 (GL_LINE_WIDTH_GRANULARITY) → GLES 无对应 pname，填 0 表示无步进限制
+///   （GLES 实际接受任意线宽并钳制到 ALIASED 范围，0 为保守语义）。
+///
+/// 返回 true 表示已拦截处理（调用方应返回），false 表示非本类 pname 需直通。
+fn fill_line_width_query(pname: u32, data_f32: *mut f32) -> bool {
+    match pname {
+        0x0B22 => {
+            let mut r = [0.0f32; 2];
+            backend::with_gles_dispatch(|dispatch| unsafe {
+                (dispatch.get_float_v)(0x846E, r.as_mut_ptr());
+            });
+            unsafe {
+                *data_f32 = r[0];
+                *data_f32.add(1) = r[1];
+            }
+            true
+        }
+        0x0B23 => {
+            unsafe { *data_f32 = 0.0 };
+            true
+        }
+        _ => false,
+    }
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetFloatv(pname: u32, data: *mut f32) {
     if data.is_null() {
+        return;
+    }
+    if fill_line_width_query(pname, data) {
         return;
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -51,6 +84,14 @@ pub extern "C" fn glGetDoublev(pname: u32, data: *mut f64) {
         return;
     }
     let mut temp = [0.0f32; 4];
+    if fill_line_width_query(pname, temp.as_mut_ptr()) {
+        unsafe {
+            for (i, v) in temp.iter().enumerate() {
+                *data.add(i) = *v as f64;
+            }
+        }
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_float_v)(pname, temp.as_mut_ptr());
     });
@@ -173,7 +214,7 @@ pub extern "C" fn glIsEnabled(cap: u32) -> u8 {
         return 0;
     }
     // 与 glEnable 对称翻译（GL_PRIMITIVE_RESTART 0x8F9D → GLES 3.0
-    // GL_PRIMITIVE_RESTART_FIXED_INDEX 0x8D63，否则查询结果与启用状态错位）。
+    // GL_PRIMITIVE_RESTART_FIXED_INDEX 0x8D69，否则查询结果与启用状态错位）。
     let cap = crate::gl::exports::translate_enable_cap(cap);
     backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.is_enabled)(cap) })
 }

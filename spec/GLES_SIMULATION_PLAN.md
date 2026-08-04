@@ -53,7 +53,7 @@
 | 21 | glMultiDrawArraysIndirectCount / glMultiDrawElementsIndirectCount | 无 | 无 | GL_EXT_multi_draw_indirect（含 count 版）→ 回退 CPU 读 count 循环 | ✅ 已实现（CPU 模拟；限制：临时改绑 GL_COPY_READ_BUFFER，需恢复绑定） |
 | 22 | base vertex 家族（glDrawElementsBaseVertex 等） | 无 | 3.2 原生 | 3.2 原生 → GL_EXT_draw_elements_base_vertex → 无则降级丢 basevertex（best-effort） | ✅ 已实现（caps 检测 + 降级 + **索引指针补偿 offset_indices**） |
 | 23 | glDrawBuffer（单数） | 无 | 无 | → glDrawBuffers 转换（GL_BACK/GL_NONE/GL_COLOR_ATTACHMENTi） | ✅ 已实现（framebuffer.rs 285 行） |
-| 24 | glPrimitiveRestartIndex + GL_PRIMITIVE_RESTART | 仅 FIXED_INDEX | 仅 FIXED_INDEX | 匹配 0xFFFF/0xFFFFFFFF 时用 fixed；否则需重排 index buffer（复杂，标注） | ✅ 已实现（translate_enable_cap：GL_PRIMITIVE_RESTART 0x8F3D→GL_PRIMITIVE_RESTART_FIXED_INDEX 0x8D63；索引值匹配 fixed 语义） |
+| 24 | glPrimitiveRestartIndex + GL_PRIMITIVE_RESTART | 仅 FIXED_INDEX | 仅 FIXED_INDEX | 匹配 0xFFFF/0xFFFFFFFF 时用 fixed；否则需重排 index buffer（复杂，标注） | ✅ 已实现（translate_enable_cap：GL_PRIMITIVE_RESTART 0x8F9D→GL_PRIMITIVE_RESTART_FIXED_INDEX **0x8D69**；索引值匹配 fixed 语义） |
 | 25 | occlusion query GL_SAMPLES_PASSED | 无 | 无 | → GL_ANY_SAMPLES_PASSED（语义近似） | ✅ 已实现（translate_query_target：0x8914→0x8C2F，Begin/End/GetQueryiv 三处） |
 | 26 | timer query（glQueryCounter / glGetQueryObjecti64v / ui64v / GL_TIME_ELAPSED） | 无 | GL_EXT_disjoint_timer_query | GL_EXT_disjoint_timer_query → stub 返回 0 | ✅ stub 保留（返回 0）；**FAKE_EXTENSIONS 的 GL_EXT_disjoint_timer_query 声明已移除（矛盾解除）；GL_ARB_timer_query 保留声明 + stub** |
 | 27 | glGetQueryObjectiv | 无 | 无 | → glGetQueryObjectuiv 替代 | ✅ 已实现 |
@@ -137,3 +137,43 @@
 | 10 | **vertex_array**：便捷族 4N 最负值 clamp 修复等 | vertex_array.rs |
 
 **验收状态**（P8）：`cargo build` 零错误零警告；全量测试 **262 passed / 0 failed**（lib 93 + gles_compile 25 + spirv_compile 38 + pipeline 29 + preprocess 43 + postprocess 30 + integration 4）；clippy 18 风格警告（无新增正确性类）；静态检查 5 项全部通过。
+
+## 6. 当前无法模拟项（GLES 固有限制 / 待研究）
+
+> 差分测试（desktop GL 3.3 core vs FluorateGL，llvmpipe 双后端）确认的 GLES 平台固有限制，
+> 以及实现上暂缺能力、保留为 ⬜/stub 的待办项。白名单项已在 `tests/gl/expected_diffs.txt` 豁免。
+
+### 6.1 差分测试确认的 GLES 固有限制（白名单项）
+
+| # | 特性 | 现状 | 未来思路 |
+|---|---|---|---|
+| 1 | 无 FS 的 program 链接 | GLES 3.x 要求 FS 才能链接，桌面 3.3 规范仅要求至少一个 VS（可无 FS 链接）。翻译层无法模拟（伪造返回值属欺骗宿主），与 native GLES 行为一致（差分 e08 白名单确认） | 无低成本方案；宿主侧应保证 attach FS（真实应用均如此） |
+| 2 | glPrimitiveRestartIndex 自定义索引值 | GLES 仅固定 0xFFFF/0xFFFFFFFF（GL_PRIMITIVE_RESTART_FIXED_INDEX），无自定义索引 API；非 fixed 值被忽略（差分 a03 白名单确认） | CPU 重写索引缓冲或 index buffer 转译层（成本高）；MC 用 fixed 值无影响 |
+| 3 | glBeginConditionalRender / glEndConditionalRender 条件渲染 | GLES 无对应，no-op stub（差分白名单确认） | CPU 查询结果重放：occlusion query 完成后在 CPU 侧跳过/执行 draw（成本高） |
+| 4 | timer query（glQueryCounter / glGetQueryObjecti64v/ui64v / GL_TIMESTAMP） | GL_EXT_disjoint_timer_query 未转发，stub 返回 0；GL_ARB_timer_query 保留声明 + stub（GL_TIME_ELAPSED 走 glBeginQuery 32 位路径可用） | 转发 EXT 后缀符号（glQueryCounterEXT / glGetQueryObjectui64vEXT），GLES 3.0 的 GL_TIME_ELAPSED 64 位查询 |
+| 5 | glPolygonMode 线框渲染（GL_LINE/GL_POINT） | GLES 仅 GL_FILL，非 FILL 忽略 + 首次告警 | geometry shader 扩展（GL_EXT_geometry_shader）或 CPU 几何处理（成本高）；MC 无内置线框模式 |
+| 6 | glLogicOp / GL_COLOR_LOGIC_OP | GLES 无逻辑操作混合 | 无低成本方案；可考虑混合函数组合近似（语义不完整） |
+| 7 | 1D 纹理（GL_TEXTURE_1D 家族） | GLES 无 1D 纹理；glFramebufferTexture1D 为 stub（差分白名单确认） | 2D 高度 1 替代（glTexImage2D + 纹理坐标归一化）；MC 不使用 1D 纹理 |
+| 8 | mutable MSAA 纹理（glTexImage2DMultisample / glTexImage3DMultisample） | GLES 无 mutable MSAA，stub | glTexStorage2DMultisample 转换（immutable，语义近似；mutable 语义不可完全模拟） |
+| 9 | GL_DOUBLE 顶点类型（glVertexAttribPointer type=GL_DOUBLE） | GLES 无 double 顶点格式，直通可能报错 | 数据转译：CPU 改写 VBO（double→float 重排，成本高） |
+| 10 | S3TC 软件解压（DXT 压缩纹理） | 当前能力检测不支持时忽略上传（降级 texImage2D 失败即跳过） | 软件解压到 RGBA8 后上传（CPU 成本，MC 资源包转 ASTC 后无影响） |
+| 11 | BGRA 像素级红蓝互换（glTexImage2D format=GL_BGRA） | 当前仅 format 归一化（GL_BGRA→GL_RGBA 防崩溃），红蓝通道未重排 | CPU swizzle（成本高）；GL_EXT_texture_format_BGRA8888 若驱动支持可免转换 |
+| 12 | 多线程共享 context 的宿主 | thread_local State 隔离：跨线程资源 ID 查询 miss 时返回原始 GLES ID + 首次告警 | State 提升为 Mutex 保护（性能换健壮性）；当前单线程宿主（MC render thread）无影响 |
+| 13 | glGetShaderSource / GL_SHADER_SOURCE_LENGTH 返回原始源码 | 返回**翻译后**源码（设计决策：翻译是实现细节，宿主应重新上传时保持行为一致） | 无（设计决策项，非缺陷） |
+| 14 | base instance（glDraw*InstancedBaseInstance 系列，GL 4.2） | GLES 3.2 无核心支持，GL_EXT_base_instance 缺失时降级丢 baseinstance（capabilities 检测 + 告警） | shader 注入 gl_InstanceID 偏移（需改写 shader 与顶点数据流，成本高） |
+
+### 6.2 保留待办（原 §2 ⬜/stub 项归档，待研究）
+
+| # | 特性（§2 编号） | 现状 | 备注 |
+|---|---|---|---|
+| 1 | glTexParameterIiv / glGetTexParameterIiv（§2 #8） | ⬜ 未实现 | 3.2 原生，3.1 需 float 版本转换 |
+| 2 | glClearTexImage / glClearTexSubImage（§2 #11） | stub | GL_ARB_clear_texture 声明保留，函数 no-op；MC 不使用 |
+| 3 | glFramebufferTexture1D（§2 #13） | stub | 1D 纹理同源限制（见 6.1 #7） |
+| 4 | glGetPointerv（§2 #48） | ⬜ 未实现（3.1 缺口） | 3.2 原生 |
+| 5 | glSamplerParameterIiv 等整数参数版（§2 #49） | ⬜ 未实现（3.1 缺口） | 3.2 原生 |
+| 6 | glVertexAttribP* 打包格式（§2 #29 尾注） | 未导出 | GL 3.3 与 GLES 均有，仅缺导出面 |
+| 7 | glGetVertexAttribiv 导出（§2 #29 尾注） | 未导出（差分 SYM missing） | 便捷族查询补充 |
+| 8 | PPO 族（separate shader objects，§2 #35 相关） | glCreateShaderProgramv 已导出；glUseProgramStages 等未导出；FAKE GL_ARB_separate_shader_objects 声明已移除（矛盾解除） | MC/Sodium 不用 PPO |
+| 9 | GL_ARB_get_program_binary（glGetProgramBinary / glProgramBinary） | 未导出；FAKE 声明已移除 | GLES 3.0 有同名单函数，可按需直通导出 |
+| 10 | capabilities 字段级能力扩展：压缩格式（BPTC/RGTC/S3TC）、GL_EXT_texture_buffer、GL_EXT_texture_border_clamp（§2 #7/#9/#10） | FAKE 静态声明 vs 运行时能力校验待细化（压缩格式已做运行时检测，texture buffer/border clamp 未做） | 3.2-only 扩展建议移入 behavior_dependent 表按 caps 动态声明 |
+| 11 | glPointSize 导出（§2 #40） | 未导出 ⬜ | MC 1.21 不调用（GLSL gl_PointSize 走 shader），低优先级 |

@@ -62,7 +62,7 @@ pub(crate) fn is_unsupported_gles_cap(cap: u32) -> bool {
 /// 将桌面 GL enable cap 翻译为 GLES 对应 cap。
 ///
 /// GL_PRIMITIVE_RESTART（GL 3.1 core cap，0x8F9D）在 GLES 中不存在；
-/// GLES 3.0+ 使用 GL_PRIMITIVE_RESTART_FIXED_INDEX（0x8D63，固定索引
+/// GLES 3.0+ 使用 GL_PRIMITIVE_RESTART_FIXED_INDEX（0x8D69，固定索引
 /// 0xFFFF/0xFFFFFFFF，语义等价：两者均为"启用 primitive restart"，
 /// 区别仅在于 GLES 固定索引值且无法用 glPrimitiveRestartIndex 更改）。
 /// 同时兜底 0x8F3D（GL_PRIMITIVE_RESTART_INDEX 的枚举值，部分宿主误将其
@@ -71,7 +71,7 @@ pub(crate) fn translate_enable_cap(cap: u32) -> u32 {
     match cap {
         0x8F9D | // GL_PRIMITIVE_RESTART
         0x8F3D // GL_PRIMITIVE_RESTART_INDEX（宿主误传为 cap 时兜底翻译）
-        => 0x8D63, // GL_PRIMITIVE_RESTART_FIXED_INDEX
+        => 0x8D69, // GL_PRIMITIVE_RESTART_FIXED_INDEX（Khronos gl3.h，GLES 3.0+ 合法 cap）
         _ => cap,
     }
 }
@@ -187,6 +187,14 @@ pub extern "C" fn glEnable(cap: u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glDisable(cap: u32) {
+    // GL_DEBUG_OUTPUT：与 glEnable 对称吞掉（llvmpipe GLES 3.2 实测无此 cap，
+    // 直通产生 INVALID_ENUM；真机上也保持 debug 输出恒关闭的噪声抑制设计）
+    if cap == GL_DEBUG_OUTPUT {
+        log::debug!(
+            "[FluorateGL] glDisable(GL_DEBUG_OUTPUT) swallowed (driver debug noise suppressed)"
+        );
+        return;
+    }
     if is_unsupported_gles_cap(cap) {
         log::debug!(
             "[FluorateGL] glDisable(0x{:04X}) ignored (unsupported in GLES)",

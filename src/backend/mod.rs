@@ -161,9 +161,14 @@ fn suppress_debug_noise() {
     }
 
     // 防线 2：彻底关闭 GL_DEBUG_OUTPUT，阻止驱动通过 KHR_debug 回调输出任何消息。
-    // 直接走 dispatch（绕过拦截层 exports::glDisable），避免被任何上层逻辑拦截。
+    // 直接走 dispatch（绕过拦截层 exports::glDisable），避免被任何上层逻辑干扰。
     unsafe {
         (dispatch.disable)(GL_DEBUG_OUTPUT);
+        // 部分驱动（如 llvmpipe GLES 3.2）不支持 GL_DEBUG_OUTPUT 作为 enable cap，
+        // 直通产生 INVALID_ENUM 并污染宿主 glGetError 队列（差分测试 a00/e08/g10
+        // 实测 0x0500 残留）。首次 GL 调用时刻错误队列必为空（此前无任何 GL 调用），
+        // 立即弹出该预期错误安全且不影响宿主错误检测。
+        let _ = (dispatch.get_error)();
     }
 
     log::info!(

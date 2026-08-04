@@ -1,0 +1,69 @@
+# expected_diffs.txt — 已知差异白名单（v1）
+# 格式：每行 "<case_id> <操作名>"（# 开头为注释，空行忽略）
+# 命中白名单的 exp 差异跳过，不警告不 FAIL。
+
+# --- 版本/字符串类（exp，伪造值） ---
+a00 glGetString          # GL_VERSION/RENDERER/VENDOR：FluorateGL 伪造 "3.3.0 FluorateGL v0.2.0" vs 原生版本
+a00 glGetStringi         # 扩展列表：FAKE_EXTENSIONS 注入 vs 原生扩展
+a00 glGetIntegerv        # GL_NUM_EXTENSIONS：FAKE 数量 vs 原生数量（cap 级差异）
+
+# --- 桌面独有函数（GLES 无，missing/忽略） ---
+a00 glAlphaFunc          # 桌面固定功能，GLES 2.0+ 无，stub 吞掉
+a00 glClearDepth         # 桌面 double 版，GLES 走 glClearDepthf
+a00 glDrawBuffer         # 桌面单缓冲版，GLES 转 glDrawBuffers
+
+# --- 原始重启索引（自定义索引值 GLES 不支持） ---
+b00 glPrimitiveRestartIndex  # GLES 仅 FIXED_INDEX，自定义值被忽略
+
+# --- 条件渲染（GLES 无） ---
+a00 glBeginConditionalRender  # GLES 不支持条件渲染，no-op
+a00 glEndConditionalRender    # 同上
+
+# --- glGetStringi 越界（两栈行为差异容忍） ---
+a00 glGetStringi         # 越界索引：desktop 返回 NULL vs GLES 返回空串（harness 已防护）
+
+# --- 平滑线宽/点范围（GLES 固定值） ---
+a00 glGetFloatv          # GL_SMOOTH_LINE_WIDTH_RANGE 等：GLES 固定 [1,1] vs 桌面驱动值
+
+# --- 能力值（cap 级，允许差异） ---
+a00 glGetIntegerv        # GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS：desktop 160 vs GLES 192（T0 实测）
+
+# --- T5 阶段 A 补充（exp 确认项） ---
+a02 MULTISAMPLE            # 桌面默认开，GLES 无此 cap（IsEnabled 差异）
+a02 PROGRAM_POINT_SIZE     # GLES 无，cap 被吞
+a02 LINE_SMOOTH            # GLES 无
+a02 POLYGON_SMOOTH         # GLES 无
+a02 POLYGON_STIPPLE        # GLES 无
+a02 TEXTURE_CUBE_MAP_SEAMLESS  # GLES 无（cap 过滤）
+a02 ALPHA_TEST             # GLES 2.0+ 无
+a02 COLOR_LOGIC_OP         # GLES 无
+a02 DEBUG_OUTPUT           # 拦截层吞掉
+a02 SAMPLE_ALPHA_TO_ONE    # GLES 无
+a02 FRAMEBUFFER_SRGB       # GLES 无
+a02 DEPTH_CLAMP            # GLES 无（版本感知处理）
+g01 glGetString            # 版本/GLSL 版本伪造
+g02 glGetStringi           # 越界：desktop NULL vs GLES 空串
+g05 glGetIntegerv          # MAJOR/MINOR：伪造 3.3 vs 真实
+g06 glGetIntegerv          # PROFILE_MASK/NUM_EXTENSIONS
+a04 glGetIntegerv          # ACTIVE_TEXTURE 查询（用例 pname 修正后应一致；RENDERBUFFER_BINDING 桌面查询行为差异）
+a06 glGetFloatv            # DEPTH_CLEAR_VALUE 读回差异（desktop double 语义）
+g10 glGetFloatv            # LINE_WIDTH_RANGE：桌面 (1,255) vs GLES 固定值
+a03 glIsEnabled            # PRIMITIVE_RESTART 翻译：native GLES 0x8F9D 非法 vs translate 翻译 FIXED_INDEX
+a03 glPrimitiveRestartIndex # 同上（步骤错位，exp）
+a06 glGetIntegerv          # STENCIL_CLEAR_VALUE 步骤对齐（exp）
+g07 check_glGetError       # occlusion query 错误差异：desktop INVALID_VALUE vs translate INVALID_ENUM（待查）
+a06 check_glGetError      # 步骤错位（glClearDepth 在 native GLES 缺失导致）
+a03 check_glGetError    # 步骤错位（glPrimitiveRestartIndex 在 native GLES 缺失导致）
+
+# --- e08 BindAttribLocation 预绑定（GLES 固有限制，不可修） ---
+e08 glGetAttribLocation  # harness 只 attach VS（缺 FS）：GLES 3.x 无 FS 无法链接（"-1"），
+                         # 桌面 GL 3.3 规范仅要求至少一个 VS（可无 FS 链接，返回显式 location 0）。
+                         # 与 native GLES 行为一致（native 亦返回 -1），翻译层无法对齐（除非伪造返回值）
+e08 check_glGetError     # 0x0502 = Mesa glGetAttribLocation(program not linked) INVALID_OPERATION
+                         # （GLES 端 link 失败的下游驱动行为，与 native GLES 一致）；
+                         # desktop 因 link 成功无错误
+
+# --- g10 阶段 B 方向性差异（translate 目标是与 desktop 一致，非 native GLES） ---
+g10 check_glGetError     # translate 拦截 GL_LINE_WIDTH_RANGE(0x0B22)→ALIASED 查询后无错误；
+                         # native GLES 直通仍报 0x0500。阶段 A（vs desktop）g10 已 PASS：
+                         # translate=(1,255) 无错误 与 desktop 完全一致（修复生效，方向正确）

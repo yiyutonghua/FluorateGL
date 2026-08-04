@@ -16,6 +16,25 @@ pub enum TranslationResult {
     Failed,
 }
 
+/// 判断输入是否为 GLSL ES shader（#version NNN es）。
+///
+/// ES shader 已是 GLES 语法，不应走桌面→GLES 的 Vulkan target SPIR-V 管线：
+/// - preprocess 会注入桌面语义的 layout(binding/location) 并包装 UBO，
+///   UBO 声明插在 #version 之后、precision 声明之前 → 违反 ES 规范
+///   （"default precision statement must appear before first declaration"），
+///   shaderc 报 "float requires default precision"
+/// - 版本推导按桌面语义（gles_version_candidates 把 320 当 < 330 → 输出 310 es），
+///   且 postprocess 会剥离 in/out 的 layout(location)
+/// - 实测（差分测试 b01s/h01s）：VS/FS 翻译结果版本不一致
+///   （"all shaders must use same shading language version" 链接失败）
+///
+/// 与 string_pass::translate 的 ES 检测策略一致（300/310/320 es 原样返回）。
+fn is_es_shader(source: &str) -> bool {
+    crate::shader_translator::preprocess::extract_version(source)
+        .map(|v| v.split_whitespace().any(|t| t.eq_ignore_ascii_case("es")))
+        .unwrap_or(false)
+}
+
 /// 翻译入口：将桌面 GLSL 翻译为 GLSL ES
 ///
 /// 使用 catch_unwind 防止 panic 导致宿主进程崩溃。
@@ -25,6 +44,17 @@ pub enum TranslationResult {
 /// 还是 panic（catch_unwind 捕获），都统一回退到 string_pass 字符串级翻译。
 /// 这避免了 shader.rs 的 Failed 分支透传桌面 GLSL 给 GLES 导致崩溃。
 pub fn translate(source: &str, stage: u32) -> TranslationResult {
+    // GLSL ES 输入直接透传：已是 GLES 语法，无需（也不能）走桌面→GLES 翻译。
+    // 旧行为：ES shader 被喂给 Vulkan target 管线后版本被改写（320→310 es）、
+    // location 被剥离、UBO 包装破坏 precision 声明位置，导致 link 失败。
+    if is_es_shader(source) {
+        log::debug!(
+            "[ShaderTranslator] GLSL ES input detected (stage 0x{:04X}), passing through unchanged",
+            stage
+        );
+        return TranslationResult::PassThrough;
+    }
+
     // 缓存 key 中的 gles_version：translate 对外不暴露该参数，
     // 翻译结果对调用方是确定的，使用固定值 320（gles_version_candidates 的首选）即可唯一标识输入。
     const CACHE_GLES_VERSION: u32 = 320;
@@ -407,5 +437,38 @@ void main() {
 "#;
         // 此测试主要验证不崩溃，类型转换由 spirv-cross 处理
         let _ = assert_translated_to_gles(src, GL_FRAGMENT_SHADER, "implicit_conversion");
+    }
+
+    #[test]
+    fn test_es_shader_passes_through_unchanged() {
+        // 差分测试 b01s/h01s 用例模板：GLSL ES 输入必须原样透传，不走
+        // 桌面→GLES 的 Vulkan target SPIR-V 管线。
+        // 旧行为（bug）：ES shader 被喂给 preprocess（注入桌面语义的
+        // location/binding、包装 UBO）+ shaderc Vulkan target 编译，
+        // 导致 glLinkProgram 报 "all shaders must use same shading language
+        // version"、shaderc 报 "float requires default precision"。
+        let vs = r#"#version 320 es
+layout(location=0) in vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+"#;
+        let fs = r#"#version 320 es
+precision mediump float;
+uniform vec4 uColor;
+out vec4 fragColor;
+void main() { fragColor = uColor; }
+"#;
+        // 两个 stage 都应原样返回（PassThrough 或 Translated(原文)），且永不失败
+        for (src, stage, name) in [
+            (vs, GL_VERTEX_SHADER, "vertex"),
+            (fs, GL_FRAGMENT_SHADER, "fragment"),
+        ] {
+            match translate(src, stage) {
+                TranslationResult::PassThrough => {}
+                TranslationResult::Translated(out) => {
+                    assert_eq!(out, src, "ES {} shader 应原样透传", name);
+                }
+                TranslationResult::Failed => panic!("ES {} shader 不应失败", name),
+            }
+        }
     }
 }

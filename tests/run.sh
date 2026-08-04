@@ -23,12 +23,14 @@ TARGET="x86_64-unknown-linux-gnu"
 RUN_GLSLANG=1
 RUN_CARGO=1
 RUN_C=1
+RUN_DIFF=0
 
 for arg in "$@"; do
     case "$arg" in
         --skip-glslang) RUN_GLSLANG=0 ;;
         --only-cargo)   RUN_C=0; RUN_GLSLANG=0 ;;
         --only-c)       RUN_CARGO=0; RUN_GLSLANG=0 ;;
+        --only-diff)    RUN_DIFF=1; RUN_CARGO=0; RUN_C=0; RUN_GLSLANG=0 ;;
         -h|--help)
             cat <<EOF
 用法: bash tests/run.sh [选项]
@@ -36,6 +38,7 @@ for arg in "$@"; do
   --skip-glslang  跳过 glslang 翻译套件
   --only-cargo    只跑 cargo test
   --only-c        只跑 C 端到端测试
+  --only-diff     只跑差分测试（desktop/gles/translate 三后端 + compare）
 EOF
             exit 0
             ;;
@@ -53,26 +56,33 @@ fail() { printf '\033[1;31m[run.sh] 失败:\033[0m %s\n' "$*" >&2; exit 1; }
 # ============================================================
 # 1. 依赖检查
 # ============================================================
-log "检查构建依赖..."
-command -v cargo >/dev/null || fail "未找到 cargo，请安装 Rust 工具链"
-command -v gcc    >/dev/null || fail "未找到 gcc，请安装 build-essential"
+if [[ "$RUN_DIFF" -eq 1 ]]; then
+    # 差分模式只依赖 cargo/gcc（EGL/GLES 头文件检查跳过）
+    log "差分模式：跳过 EGL/GLES 头文件依赖检查"
+    command -v cargo >/dev/null || fail "未找到 cargo，请安装 Rust 工具链"
+    command -v gcc    >/dev/null || fail "未找到 gcc，请安装 build-essential"
+else
+    log "检查构建依赖..."
+    command -v cargo >/dev/null || fail "未找到 cargo，请安装 Rust 工具链"
+    command -v gcc    >/dev/null || fail "未找到 gcc，请安装 build-essential"
 
-# EGL / GLES 头文件
-EGL_H=/usr/include/EGL/egl.h
-GLES3_H=/usr/include/GLES3/gl3.h
-[[ -f "$EGL_H" ]]    || fail "缺少 $EGL_H（apt: libegl-dev）"
-[[ -f "$GLES3_H" ]]  || fail "缺少 $GLES3_H（apt: libgles2-mesa-dev）"
+    # EGL / GLES 头文件
+    EGL_H=/usr/include/EGL/egl.h
+    GLES3_H=/usr/include/GLES3/gl3.h
+    [[ -f "$EGL_H" ]]    || fail "缺少 $EGL_H（apt: libegl-dev）"
+    [[ -f "$GLES3_H" ]]  || fail "缺少 $GLES3_H（apt: libgles2-mesa-dev）"
 
-# EGL / GLES 运行库
-GLES2_PATH="$(ldconfig -p | awk '/libGLESv2\.so\.2/{print $NF; exit}')"
-EGL_PATH="$(ldconfig -p | awk '/libEGL\.so\.1/{print $NF; exit}')"
-[[ -n "$GLES2_PATH" ]] || fail "未找到 libGLESv2.so.2（apt: libgles2）"
-[[ -n "$EGL_PATH" ]]   || fail "未找到 libEGL.so.1（apt: libegl1）"
-log "EGL: $EGL_PATH"
-log "GLESv2: $GLES2_PATH"
+    # EGL / GLES 运行库
+    GLES2_PATH="$(ldconfig -p | awk '/libGLESv2\.so\.2/{print $NF; exit}')"
+    EGL_PATH="$(ldconfig -p | awk '/libEGL\.so\.1/{print $NF; exit}')"
+    [[ -n "$GLES2_PATH" ]] || fail "未找到 libGLESv2.so.2（apt: libgles2）"
+    [[ -n "$EGL_PATH" ]]   || fail "未找到 libEGL.so.1（apt: libegl1）"
+    log "EGL: $EGL_PATH"
+    log "GLESv2: $GLES2_PATH"
 
-# Mesa 软渲染（llvmpipe）需要在 PATH 中可用，否则 surfaceless EGL 起不来
-command -v llvm-config >/dev/null 2>&1 || warn "未找到 llvm-config，若 EGL 初始化失败请安装 libllvmpipe-..."
+    # Mesa 软渲染（llvmpipe）需要在 PATH 中可用，否则 surfaceless EGL 起不来
+    command -v llvm-config >/dev/null 2>&1 || warn "未找到 llvm-config，若 EGL 初始化失败请安装 libllvmpipe-..."
+fi
 
 # ============================================================
 # 2. （可选）拉取 glslang 子模块
@@ -95,16 +105,21 @@ fi
 # ============================================================
 # 3. 构建 libfluorategl.so
 # ============================================================
-log "构建 libfluorategl.so ($TARGET)..."
-cargo build --target "$TARGET"
+if [[ "$RUN_DIFF" -eq 1 ]]; then
+    log "差分模式：host 构建 libfluorategl.so（跳过 x86_64 target 构建与软链）"
+    cargo build 2>&1 | tail -2 || fail "cargo build 失败"
+else
+    log "构建 libfluorategl.so ($TARGET)..."
+    cargo build --target "$TARGET"
 
-# 准备 libGLESv3.so 软链（FluorateGL 默认加载 libGLESv3.so）
-ln -sf "$GLES2_PATH" "$PROJECT_ROOT/libGLESv3.so"
-log "已创建软链: libGLESv3.so -> $GLES2_PATH"
+    # 准备 libGLESv3.so 软链（FluorateGL 默认加载 libGLESv3.so）
+    ln -sf "$GLES2_PATH" "$PROJECT_ROOT/libGLESv3.so"
+    log "已创建软链: libGLESv3.so -> $GLES2_PATH"
 
-export LD_LIBRARY_PATH="$PROJECT_ROOT${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export EGL_PLATFORM=surfaceless
-export MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
+    export LD_LIBRARY_PATH="$PROJECT_ROOT${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export EGL_PLATFORM=surfaceless
+    export MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
+fi
 
 # ============================================================
 # 4. Rust 单元 + 集成测试
@@ -139,6 +154,53 @@ if [[ "$RUN_GLSLANG" -eq 1 ]]; then
         warn "glslang suite 失败（部分失败属正常，套件含负例）"
         # glslang suite 本身允许部分失败，只在完全无法运行时计入错误
     fi
+fi
+
+# ============================================================
+# 7. 差分测试（desktop/gles/translate 三后端 + compare）
+# ============================================================
+if [[ "$RUN_DIFF" -eq 1 ]]; then
+    DIFF_OUT="${TMPDIR:-/tmp}/fluorategl_diff"
+    mkdir -p "$DIFF_OUT"
+    log "=== 差分测试（输出目录 $DIFF_OUT）==="
+
+    gcc -o "$DIFF_OUT/diff_gl_behavior" tests/gl/diff_gl_behavior.c -ldl -I tests/gl \
+        || fail "diff_gl_behavior 编译失败"
+
+    export LIBGL_ALWAYS_SOFTWARE=1
+
+    # 三后端跑同一用例集
+    log "--- 阶段 A ref: desktop ---"
+    "$DIFF_OUT/diff_gl_behavior" --backend desktop --out "$DIFF_OUT/out_desktop.log" \
+        || warn "desktop 后端失败"
+    log "--- 阶段 B ref: native gles ---"
+    "$DIFF_OUT/diff_gl_behavior" --backend gles --out "$DIFF_OUT/out_gles.log" \
+        || warn "gles 后端失败"
+    log "--- test: translate ---"
+    FLUORATEGL_BACKEND=llvmpipe EGL_PLATFORM=surfaceless \
+        "$DIFF_OUT/diff_gl_behavior" --backend translate --out "$DIFF_OUT/out_translate.log" \
+        || warn "translate 后端失败"
+
+    # 对比（阶段 B 为主：gles vs translate；阶段 A 预跑：desktop vs translate）
+    log "--- compare: gles vs translate（阶段 B）---"
+    if ! python3 tests/gl/diff_compare.py \
+        --ref "$DIFF_OUT/out_gles.log" \
+        --test "$DIFF_OUT/out_translate.log" \
+        --expected tests/gl/expected_diffs.txt \
+        --report "$DIFF_OUT/report_B.md"; then
+        warn "阶段 B 存在 must 级差异（见 $DIFF_OUT/report_B.md）"
+        EXIT_CODE=1
+    fi
+    log "--- compare: desktop vs translate（阶段 A 预跑）---"
+    if ! python3 tests/gl/diff_compare.py \
+        --ref "$DIFF_OUT/out_desktop.log" \
+        --test "$DIFF_OUT/out_translate.log" \
+        --expected tests/gl/expected_diffs.txt \
+        --report "$DIFF_OUT/report_A.md"; then
+        warn "阶段 A 存在 must 级差异（见 $DIFF_OUT/report_A.md）"
+        EXIT_CODE=1
+    fi
+    log "差分日志与报告: $DIFF_OUT/"
 fi
 
 # ============================================================
