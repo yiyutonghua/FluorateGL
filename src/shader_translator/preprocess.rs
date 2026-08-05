@@ -566,7 +566,10 @@ fn inject_missing_uniform_locations(result: &mut String) {
             // 注入 layout(location=N)。已有非 location 限定符（如 column_major）
             // 保留并追加 location，避免丢失矩阵布局信息。
             let new_line = if layout_qual.trim().is_empty() {
-                format!("{}layout(location={}) uniform {} {};", indent, counter, ty, name)
+                format!(
+                    "{}layout(location={}) uniform {} {};",
+                    indent, counter, ty, name
+                )
             } else {
                 format!(
                     "{}layout({}, location={}) uniform {} {};",
@@ -852,7 +855,11 @@ mod tests {
             result
         );
         // standalone 声明保留（无 UBO 包装）
-        assert!(result.contains("uniform mat4 ModelViewMat"), "got: {}", result);
+        assert!(
+            result.contains("uniform mat4 ModelViewMat"),
+            "got: {}",
+            result
+        );
         assert!(!result.contains("UniformBlock"), "got: {}", result);
     }
 

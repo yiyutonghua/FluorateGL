@@ -158,9 +158,7 @@ fn fix_out_color_locations(src: &str) -> String {
         )
         .unwrap()
     });
-    let result = re_out_color_layout
-        .replace_all(src, "$1$2")
-        .to_string();
+    let result = re_out_color_layout.replace_all(src, "$1$2").to_string();
 
     // 第二步：注入 location（正则容忍前导插值修饰符）
     static RE_OUT_COLOR: OnceLock<Regex> = OnceLock::new();

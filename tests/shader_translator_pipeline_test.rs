@@ -256,8 +256,7 @@ fn translate_output_does_not_contain_binding_in_300_fallback() {
                layout(location = 0) out vec4 fragColor;\n\
                void main() { fragColor = texture(tex, uv); }\n";
     // 先编译 SPIR-V，再以 300 es 输出验证 binding 移除（300 条件 strip）
-    let spv = spirv_compile::compile(src, GL_FRAGMENT_SHADER)
-        .expect("SPIR-V compile failed");
+    let spv = spirv_compile::compile(src, GL_FRAGMENT_SHADER).expect("SPIR-V compile failed");
     let es300 = fluorategl::shader_translator::gles_compile::compile(&spv, 300)
         .expect("300 es output failed");
     assert!(
@@ -278,11 +277,7 @@ fn translate_output_keeps_binding_in_320() {
                void main() { fragColor = texture(tex, uv); }\n";
     let result = translate(src, GL_FRAGMENT_SHADER);
     if let TranslationResult::Translated(out) = result {
-        assert!(
-            out.contains("binding"),
-            "320 应保留 binding: {}",
-            out
-        );
+        assert!(out.contains("binding"), "320 应保留 binding: {}", out);
     } else {
         panic!("expected Translated");
     }

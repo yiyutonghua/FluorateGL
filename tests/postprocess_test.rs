@@ -111,11 +111,7 @@ fn postprocess_320_keeps_binding() {
     // layout(binding = 0) 且 11/11 通过）
     let src = "layout(binding = 0) uniform sampler2D tex;";
     let result = postprocess::post_process(src, 320);
-    assert!(
-        result.contains("binding"),
-        "320 应保留 binding: {}",
-        result
-    );
+    assert!(result.contains("binding"), "320 应保留 binding: {}", result);
 }
 
 #[test]
@@ -123,11 +119,7 @@ fn postprocess_310_keeps_binding() {
     // ES 3.1 支持 binding，310 保留（仅 strip location）
     let src = "layout(binding = 0) uniform sampler2D tex;";
     let result = postprocess::post_process(src, 310);
-    assert!(
-        result.contains("binding"),
-        "310 应保留 binding: {}",
-        result
-    );
+    assert!(result.contains("binding"), "310 应保留 binding: {}", result);
 }
 
 // ============ outColorN location 注入（无条件） ============

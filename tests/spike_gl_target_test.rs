@@ -65,7 +65,8 @@ fn cross_to_gles(spv: &[u32], es_version: u16) -> Result<String, String> {
         return Err("empty SPIR-V".to_string());
     }
     let module = Module::from_words(spv);
-    let compiler = SpvCompiler::<Glsl>::new(module).map_err(|e| format!("SpvCompiler::new: {:?}", e))?;
+    let compiler =
+        SpvCompiler::<Glsl>::new(module).map_err(|e| format!("SpvCompiler::new: {:?}", e))?;
     let mut options = Glsl::options();
     options.version = match es_version {
         320 => GlslVersion::Glsl320Es,
@@ -267,7 +268,11 @@ fn spike_b_ubo_block_with_binding() {
         println!(
             "[b] env={} UBO 实例名检测: {}",
             env,
-            if has_inst { "有（strip_ubo_instance_name 仍需保留）" } else { "无（可删）" }
+            if has_inst {
+                "有（strip_ubo_instance_name 仍需保留）"
+            } else {
+                "无（可删）"
+            }
         );
         println!(
             "[b] env={} 结论: {}",
@@ -307,7 +312,8 @@ fn spike_c_sampler_with_location() {
         let es = cross_to_gles(&spv, 320).expect("[c] spirv-cross ES320 输出失败");
         println!("[c] env={} === GLES 320 产物 ===\n{}", env, es);
         assert!(
-            es.contains("uniform sampler2D Sampler0") || es.contains("uniform highp sampler2D Sampler0"),
+            es.contains("uniform sampler2D Sampler0")
+                || es.contains("uniform highp sampler2D Sampler0"),
             "[env={}] sampler 应保留原名 standalone 声明，产物:\n{}",
             env,
             es
@@ -405,11 +411,7 @@ fn spike_e_mc_style_full_vs_upgraded() {
             env,
             es
         );
-        assert!(
-            es.contains("vertexColor"),
-            "[env={}] varying 应保留",
-            env
-        );
+        assert!(es.contains("vertexColor"), "[env={}] varying 应保留", env);
         assert!(
             es.contains("gl_VertexID"),
             "[env={}] gl_VertexID 应保留原名（OpenGL 语义不重命名为 gl_VertexIndex），产物:\n{}",
@@ -475,8 +477,8 @@ fn spike_compare_vulkan_vs_opengl() {
                  }\n";
 
     // 当前管线：Vulkan target（preprocess 注入+包装）→ spirv-cross → postprocess 拆除
-    let current_spv = spirv_compile::compile(vs, GL_VERTEX_SHADER)
-        .expect("[compare] Vulkan 当前管线编译失败");
+    let current_spv =
+        spirv_compile::compile(vs, GL_VERTEX_SHADER).expect("[compare] Vulkan 当前管线编译失败");
     let current_gles =
         gles_compile::compile(&current_spv, 320).expect("[compare] Vulkan 管线 ES320 输出失败");
 
@@ -485,20 +487,41 @@ fn spike_compare_vulkan_vs_opengl() {
     let open_gl_gles = cross_to_gles(&open_gl_spv, 320).unwrap();
 
     println!("\n======== 对比表：MC 风格 VS（standalone uniform） ========");
-    println!("---- 当前 Vulkan target 产物（preprocess + postprocess 后） ----\n{}", current_gles);
-    println!("---- OpenGL target 产物（仅 location 注入，无 postprocess） ----\n{}", open_gl_gles);
+    println!(
+        "---- 当前 Vulkan target 产物（preprocess + postprocess 后） ----\n{}",
+        current_gles
+    );
+    println!(
+        "---- OpenGL target 产物（仅 location 注入，无 postprocess） ----\n{}",
+        open_gl_gles
+    );
 
     let feats = |es: &str| -> Vec<String> {
         vec![
-            format!("version: {:?}", es.lines().find(|l| l.starts_with("#version"))),
-            format!("standalone uniform: {}", es.contains("uniform mat4 ProjMat;") || es.contains("uniform vec4 ProjMat;")),
+            format!(
+                "version: {:?}",
+                es.lines().find(|l| l.starts_with("#version"))
+            ),
+            format!(
+                "standalone uniform: {}",
+                es.contains("uniform mat4 ProjMat;") || es.contains("uniform vec4 ProjMat;")
+            ),
             format!("UniformBlock 痕迹: {}", es.contains("UniformBlock")),
             format!("UBO 实例名 (}} _N;): {}", has_ubo_instance_name(es)),
-            format!("uniform location: {}", es.contains("uniform mat4 ProjMat") && es.contains("location")),
+            format!(
+                "uniform location: {}",
+                es.contains("uniform mat4 ProjMat") && es.contains("location")
+            ),
             format!("in/out location: {}", es.contains("layout(location")),
             format!("binding: {}", es.contains("binding")),
-            format!("precision highp float: {}", es.contains("precision highp float")),
-            format!("precision highp int: {}", es.contains("precision highp int")),
+            format!(
+                "precision highp float: {}",
+                es.contains("precision highp float")
+            ),
+            format!(
+                "precision highp int: {}",
+                es.contains("precision highp int")
+            ),
             format!("gl_Position: {}", es.contains("gl_Position")),
         ]
     };
@@ -551,7 +574,13 @@ fn spike_opengl_target_with_explicit_spirv_v15() {
     options.set_target_spirv(SpirvVersion::V1_5);
     options.set_optimization_level(OptimizationLevel::Zero);
     options.set_generate_debug_info();
-    match compiler.compile_into_spirv(src, ShaderKind::Vertex, "spike.glsl", "main", Some(&options)) {
+    match compiler.compile_into_spirv(
+        src,
+        ShaderKind::Vertex,
+        "spike.glsl",
+        "main",
+        Some(&options),
+    ) {
         Ok(a) => {
             let spv = a.as_binary().to_vec();
             println!(
@@ -621,8 +650,8 @@ fn spike_g_gles300_fallback_with_uniform_location() {
               layout(location=0) uniform mat4 ProjMat;\n\
               layout(location=0) in vec3 Position;\n\
               void main() { gl_Position = ProjMat * vec4(Position, 1.0); }\n";
-    let spv = compile_opengl(vs, GL_VERTEX_SHADER, 450, false)
-        .expect("[g] OpenGL env=450 编译失败");
+    let spv =
+        compile_opengl(vs, GL_VERTEX_SHADER, 450, false).expect("[g] OpenGL env=450 编译失败");
     // 先确认 320 es 输出正常
     let es320 = cross_to_gles(&spv, 320).unwrap();
     assert!(
@@ -675,7 +704,11 @@ fn spike_h_vulkan_macro_defined() {
     let has_const_1 = spv_words.iter().any(|w| w == "3F800000"); // 1.0f 的 IEEE754
     println!(
         "[h] OpenGL target 下 VULKAN 宏: {}（产物含常量 1.0 = {}；#ifdef 分支命中 = {}）",
-        if has_const_1 { "被定义（undef_vulkan_macro 仍需保留）" } else { "未定义（undef_vulkan_macro 可删）" },
+        if has_const_1 {
+            "被定义（undef_vulkan_macro 仍需保留）"
+        } else {
+            "未定义（undef_vulkan_macro 可删）"
+        },
         has_const_1,
         has_const_1
     );
@@ -683,19 +716,32 @@ fn spike_h_vulkan_macro_defined() {
     // 验证 glslang Vulkan 语义确实定义 VULKAN 宏
     let compiler = Compiler::new().expect("[h] Compiler::new failed");
     let mut vk_opts = CompileOptions::new().expect("[h] CompileOptions::new failed");
-    vk_opts.set_target_env(shaderc::TargetEnv::Vulkan, shaderc::EnvVersion::Vulkan1_2 as u32);
+    vk_opts.set_target_env(
+        shaderc::TargetEnv::Vulkan,
+        shaderc::EnvVersion::Vulkan1_2 as u32,
+    );
     vk_opts.set_optimization_level(OptimizationLevel::Zero);
     vk_opts.set_generate_debug_info();
     vk_opts.set_auto_bind_uniforms(true);
     let vk_artifact = compiler
-        .compile_into_spirv(fs2, ShaderKind::Fragment, "spike.glsl", "main", Some(&vk_opts))
+        .compile_into_spirv(
+            fs2,
+            ShaderKind::Fragment,
+            "spike.glsl",
+            "main",
+            Some(&vk_opts),
+        )
         .expect("[h] Vulkan target 直接编译失败");
     let spv_vk = vk_artifact.as_binary().to_vec();
     let spv_vk_words: Vec<String> = spv_vk.iter().map(|w| format!("{:08X}", w)).collect();
     let vk_has_const_1 = spv_vk_words.iter().any(|w| w == "3F800000");
     println!(
         "[h] Vulkan target（不经 preprocess）下 VULKAN 宏: {}",
-        if vk_has_const_1 { "被定义（验证探测有效）" } else { "未定义" }
+        if vk_has_const_1 {
+            "被定义（验证探测有效）"
+        } else {
+            "未定义"
+        }
     );
     // 关键结论断言：OpenGL target 产物不含 vec4(1.0) 分支常量 → 宏未定义
     assert!(
