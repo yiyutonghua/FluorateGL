@@ -101,6 +101,9 @@ fn main() {
     let mut compile_fail_samples: Vec<String> = Vec::new();
     let mut translate_fail_samples: Vec<String> = Vec::new();
     let mut crash_samples: Vec<String> = Vec::new();
+    // 全量清单 dump（环境变量 GLSLANG_DUMP_FAILURES=<dir> 时，把完整失败清单写入 dir 下文件，
+    // 用于回归对比；suite 默认只打印前 30 个样本）
+    let dump_dir = std::env::var("GLSLANG_DUMP_FAILURES").ok();
 
     // 收集所有测试文件并排序，保证输出顺序稳定
     let mut files: Vec<_> = fs::read_dir(suite_dir)
@@ -167,6 +170,21 @@ fn main() {
                                     e.chars().take(200).collect::<String>()
                                 ));
                             }
+                            if let Some(d) = &dump_dir {
+                                let _ = std::fs::create_dir_all(d);
+                                let mut f = std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(format!("{}/compile_fail.txt", d))
+                                    .unwrap();
+                                let _ = writeln!(
+                                    f,
+                                    "{} ({})  [{}]",
+                                    path.display(),
+                                    stage_name,
+                                    e.trim().replace('\n', " | ")
+                                );
+                            }
                         }
                     }
                 }
@@ -175,6 +193,15 @@ fn main() {
                 translate_failed += 1;
                 if translate_fail_samples.len() < 30 {
                     translate_fail_samples.push(format!("{} ({})", path.display(), stage_name));
+                }
+                if let Some(d) = &dump_dir {
+                    let _ = std::fs::create_dir_all(d);
+                    let mut f = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(format!("{}/translate_fail.txt", d))
+                        .unwrap();
+                    let _ = writeln!(f, "{} ({})", path.display(), stage_name);
                 }
             }
             Some(2) => passed_through += 1,
@@ -194,6 +221,15 @@ fn main() {
                         c
                     ));
                 }
+                if let Some(d) = &dump_dir {
+                    let _ = std::fs::create_dir_all(d);
+                    let mut f = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(format!("{}/crash.txt", d))
+                        .unwrap();
+                    let _ = writeln!(f, "{} ({}) [exit code {}]", path.display(), stage_name, c);
+                }
             }
             None => {
                 // SIGABRT (assertion) 或 SIGSEGV
@@ -209,6 +245,15 @@ fn main() {
                         path.display(),
                         stage_name
                     ));
+                }
+                if let Some(d) = &dump_dir {
+                    let _ = std::fs::create_dir_all(d);
+                    let mut f = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(format!("{}/crash.txt", d))
+                        .unwrap();
+                    let _ = writeln!(f, "{} ({}) [signal crash]", path.display(), stage_name);
                 }
             }
         }
