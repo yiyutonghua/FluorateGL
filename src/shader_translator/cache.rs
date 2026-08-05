@@ -56,8 +56,6 @@ impl ShaderCache {
             source.contains("SSBO"),
             source.contains("gl_VertexID"),
             source.contains("gl_FragColor"),
-            source.contains("gl_VertexIndex"), // Vulkan target 特征
-            source.contains("u_sampler"),      // 重命名特征
         ];
 
         for feature in features {
