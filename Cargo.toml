@@ -22,13 +22,13 @@ spirv-cross2 = { version = "0.7.1", default-features = false, features = ["glsl"
 opt-level = 3
 lto = true
 strip = true
-codegen-units = 16
+codegen-units = 8
 
 [profile.dev]
 opt-level = 0
 lto = false
 strip = false
-codegen-units = 16
+codegen-units = 8
 
 [[example]]
 name = "test_preprocess"
