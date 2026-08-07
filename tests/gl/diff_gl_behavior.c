@@ -2930,6 +2930,258 @@ static void case_e11(const char* case_id, int* step_out) {
     *step_out = step;
 }
 
+/* ============ e12: 多 block UBO + 显式 API 绑定（桌面语义回归锚点）============
+ * MC 风格三 block（Projection/DynamicTransforms/Fog，无实例名、无 binding 声明）：
+ * 桌面 shader 不声明 binding，靠 glUniformBlockBinding + glBindBufferBase API 分配。
+ * 验证：① 翻译产物剥离 binding 后三端 glGetUniformBlockIndex 返回值一致；
+ * ② 显式绑定链路（glUniformBlockBinding 0/1/2 + glBindBufferBase 0/1/2）后
+ * 三个 block 数据全部到达（矩阵 + 颜色 → 像素哈希三端一致）。
+ * 版本：desktop/translate 喂 330 core（translate 走翻译管线）；gles 喂 320 es 直通。 */
+#define E12_VS_330 \
+    "#version 330 core\n" \
+    "layout(std140) uniform Projection { mat4 ProjMat; };\n" \
+    "layout(std140) uniform DynamicTransforms { mat4 ModelViewMat; vec4 ColorModulator; };\n" \
+    "layout(std140) uniform Fog { vec4 FogColor; };\n" \
+    "in vec2 aPos;\n" \
+    "out vec4 vColor;\n" \
+    "void main() { gl_Position = ProjMat * ModelViewMat * vec4(aPos, 0.0, 1.0); vColor = ColorModulator * FogColor; }\n"
+#define E12_FS_330 \
+    "#version 330 core\n" \
+    "in vec4 vColor;\n" \
+    "out vec4 FragColor;\n" \
+    "void main() { FragColor = vColor; }\n"
+#define E12_VS_320 \
+    "#version 320 es\n" \
+    "precision highp float;\n" \
+    "layout(std140) uniform Projection { mat4 ProjMat; };\n" \
+    "layout(std140) uniform DynamicTransforms { mat4 ModelViewMat; vec4 ColorModulator; };\n" \
+    "layout(std140) uniform Fog { vec4 FogColor; };\n" \
+    "in vec2 aPos;\n" \
+    "out vec4 vColor;\n" \
+    "void main() { gl_Position = ProjMat * ModelViewMat * vec4(aPos, 0.0, 1.0); vColor = ColorModulator * FogColor; }\n"
+#define E12_FS_320 \
+    "#version 320 es\n" \
+    "precision mediump float;\n" \
+    "in vec4 vColor;\n" \
+    "out vec4 FragColor;\n" \
+    "void main() { FragColor = vColor; }\n"
+
+static void case_e12(const char* case_id, int* step_out) {
+    int step = *step_out;
+    const int W = 64, H = 64;
+    const char* vs = (g_backend == BACKEND_GLES) ? E12_VS_320 : E12_VS_330;
+    const char* fs = (g_backend == BACKEND_GLES) ? E12_FS_320 : E12_FS_330;
+
+    typedef uint32_t (*gubIdx_t)(uint32_t, const char*);
+    typedef void (*ubb_t)(uint32_t, uint32_t, uint32_t);
+    typedef void (*genBuffers_t)(int, uint32_t*);
+    typedef void (*bindBuffer_t)(uint32_t, uint32_t);
+    typedef void (*bindBufferBase_t)(uint32_t, uint32_t, uint32_t);
+    typedef void (*bufferData_t)(uint32_t, intptr_t, const void*, uint32_t);
+    typedef void (*genVAO_t)(int, uint32_t*);
+    typedef void (*bindVAO_t)(uint32_t);
+    typedef void (*enableAttrib_t)(uint32_t);
+    typedef void (*attribPtr_t)(uint32_t, int, uint32_t, uint8_t, int, const void*);
+    typedef void (*useProgram_t)(uint32_t);
+    typedef void (*drawArrays_t)(uint32_t, int, int);
+    typedef void (*clear_t)(uint32_t);
+    typedef void (*clearColor_t)(float, float, float, float);
+    typedef void (*viewport_t)(int, int, int, int);
+    gubIdx_t gbi = (gubIdx_t)g_fn("glGetUniformBlockIndex");
+    ubb_t ubb = (ubb_t)g_fn("glUniformBlockBinding");
+    genBuffers_t gb = (genBuffers_t)g_fn("glGenBuffers");
+    bindBuffer_t bb = (bindBuffer_t)g_fn("glBindBuffer");
+    bindBufferBase_t bbb = (bindBufferBase_t)g_fn("glBindBufferBase");
+    bufferData_t bd = (bufferData_t)g_fn("glBufferData");
+    genVAO_t gv = (genVAO_t)g_fn("glGenVertexArrays");
+    bindVAO_t bv = (bindVAO_t)g_fn("glBindVertexArray");
+    enableAttrib_t ea = (enableAttrib_t)g_fn("glEnableVertexAttribArray");
+    attribPtr_t ap = (attribPtr_t)g_fn("glVertexAttribPointer");
+    useProgram_t up = (useProgram_t)g_fn("glUseProgram");
+    drawArrays_t da = (drawArrays_t)g_fn("glDrawArrays");
+    clear_t cl = (clear_t)g_fn("glClear");
+    clearColor_t cc = (clearColor_t)g_fn("glClearColor");
+    viewport_t vp = (viewport_t)g_fn("glViewport");
+    if (!gbi || !ubb || !gb || !bb || !bbb || !bd || !gv || !bv || !ea || !ap ||
+        !up || !da || !cl || !cc || !vp) {
+        diff_log_step(case_id, step++, "e12", "(missing 函数指针)");
+        *step_out = step;
+        return;
+    }
+
+    uint32_t prog = build_program_es(case_id, &step, vs, fs);
+    if (!prog) { diff_log_step(case_id, step++, "e12", "program 构建失败"); *step_out = step; return; }
+
+    /* 1. glGetUniformBlockIndex：三端返回值对比（剥离 binding 后 block 名仍可查） */
+    uint32_t idxP = gbi(prog, "Projection");
+    uint32_t idxD = gbi(prog, "DynamicTransforms");
+    uint32_t idxF = gbi(prog, "Fog");
+    uint32_t idxX = gbi(prog, "Nonexistent");
+    diff_log_step(case_id, step++, "glGetUniformBlockIndex",
+        "Projection=0x%08X DynamicTransforms=0x%08X Fog=0x%08X Nonexistent=0x%08X",
+        idxP, idxD, idxF, idxX);
+    diff_check_errors(case_id, step++);
+
+    /* 2. glUniformBlockBinding：显式分配绑定点 0/1/2（桌面语义：API 而非声明） */
+    if (idxP != 0xFFFFFFFFu) ubb(prog, idxP, 0);
+    if (idxD != 0xFFFFFFFFu) ubb(prog, idxD, 1);
+    if (idxF != 0xFFFFFFFFu) ubb(prog, idxF, 2);
+    diff_log_step(case_id, step++, "glUniformBlockBinding",
+        "Projection->0 DynamicTransforms->1 Fog->2 (skipped if index invalid)");
+    diff_check_errors(case_id, step++);
+
+    /* 3. 三个 UBO buffer：std140 布局（ProjMat 64B / DT 80B / Fog 16B） */
+    float proj[16], dt[20];
+    for (int i = 0; i < 16; i++) proj[i] = (i % 5 == 0) ? 1.0f : 0.0f;      /* 单位矩阵 */
+    for (int i = 0; i < 16; i++) dt[i] = (i % 5 == 0) ? 1.0f : 0.0f;         /* 单位矩阵 */
+    dt[0] = 0.5f; dt[5] = 0.5f;                                              /* 缩放 0.5 */
+    dt[16] = 0.2f; dt[17] = 0.4f; dt[18] = 0.8f; dt[19] = 1.0f;              /* ColorModulator */
+    float fog[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+
+    uint32_t bufP = 0, bufD = 0, bufF = 0;
+    gb(1, &bufP); bb(0x8A11 /*GL_UNIFORM_BUFFER*/, bufP); bd(0x8A11, 64, proj, 0x88E8);
+    gb(1, &bufD); bb(0x8A11, bufD); bd(0x8A11, 80, dt, 0x88E8);
+    gb(1, &bufF); bb(0x8A11, bufF); bd(0x8A11, 16, fog, 0x88E8);
+    bbb(0x8A11, 0, bufP);
+    bbb(0x8A11, 1, bufD);
+    bbb(0x8A11, 2, bufF);
+    diff_log_step(case_id, step++, "glBindBufferBase", "0->bufP 1->bufD 2->bufF");
+    diff_check_errors(case_id, step++);
+
+    /* 4. 渲染：单位投影 × 缩放矩阵 → 半屏三角形，颜色 = ColorModulator × FogColor */
+    uint32_t tex = 0, fbo = 0, rbo = 0;
+    if (diff_make_render_target(W, H, &tex, &fbo, &rbo) != 0) {
+        diff_log_step(case_id, step++, "e12", "FBO 创建失败");
+        *step_out = step;
+        return;
+    }
+    if (vp) vp(0, 0, W, H);
+    if (cc) cc(0.0f, 0.0f, 0.0f, 1.0f);
+    if (cl) cl(0x00004000 /*GL_COLOR_BUFFER_BIT*/);
+
+    float verts[6] = { -1.0f, -1.0f, 3.0f, -1.0f, -1.0f, 3.0f };
+    uint32_t vbo = 0, vao = 0;
+    if (gv) gv(1, &vao);
+    if (bv) bv(vao);
+    if (gb) gb(1, &vbo);
+    if (bb) bb(0x8892 /*GL_ARRAY_BUFFER*/, vbo);
+    if (bd) bd(0x8892, sizeof(verts), verts, 0x88E4);
+    if (ea) ea(0);
+    if (ap) ap(0, 2, 0x1406 /*GL_FLOAT*/, 0, 0, (const void*)0);
+    if (up) up(prog);
+    if (da) da(0x0004 /*GL_TRIANGLES*/, 0, 3);
+    diff_log_step(case_id, step++, "glDrawArrays", "3-block ubo triangle drawn");
+
+    uint64_t h = diff_render_and_hash(W, H);
+    diff_log_step(case_id, step++, "readPixels_hash", "ubo3_hash=0x%016llX", (unsigned long long)h);
+    diff_check_errors(case_id, step++);
+    *step_out = step;
+}
+
+/* ============ e13: varying 按名匹配（animate_sprite 场景回归锚点）============
+ * VS 两个输出（texCoord0 + fAnimationProgress）、FS 一个输入（texCoord0）——
+ * 模拟 MC animate_sprite：VS/FS 变量集合不对称，若带 spirv-cross 独立分配的
+ * location 则链接失败（真机 "output texCoord0 location mismatch"）。
+ * 桌面 GL 3.3 按变量名匹配（无 location 声明），翻译层剥离 varying location
+ * 后 GLES linker 同样按名匹配 → 三端链接成功 + 渲染像素一致。 */
+#define E13_VS_330 \
+    "#version 330 core\n" \
+    "in vec2 aPos;\n" \
+    "out vec2 texCoord0;\n" \
+    "out float fAnimationProgress;\n" \
+    "void main() { gl_Position = vec4(aPos, 0.0, 1.0); texCoord0 = aPos * 0.5 + 0.5; fAnimationProgress = 0.5; }\n"
+#define E13_FS_330 \
+    "#version 330 core\n" \
+    "in vec2 texCoord0;\n" \
+    "out vec4 FragColor;\n" \
+    "void main() { FragColor = vec4(texCoord0, 0.0, 1.0); }\n"
+#define E13_VS_320 \
+    "#version 320 es\n" \
+    "precision highp float;\n" \
+    "in vec2 aPos;\n" \
+    "out vec2 texCoord0;\n" \
+    "out float fAnimationProgress;\n" \
+    "void main() { gl_Position = vec4(aPos, 0.0, 1.0); texCoord0 = aPos * 0.5 + 0.5; fAnimationProgress = 0.5; }\n"
+#define E13_FS_320 \
+    "#version 320 es\n" \
+    "precision mediump float;\n" \
+    "in vec2 texCoord0;\n" \
+    "out vec4 FragColor;\n" \
+    "void main() { FragColor = vec4(texCoord0, 0.0, 1.0); }\n"
+
+static void case_e13(const char* case_id, int* step_out) {
+    int step = *step_out;
+    const int W = 64, H = 64;
+    const char* vs = (g_backend == BACKEND_GLES) ? E13_VS_320 : E13_VS_330;
+    const char* fs = (g_backend == BACKEND_GLES) ? E13_FS_320 : E13_FS_330;
+
+    typedef void (*genBuffers_t)(int, uint32_t*);
+    typedef void (*bindBuffer_t)(uint32_t, uint32_t);
+    typedef void (*bufferData_t)(uint32_t, intptr_t, const void*, uint32_t);
+    typedef void (*genVAO_t)(int, uint32_t*);
+    typedef void (*bindVAO_t)(uint32_t);
+    typedef void (*enableAttrib_t)(uint32_t);
+    typedef void (*attribPtr_t)(uint32_t, int, uint32_t, uint8_t, int, const void*);
+    typedef void (*useProgram_t)(uint32_t);
+    typedef void (*drawArrays_t)(uint32_t, int, int);
+    typedef void (*clear_t)(uint32_t);
+    typedef void (*clearColor_t)(float, float, float, float);
+    typedef void (*viewport_t)(int, int, int, int);
+    genBuffers_t gb = (genBuffers_t)g_fn("glGenBuffers");
+    bindBuffer_t bb = (bindBuffer_t)g_fn("glBindBuffer");
+    bufferData_t bd = (bufferData_t)g_fn("glBufferData");
+    genVAO_t gv = (genVAO_t)g_fn("glGenVertexArrays");
+    bindVAO_t bv = (bindVAO_t)g_fn("glBindVertexArray");
+    enableAttrib_t ea = (enableAttrib_t)g_fn("glEnableVertexAttribArray");
+    attribPtr_t ap = (attribPtr_t)g_fn("glVertexAttribPointer");
+    useProgram_t up = (useProgram_t)g_fn("glUseProgram");
+    drawArrays_t da = (drawArrays_t)g_fn("glDrawArrays");
+    clear_t cl = (clear_t)g_fn("glClear");
+    clearColor_t cc = (clearColor_t)g_fn("glClearColor");
+    viewport_t vp = (viewport_t)g_fn("glViewport");
+    if (!gb || !bb || !bd || !gv || !bv || !ea || !ap || !up || !da || !cl || !cc || !vp) {
+        diff_log_step(case_id, step++, "e13", "(missing 函数指针)");
+        *step_out = step;
+        return;
+    }
+
+    uint32_t prog = build_program_es(case_id, &step, vs, fs);
+    if (!prog) { diff_log_step(case_id, step++, "e13", "program 构建失败"); *step_out = step; return; }
+
+    /* VS 两输出 / FS 一输入，无 location 声明 → 按名匹配链接（桌面语义） */
+    diff_log_step(case_id, step++, "varying_by_name",
+        "VS{texCoord0,fAnimationProgress} FS{texCoord0} link=%s",
+        prog ? "ok" : "FAILED");
+
+    uint32_t tex = 0, fbo = 0, rbo = 0;
+    if (diff_make_render_target(W, H, &tex, &fbo, &rbo) != 0) {
+        diff_log_step(case_id, step++, "e13", "FBO 创建失败");
+        *step_out = step;
+        return;
+    }
+    if (vp) vp(0, 0, W, H);
+    if (cc) cc(0.0f, 0.0f, 0.0f, 1.0f);
+    if (cl) cl(0x00004000 /*GL_COLOR_BUFFER_BIT*/);
+
+    float verts[6] = { -1.0f, -1.0f, 3.0f, -1.0f, -1.0f, 3.0f };
+    uint32_t vbo = 0, vao = 0;
+    if (gv) gv(1, &vao);
+    if (bv) bv(vao);
+    if (gb) gb(1, &vbo);
+    if (bb) bb(0x8892 /*GL_ARRAY_BUFFER*/, vbo);
+    if (bd) bd(0x8892, sizeof(verts), verts, 0x88E4);
+    if (ea) ea(0);
+    if (ap) ap(0, 2, 0x1406 /*GL_FLOAT*/, 0, 0, (const void*)0);
+    if (up) up(prog);
+    if (da) da(0x0004 /*GL_TRIANGLES*/, 0, 3);
+    diff_log_step(case_id, step++, "glDrawArrays", "asymmetric varying triangle drawn");
+
+    uint64_t h = diff_render_and_hash(W, H);
+    diff_log_step(case_id, step++, "readPixels_hash", "varying_hash=0x%016llX", (unsigned long long)h);
+    diff_check_errors(case_id, step++);
+    *step_out = step;
+}
+
 
 static CaseDef g_cases[] = {
     { "a00", "version/renderer/extensions", case_a00 },
@@ -2979,6 +3231,8 @@ static CaseDef g_cases[] = {
     { "e09", "UseProgram+CURRENT_PROGRAM", case_e09 },
     { "e10", "GetActiveUniform", case_e10 },
     { "e11", "UBO block query chain", case_e11 },
+    { "e12", "multi-block UBO + explicit binding", case_e12 },
+    { "e13", "varying by-name matching", case_e13 },
     { "f01", "FBO no attach", case_f01 },
     { "f02", "FBO color attach render", case_f02 },
     { "f03", "FBO depth test render", case_f03 },
