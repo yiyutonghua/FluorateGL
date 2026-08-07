@@ -653,6 +653,20 @@ pub extern "C" fn glBufferStorage(
         return;
     }
 
+    // flags=0 的裸 storage 降级为 glBufferData（北极星桌面一致性）：
+    // flags=0 的 immutable storage 无任何特性位（不可映射/持久），语义等价普通
+    // buffer——glBufferData 是 GLES 标准路径，所有驱动（含 Adreno）保证数据上传。
+    // 绕过真机 Adreno 对 EXT_buffer_storage flags=0 + data 预填的驱动差异
+    // （预填数据未生效 → UI 矩阵塌缩，见 commit 85c6e1e 背景）。
+    // flags 含 PERSISTENT(0x40) 的走上方 shadow 路径不受影响（初始 dirty 全量
+    // 经 draw 前 sync 用 glBufferSubData 上传，不依赖驱动的 storage data 处理）。
+    if flags == 0 {
+        backend::with_gles_dispatch(|dispatch| unsafe {
+            (dispatch.buffer_data)(target, size, data, 0x88E8 /*GL_DYNAMIC_DRAW*/);
+        });
+        return;
+    }
+
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.buffer_storage as *const ()) {
             // 驱动不支持 GL_EXT_buffer_storage，降级为 glBufferData（GL_DYNAMIC_DRAW）

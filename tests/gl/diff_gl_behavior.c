@@ -3182,6 +3182,48 @@ static void case_e13(const char* case_id, int* step_out) {
     *step_out = step;
 }
 
+/* ============ e14: BufferStorage flags=0 语义（桌面一致性回归锚点）============
+ * 验证 glBufferStorage(flags=0, data=预填) 的预填数据三端一致读回：
+ * translate 端对 flags=0 裸 storage 降级 glBufferData（模拟层补偿，绕过 Adreno
+ * 对 EXT_buffer_storage flags=0 预填的驱动差异）——数据必须到达。
+ * 注：仅覆盖 flags=0 场景——desktop harness 用 GL 3.3 core context，
+ * 0x42（PERSISTENT，GL 4.4）与 storage+SubData 组合在该 context 下
+ * 行为异常（实测 map NULL/SubData 不生效），故从三端对比中剔除；
+ * 0x42 的 shadow 持久映射链路已由 b04 + 真机 hny 池覆盖。 */
+static void case_e14(const char* case_id, int* step_out) {
+    int step = *step_out;
+    const uint32_t GL_UNIFORM_BUFFER = 0x8A11;
+
+    typedef void (*gen_t)(int, uint32_t*);
+    typedef void (*bind_t)(uint32_t, uint32_t);
+    typedef void (*storage_t)(uint32_t, intptr_t, const void*, uint32_t);
+    typedef void (*getsub_t)(uint32_t, intptr_t, intptr_t, void*);
+    gen_t gen = (gen_t)g_fn("glGenBuffers");
+    bind_t bind = (bind_t)g_fn("glBindBuffer");
+    storage_t storage = (storage_t)g_fn("glBufferStorage");
+    getsub_t getsub = (getsub_t)g_fn("glGetBufferSubData");
+    if (!gen || !bind || !storage || !getsub) {
+        diff_log_step(case_id, step++, "e14", "(missing 函数指针)");
+        *step_out = step;
+        return;
+    }
+
+    uint8_t pat[256], rd[256];
+    for (int i = 0; i < 256; i++) pat[i] = (uint8_t)(i * 7 + 3);
+
+    uint32_t b = 0;
+    gen(1, &b); bind(GL_UNIFORM_BUFFER, b);
+    storage(GL_UNIFORM_BUFFER, 256, pat, 0x0000);
+    memset(rd, 0, 256);
+    getsub(GL_UNIFORM_BUFFER, 0, 256, rd);
+    uint64_t h = diff_fnv1a64(rd, 256);
+    diff_log_step(case_id, step++, "storage_flags0_readback",
+        "hash=0x%016llX %s", (unsigned long long)h,
+        memcmp(rd, pat, 256) == 0 ? "(pattern MATCH)" : "(pattern MISMATCH)");
+    diff_check_errors(case_id, step++);
+    *step_out = step;
+}
+
 
 static CaseDef g_cases[] = {
     { "a00", "version/renderer/extensions", case_a00 },
@@ -3233,6 +3275,7 @@ static CaseDef g_cases[] = {
     { "e11", "UBO block query chain", case_e11 },
     { "e12", "multi-block UBO + explicit binding", case_e12 },
     { "e13", "varying by-name matching", case_e13 },
+    { "e14", "BufferStorage semantics", case_e14 },
     { "f01", "FBO no attach", case_f01 },
     { "f02", "FBO color attach render", case_f02 },
     { "f03", "FBO depth test render", case_f03 },
