@@ -1,8 +1,6 @@
 /target
 /.opencode
 /log
-
-# MC 反编译/版权敏感内容防护（禁止提交反编译产物与相关工具）
 /tools/decompile/
 /decompiled/
 **/mcshaders/

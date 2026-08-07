@@ -111,14 +111,22 @@ fn postprocess_320_strips_binding() {
     // 靠 glUniform1i/glUniformBlockBinding/glBindBufferBase API 分配）
     let src = "layout(binding = 0) uniform sampler2D tex;";
     let result = postprocess::post_process(src, 320);
-    assert!(!result.contains("binding"), "320 应剥离 binding: {}", result);
+    assert!(
+        !result.contains("binding"),
+        "320 应剥离 binding: {}",
+        result
+    );
 }
 
 #[test]
 fn postprocess_310_strips_binding() {
     let src = "layout(binding = 0) uniform sampler2D tex;";
     let result = postprocess::post_process(src, 310);
-    assert!(!result.contains("binding"), "310 应剥离 binding: {}", result);
+    assert!(
+        !result.contains("binding"),
+        "310 应剥离 binding: {}",
+        result
+    );
 }
 
 // ============ outColorN location 注入（无条件） ============
@@ -229,7 +237,11 @@ fn postprocess_full_gles_output_cleanup() {
     let src = "#version 320 es\nlayout(binding = 0) uniform sampler2D Sampler0;\nlayout(location = 0) in vec2 texCoord;\nout vec4 outColor0;\nvoid main() {\n    outColor0 = texture(Sampler0, texCoord);\n}\n";
     let result = postprocess::post_process(src, 320);
     // 全版本剥离 binding 与 in/out location（桌面语义）
-    assert!(!result.contains("binding"), "320 应剥离 binding: {}", result);
+    assert!(
+        !result.contains("binding"),
+        "320 应剥离 binding: {}",
+        result
+    );
     assert!(
         !result.contains("layout(location = 0) in"),
         "320 应剥离 in location: {}",
