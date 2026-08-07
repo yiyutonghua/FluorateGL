@@ -88,6 +88,8 @@ GLFn g_fns[] = {
     F(DrawArraysIndirect, 3), F(DrawElementsIndirect, 3),
     F(DrawElementsBaseVertex, 3),
     F(MultiDrawArrays, 3), F(MultiDrawElements, 3),
+    F(MultiDrawElementsBaseVertex, 3),
+    F(MultiDrawArraysIndirect, 3), F(MultiDrawElementsIndirect, 3),
     F(PrimitiveRestartIndex, 3),
     /* --- 查询 --- */
     F(GetError, 0), F(GetString, 2), F(GetStringi, 2),
@@ -3224,6 +3226,156 @@ static void case_e14(const char* case_id, int* step_out) {
     *step_out = step;
 }
 
+/* ============ e15: MultiDraw 系列语义 ============
+ * 场景（全部 cls=3 tbd，差异不 FAIL 进 TBD 清单）：
+ *  ① glMultiDrawArrays 3 draws：first={0,3,6} count={3,3,3} 三色三角形布局 → 像素 hash
+ *  ② glMultiDrawElements 指针数组：EBO 绑定，indices={0,6,12}(字节偏移, USHORT) → 像素 hash
+ *  ③ glMultiDrawElementsBaseVertex：2 draws basevertex={0,3}（desktop 3.3.1 原生 /
+ *     translate 循环保留 basevertex）→ 像素 hash（C3 修复验证：降级丢 basevertex 会画错）
+ *  ④ drawcount=0：no-op 无错误（GL 4.5 语义）
+ *  ⑤a drawcount=-1：GL_INVALID_VALUE（GL 3.3；C5 注入机制验证）
+ *  ⑤b count 数组含负值：循环模拟时负 count 报 GL_INVALID_VALUE（tbd，实现相关）
+ * 覆盖说明：desktop 后端 GL 3.3 core 原生支持 glMultiDraw*；translate 端为
+ * 循环模拟（本机 Mesa GLES 3.2 符号经 eglGetProcAddress 加载后可能透传，行为等价）；
+ * gles 后端（native GLES via dlsym）无 glMultiDraw* 符号 → "(missing)" 整用例 EXP 跳过，
+ * 有效对比在阶段 A（desktop vs translate）。 */
+static void case_e15(const char* case_id, int* step_out) {
+    int step = *step_out;
+    const int W = 256, H = 256;
+    /* GL_TRIANGLES/GL_ARRAY_BUFFER/GL_ELEMENT_ARRAY_BUFFER/GL_UNSIGNED_SHORT/
+     * GL_STATIC_DRAW 均在 diff_harness.h 中定义为宏 */
+
+    typedef void (*vp_t)(int, int, int, int);
+    typedef void (*cc_t)(float, float, float, float);
+    typedef void (*cl_t)(uint32_t);
+    typedef void (*gb_t)(int, uint32_t*);
+    typedef void (*bv_t)(uint32_t, uint32_t);
+    typedef void (*bd_t)(uint32_t, intptr_t, const void*, uint32_t);
+    typedef void (*ea_t)(uint32_t);
+    typedef void (*ap_t)(uint32_t, int, uint32_t, uint8_t, int, const void*);
+    typedef void (*use_t)(uint32_t);
+    typedef int (*gul_t)(uint32_t, const char*);
+    typedef void (*u4_t)(int, float, float, float, float);
+    typedef void (*gvao_t)(int, uint32_t*);
+    typedef void (*bvao_t)(uint32_t);
+    typedef void (*mda_t)(uint32_t, const int*, const int*, int);
+    typedef void (*mde_t)(uint32_t, const int*, uint32_t, const void* const*, int);
+    typedef void (*mdebv_t)(uint32_t, const int*, uint32_t, const void* const*, int, const int*);
+    vp_t vp = (vp_t)g_fn("glViewport");
+    cc_t cc = (cc_t)g_fn("glClearColor");
+    cl_t cl = (cl_t)g_fn("glClear");
+    gb_t gb = (gb_t)g_fn("glGenBuffers");
+    bv_t bv = (bv_t)g_fn("glBindBuffer");
+    bd_t bd = (bd_t)g_fn("glBufferData");
+    ea_t ea = (ea_t)g_fn("glEnableVertexAttribArray");
+    ap_t ap = (ap_t)g_fn("glVertexAttribPointer");
+    use_t use = (use_t)g_fn("glUseProgram");
+    gul_t gul = (gul_t)g_fn("glGetUniformLocation");
+    u4_t u4 = (u4_t)g_fn("glUniform4f");
+    gvao_t gv = (gvao_t)g_fn("glGenVertexArrays");
+    bvao_t bv2 = (bvao_t)g_fn("glBindVertexArray");
+    mda_t mda = (mda_t)g_fn("glMultiDrawArrays");
+    mde_t mde = (mde_t)g_fn("glMultiDrawElements");
+    mdebv_t mdebv = (mdebv_t)g_fn("glMultiDrawElementsBaseVertex");
+    if (!vp || !cc || !cl || !gb || !bv || !bd || !ea || !ap || !use || !gv || !bv2 ||
+        !mda || !mde) {
+        diff_log_step(case_id, step++, "e15", "(missing 函数指针)");
+        *step_out = step;
+        return;
+    }
+
+    const ShaderPair* p = &SHADER_PAIRS[0];
+    const char* vs; const char* fs;
+    pick_shader(p, &vs, &fs);
+    uint32_t prog = build_program_es(case_id, &step, vs, fs);
+    if (!prog) { *step_out = step; return; }
+    uint32_t tex = 0, fbo = 0, rbo = 0;
+    if (diff_make_render_target(W, H, &tex, &fbo, &rbo) != 0) { *step_out = step; return; }
+    if (vp) vp(0, 0, W, H);
+
+    /* 顶点布局：3 个三角形（左下 / 右下 / 左上），9 顶点 × 2 分量 */
+    float verts[18] = { -1,-1, -0.2f,-1, -1,-0.2f,
+                         0.2f,-1, 1,-1, 0.2f,-0.2f,
+                        -1, 0.2f, -0.2f, 0.2f, -1, 1 };
+    uint32_t vao = 0, vbo = 0, ebo = 0;
+    gv(1, &vao);
+    bv2(vao);
+    gb(1, &vbo); bv(GL_ARRAY_BUFFER, vbo);
+    bd(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+    ea(0); ap(0, 2, 0x1406 /*GL_FLOAT*/, 0, 0, (const void*)0);
+    gb(1, &ebo); bv(GL_ELEMENT_ARRAY_BUFFER, ebo);
+    uint16_t idx[9] = { 0,1,2, 3,4,5, 6,7,8 };
+    bd(GL_ELEMENT_ARRAY_BUFFER, sizeof(idx), idx, GL_STATIC_DRAW);
+    use(prog);
+    int loc = gul ? gul(prog, "uColor") : -1;
+
+    /* ① MultiDrawArrays：3 draws 画 3 个三角形（单色） */
+    int first[3] = { 0, 3, 6 };
+    int counts[3] = { 3, 3, 3 };
+    if (cc) cc(0, 0, 0, 1);
+    if (cl) cl(0x4000 /*GL_COLOR_BUFFER_BIT*/);
+    if (u4) u4(loc, 0, 1, 0, 1);
+    mda(GL_TRIANGLES, first, counts, 3);
+    diff_log_step(case_id, step++, "glMultiDrawArrays", "first={0,3,6} count={3,3,3}");
+    uint64_t h1 = diff_render_and_hash(W, H);
+    diff_log_step(case_id, step++, "readPixels_hash", "mda_hash=0x%016llX", (unsigned long long)h1);
+    diff_check_errors(case_id, step++);
+
+    /* ② MultiDrawElements 指针数组：EBO 绑定，indices 为字节偏移（USHORT×3） */
+    void* offsets[3] = {
+        (void*)(uintptr_t)0,
+        (void*)(uintptr_t)(3 * sizeof(uint16_t)),
+        (void*)(uintptr_t)(6 * sizeof(uint16_t)),
+    };
+    if (cc) cc(0, 0, 0, 1);
+    if (cl) cl(0x4000);
+    if (u4) u4(loc, 0, 0, 1, 1);
+    mde(GL_TRIANGLES, counts, GL_UNSIGNED_SHORT, (const void* const*)offsets, 3);
+    diff_log_step(case_id, step++, "glMultiDrawElements", "indices={0,6,12}B count={3,3,3} USHORT");
+    uint64_t h2 = diff_render_and_hash(W, H);
+    diff_log_step(case_id, step++, "readPixels_hash", "mde_hash=0x%016llX", (unsigned long long)h2);
+    diff_check_errors(case_id, step++);
+
+    /* ③ MultiDrawElementsBaseVertex：draw1 basevertex=0（左下），draw2 basevertex=3（右下）
+     * 降级丢 basevertex 会两次画左下（重叠）→ hash 不同，可检出 C3 回归 */
+    if (mdebv) {
+        int bv_count[2] = { 3, 3 };
+        void* bv_off[2] = { (void*)(uintptr_t)0, (void*)(uintptr_t)0 };
+        int bv_base[2] = { 0, 3 };
+        if (cc) cc(0, 0, 0, 1);
+        if (cl) cl(0x4000);
+        if (u4) u4(loc, 1, 0, 0, 1);
+        mdebv(GL_TRIANGLES, bv_count, GL_UNSIGNED_SHORT,
+              (const void* const*)bv_off, 2, bv_base);
+        diff_log_step(case_id, step++, "glMultiDrawElementsBaseVertex",
+            "basevertex={0,3} count={3,3} indices={0,0}");
+        uint64_t h3 = diff_render_and_hash(W, H);
+        diff_log_step(case_id, step++, "readPixels_hash", "mdebv_hash=0x%016llX",
+            (unsigned long long)h3);
+        diff_check_errors(case_id, step++);
+    } else {
+        diff_log_step(case_id, step++, "glMultiDrawElementsBaseVertex", "(missing)");
+    }
+
+    /* ④ drawcount=0：no-op 无错误（GL 4.5 明确；GL 3.3 对 0 同样无操作） */
+    mda(GL_TRIANGLES, first, counts, 0);
+    diff_log_step(case_id, step++, "glMultiDrawArrays", "drawcount=0 (no-op)");
+    diff_check_errors(case_id, step++);
+
+    /* ⑤a drawcount=-1：GL_INVALID_VALUE（GL 3.3；translate 端 C5 注入） */
+    mda(GL_TRIANGLES, first, counts, -1);
+    diff_log_step(case_id, step++, "glMultiDrawArrays", "drawcount=-1 (INVALID_VALUE)");
+    diff_check_errors(case_id, step++);
+
+    /* ⑤b count 数组含负值：负 count → GL_INVALID_VALUE（tbd，实现相关） */
+    int counts_neg[2] = { 3, -1 };
+    mda(GL_TRIANGLES, first, counts_neg, 2);
+    diff_log_step(case_id, step++, "glMultiDrawArrays", "count={3,-1} (INVALID_VALUE)");
+    diff_check_errors(case_id, step++);
+
+    *step_out = step;
+}
+
 
 static CaseDef g_cases[] = {
     { "a00", "version/renderer/extensions", case_a00 },
@@ -3276,6 +3428,7 @@ static CaseDef g_cases[] = {
     { "e12", "multi-block UBO + explicit binding", case_e12 },
     { "e13", "varying by-name matching", case_e13 },
     { "e14", "BufferStorage semantics", case_e14 },
+    { "e15", "MultiDraw 系列语义", case_e15 },
     { "f01", "FBO no attach", case_f01 },
     { "f02", "FBO color attach render", case_f02 },
     { "f03", "FBO depth test render", case_f03 },

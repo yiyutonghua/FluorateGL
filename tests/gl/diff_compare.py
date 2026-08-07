@@ -53,6 +53,8 @@ CLS_MAP = {
     "glDrawArrays": 0, "glDrawElements": 0, "glDrawArraysInstanced": 0,
     "glDrawElementsInstanced": 0, "glDrawRangeElements": 0,
     "glMultiDrawArrays": 3, "glMultiDrawElements": 3,
+    "glMultiDrawElementsBaseVertex": 3,
+    "glMultiDrawArraysIndirect": 3, "glMultiDrawElementsIndirect": 3,
     "glDrawElementsBaseVertex": 3, "glDrawArraysIndirect": 3,
     "glPrimitiveRestartIndex": 3, "glPolygonMode": 2, "glPointSize": 2,
     "glFenceSync": 0, "glDeleteSync": 0, "glClientWaitSync": 0,
@@ -151,10 +153,10 @@ def compare(ref_cases, test_cases, expected):
             fails.append(f"{cid}: ref 端有日志但 test 端无该用例")
             continue
         # 任一端整个用例 missing（函数缺失）→ 该用例按 EXP 跳过逐步骤对比
-        if ref and "(missing)" in ref[0]["text"]:
+        if ref and "(missing" in ref[0]["text"]:
             stats["EXP_OK"] += max(len(ref), len(tst))
             continue
-        if tst and "(missing)" in tst[0]["text"]:
+        if tst and "(missing" in tst[0]["text"]:
             stats["EXP_OK"] += max(len(ref), len(tst))
             continue
         n_max = max(len(ref), len(tst))
@@ -175,7 +177,7 @@ def compare(ref_cases, test_cases, expected):
                 continue
             if r["op"] != t["op"]:
                 # 任一端函数缺失（missing）→ 记 EXP（函数在 GLES 无对应）
-                if "(missing)" in r["text"] or "(missing)" in t["text"]:
+                if "(missing" in r["text"] or "(missing" in t["text"]:
                     stats["EXP_OK"] += 1
                     continue
                 # 操作名不同 = 必然差异（exp 白名单检查）
@@ -189,7 +191,7 @@ def compare(ref_cases, test_cases, expected):
                 stats["PASS"] += 1
                 continue
             # 任一端函数缺失 → EXP
-            if "(missing)" in r["text"] or "(missing)" in t["text"]:
+            if "(missing" in r["text"] or "(missing" in t["text"]:
                 stats["EXP_OK"] += 1
                 continue
             # 值不同 → 按分类判定（优先日志内嵌 cls，其次 CLS_MAP，默认 must）
