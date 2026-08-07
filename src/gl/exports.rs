@@ -494,7 +494,14 @@ static BASE_EXTENSIONS: &[&[u8]] = &[
     // GL_EXT_multi_draw_elements_base_vertex）已移入 build_fake_extensions() 的
     // behavior_dependent 映射表动态声明，本表不再静态包含。
     b"GL_ARB_timer_query\0",
-    b"GL_ARB_buffer_storage\0",
+    // 有意不声明 GL_ARB_buffer_storage（桌面一致性原则）：
+    // MC 1.21.11 (via FCL) 检测到该扩展后走 BufferStorage 路径（fwy$a），
+    // GUI per-draw UBO 池（创建 flags=0x0000，usage 无 MAP 位）不建立持久映射
+    // （fxa.e=null）→ 每帧 CommandEncoder.mapBuffer 在 Java 层抛
+    // "Somehow trying to map an unmappable buffer" 异常被吞 → 池零写入 →
+    // UI 矩阵塌缩消失。不声明该扩展 → MC 走传统路径（fwy$b）→ 每帧
+    // mapBuffer 直调 glMapBufferRange（GLES 普通映射合法）→ 数据正常到达。
+    // glBufferStorage GL 函数本身仍由驱动提供（dispatch 与扩展声明无关）。
     b"GL_ARB_clear_texture\0",
     b"GL_ARB_draw_buffers_blend\0",
     b"GL_ARB_depth_texture\0",
