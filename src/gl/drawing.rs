@@ -2,9 +2,11 @@
 //!
 //! 本模块处理非 Multi 的 draw call。Multi-draw 系列见 [`super::multi_draw`]。
 //!
-//! 决策依据：优先使用 [`crate::backend::capabilities`]（基于真实 GLES 扩展查询），
-//! `is_stub`（函数指针层面）作兜底——即使扩展声明支持，若 `load_opt_suffixes!`
-//! 未加载到符号（驱动声明扩展但未导出函数），仍走模拟。
+//! 决策依据（C1 修订）：**以 dispatch 函数指针存在性（`is_stub`）为主导**决定
+//! 原生转发或模拟降级。caps 曾参与判定，但真机能力检测失败（version=0，
+//! ANGLE glGetString 返回 null）时 caps 全 false，符号已加载的 3.2 函数被
+//! 短路强制降级（BaseVertex 语义丢失）。符号在 = 驱动提供该函数，透传安全；
+//! 符号缺失 = 走模拟降级（caps 仍用于 FAKE_EXTENSIONS 剔除等诊断场景）。
 //!
 //! 降级策略：
 //! - `glDrawRangeElements`：不支持时降级为 `glDrawElements`（start/end 是 hint）
@@ -69,7 +71,10 @@ fn is_stub(dispatch: &GlesDispatch, ptr: *const ()) -> bool {
 /// index + basevertex ≥ 0，偏移后的指针仍落在同一 buffer 内。type_size 按 GL 索引
 /// 类型推导：GL_UNSIGNED_BYTE(0x1401)=1、GL_UNSIGNED_SHORT(0x1403)=2、
 /// GL_UNSIGNED_INT(0x1405)=4。
-fn offset_indices(
+///
+/// pub(crate)：multi_draw.rs 的 glMultiDrawElementsBaseVertex 降级分支共用
+/// （C3：MultiDraw 第三级降级与单 draw 版行为对齐）。
+pub(crate) fn offset_indices(
     indices: *const std::ffi::c_void,
     basevertex: i32,
     type_: u32,
@@ -173,11 +178,11 @@ pub extern "C" fn glDrawElementsBaseVertex(
 ) {
     sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
     sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
-    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        // 优先用扩展能力判断，is_stub 兜底（驱动声明扩展但未导出符号的边界情况）
-        let supported = caps.draw_elements_base_vertex
-            && !is_stub(dispatch, dispatch.draw_elements_base_vertex as *const ());
+        // C1：supported 以 dispatch 符号存在性为主导（is_stub 兜底）。
+        // caps 曾参与判定——真机能力检测失败（version=0）时符号已加载也被
+        // 短路强制降级，导致 basevertex 语义丢失（Sodium 渲染错误风险）。
+        let supported = !is_stub(dispatch, dispatch.draw_elements_base_vertex as *const ());
         if !supported {
             // 降级为普通 glDrawElements：用 basevertex 偏移 indices 指针补偿索引错位
             // （原实现丢弃 basevertex 导致顶点错位，仅 best-effort 避免崩溃）。
@@ -230,13 +235,12 @@ pub extern "C" fn glDrawArraysInstancedBaseInstance(
     baseinstance: u32,
 ) {
     sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
-    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let supported = caps.base_instance
-            && !is_stub(
-                dispatch,
-                dispatch.draw_arrays_instanced_base_instance as *const (),
-            );
+        // C1：以符号存在性为主导（caps 误判 false 时不再强制降级）
+        let supported = !is_stub(
+            dispatch,
+            dispatch.draw_arrays_instanced_base_instance as *const (),
+        );
         if !supported {
             // 降级为 glDrawArraysInstanced，丢弃 baseinstance。
             // 影响：使用 instance ID 计算属性偏移的 shader 会错位，仅 best-effort。
@@ -266,13 +270,12 @@ pub extern "C" fn glDrawElementsInstancedBaseInstance(
 ) {
     sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
     sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
-    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let supported = caps.base_instance
-            && !is_stub(
-                dispatch,
-                dispatch.draw_elements_instanced_base_instance as *const (),
-            );
+        // C1：以符号存在性为主导（caps 误判 false 时不再强制降级）
+        let supported = !is_stub(
+            dispatch,
+            dispatch.draw_elements_instanced_base_instance as *const (),
+        );
         if !supported {
             warn_base_instance_unsupported("glDrawElementsInstancedBaseInstance");
             (dispatch.draw_elements_instanced)(mode, count, type_, indices, instancecount);
@@ -301,13 +304,12 @@ pub extern "C" fn glDrawElementsInstancedBaseVertex(
 ) {
     sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
     sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
-    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let supported = caps.draw_elements_base_vertex
-            && !is_stub(
-                dispatch,
-                dispatch.draw_elements_instanced_base_vertex as *const (),
-            );
+        // C1：以符号存在性为主导（caps 误判 false 时不再强制降级）
+        let supported = !is_stub(
+            dispatch,
+            dispatch.draw_elements_instanced_base_vertex as *const (),
+        );
         if !supported {
             // 降级为 glDrawElementsInstanced：用 basevertex 偏移 indices 指针补偿索引错位
             warn_base_vertex_unsupported("glDrawElementsInstancedBaseVertex");
@@ -345,15 +347,13 @@ pub extern "C" fn glDrawElementsInstancedBaseVertexBaseInstance(
 ) {
     sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
     sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
-    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        // 需要 base_vertex 和 base_instance 都支持
-        let supported = caps.draw_elements_base_vertex
-            && caps.base_instance
-            && !is_stub(
-                dispatch,
-                dispatch.draw_elements_instanced_base_vertex_base_instance as *const (),
-            );
+        // C1：以符号存在性为主导（caps 误判 false 时不再强制降级）。
+        // 该函数需要 base_vertex + base_instance 两个特性——符号在即两个都可用。
+        let supported = !is_stub(
+            dispatch,
+            dispatch.draw_elements_instanced_base_vertex_base_instance as *const (),
+        );
         if !supported {
             // 同时丢失 basevertex 和 baseinstance，触发两类首次告警；
             // basevertex 用 indices 指针偏移补偿，baseinstance 无法补偿

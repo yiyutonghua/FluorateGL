@@ -276,14 +276,15 @@ pub struct GlesDispatch {
     pub draw_arrays_indirect: unsafe extern "C" fn(u32, *const c_void),
     pub draw_elements_indirect: unsafe extern "C" fn(u32, u32, *const c_void),
     // GLES 3.2 multi-draw indirect
-    pub multi_draw_arrays_indirect: unsafe extern "C" fn(u32, *const c_void, i32, isize),
-    pub multi_draw_elements_indirect: unsafe extern "C" fn(u32, u32, *const c_void, i32, isize),
+    // stride 为 GLsizei（i32）：桌面与 GLES 签名一致（C7 修正 isize→i32）
+    pub multi_draw_arrays_indirect: unsafe extern "C" fn(u32, *const c_void, i32, i32),
+    pub multi_draw_elements_indirect: unsafe extern "C" fn(u32, u32, *const c_void, i32, i32),
     // GL 4.6 / GL_ARB_indirect_compute indirect count（GLES 几乎无支持，stub 时告警）
-    // drawcount 参数为 GLintptr（buffer offset），非指针
+    // drawcount 参数为 GLintptr（buffer offset，isize）；maxdrawcount/stride 为 GLsizei（i32）
     pub multi_draw_arrays_indirect_count:
-        unsafe extern "C" fn(u32, *const c_void, isize, i32, isize),
+        unsafe extern "C" fn(u32, *const c_void, isize, i32, i32),
     pub multi_draw_elements_indirect_count:
-        unsafe extern "C" fn(u32, u32, *const c_void, isize, i32, isize),
+        unsafe extern "C" fn(u32, u32, *const c_void, isize, i32, i32),
 
     // Query
     pub gen_queries: unsafe extern "C" fn(i32, *mut u32),
@@ -753,14 +754,18 @@ impl GlesDispatch {
         // 按 core / OES / EXT 后缀顺序尝试加载扩展函数。
         // GLES 驱动常以带后缀的符号名（如 glDrawElementsBaseVertexOES）导出扩展函数，
         // 仅试 core 名会误判为不支持。capabilities 层会基于扩展字符串做权威能力检测。
+        // C2：OES/EXT 后缀名走 get_proc_gles（dlsym 失败兜底 eglGetProcAddress——
+        // 部分驱动如 Mesa 不导出这些符号为 dlsym）；core 名保持纯 dlsym：
+        // core 名可能是桌面独有（如 glMultiDrawArrays），eglGetProcAddress 会
+        // 返回桌面 GL 入口，在 GLES context 上调用产生 INVALID_OPERATION。
         macro_rules! load_opt_suffixes {
             ($core:expr, $oes:expr, $ext:expr) => {{
                 let mut ptr = loader.get_proc($core);
                 if ptr.is_null() && !$oes.is_empty() {
-                    ptr = loader.get_proc($oes);
+                    ptr = loader.get_proc_gles($oes);
                 }
                 if ptr.is_null() && !$ext.is_empty() {
-                    ptr = loader.get_proc($ext);
+                    ptr = loader.get_proc_gles($ext);
                 }
                 if ptr.is_null() {
                     log::debug!(
@@ -1063,8 +1068,19 @@ impl GlesDispatch {
             is_enabled: unsafe { std::mem::transmute(load!("glIsEnabled")) },
             is_enabled_i: unsafe { std::mem::transmute(load!("glIsEnabledi")) },
 
-            multi_draw_arrays: load_opt!("glMultiDrawArrays"),
-            multi_draw_elements: load_opt!("glMultiDrawElements"),
+            // GLES 无 core glMultiDrawArrays/Elements，仅 GL_EXT_multi_draw_arrays
+            // 提供 EXT 后缀名（Adreno/Mesa 均支持）——core 名几乎必然 stub，
+            // 补 EXT 后缀恢复原生透传（C4）
+            multi_draw_arrays: load_opt_suffixes!(
+                "glMultiDrawArrays",
+                "",
+                "glMultiDrawArraysEXT"
+            ),
+            multi_draw_elements: load_opt_suffixes!(
+                "glMultiDrawElements",
+                "",
+                "glMultiDrawElementsEXT"
+            ),
             // GLES 3.2 / GL_OES_draw_elements_base_vertex：base vertex 系列
             draw_elements_base_vertex: load_opt_suffixes!(
                 "glDrawElementsBaseVertex",

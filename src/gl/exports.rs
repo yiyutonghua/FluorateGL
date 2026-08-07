@@ -3,7 +3,9 @@ use crate::gl::buffer::sync_persistent_buffer_if_needed;
 use crate::gl::getter;
 use crate::state;
 use libc::c_char;
+use std::collections::VecDeque;
 use std::ffi::CString;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -391,9 +393,34 @@ pub extern "C" fn glGenerateMipmap(target: u32) {
     });
 }
 
+/// 待注入 GL 错误队列（C5：drawcount<0 等 GL 3.3 规范错误需在导出层产生，
+/// 因为 GLES 驱动无法生成桌面特有错误场景）。FIFO 顺序：先注入先返回。
+static INJECTED_GL_ERRORS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
+
+/// 注入一个 GL 错误码，将在下一次 `glGetError` 时返回（FIFO）。
+///
+/// 用于模拟层无法通过 GLES 驱动产生的规范错误（如 glMultiDraw* 的负 drawcount
+/// → GL_INVALID_VALUE）。注入队列优先于 GLES 驱动错误队列返回，模拟层在
+/// 注入前未调用任何 GLES 函数，因此不会打乱两端错误顺序。
+pub(crate) fn inject_gl_error(err: u32) {
+    INJECTED_GL_ERRORS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push_back(err);
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetError() -> u32 {
+    // C5：先弹出注入队列（模拟层产生的规范错误优先返回）
+    if let Some(err) = INJECTED_GL_ERRORS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .pop_front()
+    {
+        log::debug!("[FluorateGL] glGetError() -> 0x{:04X} (injected)", err);
+        return err;
+    }
     let err = backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.get_error)() });
     if err != 0 {
         // MC blaze3d 每帧轮询 glGetError，驱动偶发 GL_INVALID_ENUM 会刷屏，降为 debug。

@@ -2,22 +2,34 @@
 //!
 //! 桌面 GL 的 `glMultiDraw*` 系列在一次调用中提交多个 draw command，减少 CPU 往返。
 //!
-//! 决策依据：优先使用 [`crate::backend::capabilities`]（基于真实 GLES 扩展查询），
-//! `is_stub`（函数指针层面）作兜底——即使扩展声明支持，若 `load_opt_suffixes!`
-//! 未加载到符号（驱动声明扩展但未导出函数），仍走模拟。
+//! 决策依据（C1 修订）：**以 dispatch 函数指针存在性（`is_stub`）为主导**决定
+//! 原生转发或循环模拟。caps 曾参与判定，但真机能力检测失败（version=0）时
+//! caps 全 false，符号已加载的 GLES 3.2 函数被短路强制降级。符号在 = 驱动
+//! 提供该函数，透传安全；符号缺失 = 循环模拟（caps 仅作诊断参考）。
 //!
 //! stub 降级策略：
 //! - `glMultiDrawArrays/Elements`：循环调用对应的单次 draw
 //! - `glMultiDrawElementsBaseVertex`：优先循环 `glDrawElementsBaseVertex`（保留 basevertex），
-//!   否则循环 `glDrawElements`（丢弃 basevertex）
+//!   否则循环 `glDrawElements`（C3：用 `offset_indices` 按 basevertex 补偿索引指针，
+//!   与单 draw 版 drawing.rs 行为一致）
 //! - `glMultiDrawArrays/ElementsIndirect`：若单次 Indirect 可用则循环（处理 stride=0 紧密排列），
 //!   否则无法模拟，告警返回
 //! - `IndirectCount` 系列：GLES 不支持 GL_PARAMETER_BUFFER，通过 CPU 端读取 count buffer
 //!   （shadow memory 优先，glMapBufferRange 兜底）后循环单次 Indirect 模拟
+//!
+//! 错误语义（C5/C6，对齐 GL 3.3 / GL 4.6）：
+//! - `drawcount < 0`（IndirectCount 为 `maxdrawcount < 0`）→ 注入 GL_INVALID_VALUE
+//! - `drawcount == 0` → 无操作且无错误（GL 4.5+ 明确；GL 3.3 对 0 同样无操作）
+//! - IndirectCount 的 count buffer 值为负 → 不执行任何 draw（C6 修正 min() 偏差）
 
 use crate::backend;
 use crate::backend::dispatch::GlesDispatch;
 use crate::gl::buffer::{read_parameter_buffer_u32, sync_persistent_buffer_if_needed};
+use crate::gl::drawing::offset_indices;
+use crate::gl::exports::inject_gl_error;
+
+/// GL_INVALID_VALUE（0x0501）：drawcount/maxdrawcount 为负时的规范错误
+const GL_INVALID_VALUE: u32 = 0x0501;
 
 /// GL_ARRAY_BUFFER target
 const GL_ARRAY_BUFFER: u32 = 0x8892;
@@ -29,6 +41,19 @@ const GL_DRAW_INDIRECT_BUFFER: u32 = 0x8F3F;
 /// 判断 dispatch 函数指针是否为共享的未实现 stub。
 fn is_stub(dispatch: &GlesDispatch, ptr: *const ()) -> bool {
     ptr == dispatch.stub as *const ()
+}
+
+/// drawcount 语义统一入口：
+/// - 负值：注入 GL_INVALID_VALUE（GL 3.3：drawcount 为负生成 INVALID_VALUE；
+///   GL 4.5 放宽为 no-op——取 3.3 严格语义，与本项目北极星一致）
+/// - 零：无操作无错误
+/// 返回 true 表示调用方应立即 return（不执行任何 draw）。
+fn handle_drawcount(drawcount: i32) -> bool {
+    if drawcount < 0 {
+        inject_gl_error(GL_INVALID_VALUE);
+        return true;
+    }
+    drawcount == 0
 }
 
 /// DrawArraysIndirectCommand 布局（GLES 3.1 spec，16 字节紧密排列）
@@ -50,21 +75,21 @@ struct DrawElementsIndirectCommand {
     base_instance: u32,
 }
 
-/// 计算 indirect command 的步长。
+/// 计算 indirect command 的步长（C7：stride 为 GLsizei/i32，与 GL 签名一致）。
 /// stride=0 表示紧密排列，使用 command 结构体的实际大小。
-fn array_indirect_stride(stride: isize) -> isize {
+fn array_indirect_stride(stride: i32) -> isize {
     if stride == 0 {
         std::mem::size_of::<DrawArraysIndirectCommand>() as isize
     } else {
-        stride
+        stride as isize
     }
 }
 
-fn element_indirect_stride(stride: isize) -> isize {
+fn element_indirect_stride(stride: i32) -> isize {
     if stride == 0 {
         std::mem::size_of::<DrawElementsIndirectCommand>() as isize
     } else {
-        stride
+        stride as isize
     }
 }
 
@@ -76,16 +101,15 @@ pub extern "C" fn glMultiDrawArrays(
     count: *const i32,
     drawcount: i32,
 ) {
-    if drawcount <= 0 {
+    // C5：drawcount<0 → GL_INVALID_VALUE（GL 3.3）；==0 → no-op 无错误
+    if handle_drawcount(drawcount) {
         return;
     }
     // 同步 GL_ARRAY_BUFFER 持久映射的脏区域（若顶点 buffer 是持久映射的）
     sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
-    // GLES 3.1 core（项目前提），恒可用，caps 仅作风格统一的双层判断
-    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let supported =
-            caps.multi_draw && !is_stub(dispatch, dispatch.multi_draw_arrays as *const ());
+        // C1：以符号存在性为主导（GLES 无 core 名，EXT 后缀加载成功才透传）
+        let supported = !is_stub(dispatch, dispatch.multi_draw_arrays as *const ());
         if !supported {
             // 降级：循环 glDrawArrays（GLES 2.0 core，恒可用）
             for i in 0..drawcount as isize {
@@ -106,18 +130,17 @@ pub extern "C" fn glMultiDrawElements(
     indices: *const *const std::ffi::c_void,
     drawcount: i32,
 ) {
-    if drawcount <= 0 {
+    // C5：drawcount<0 → GL_INVALID_VALUE（GL 3.3）；==0 → no-op 无错误
+    if handle_drawcount(drawcount) {
         return;
     }
     // 同步 GL_ARRAY_BUFFER / GL_ELEMENT_ARRAY_BUFFER 持久映射的脏区域
     // （若顶点/索引 buffer 是持久映射的）
     sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
     sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
-    // GLES 3.1 core（项目前提），恒可用，caps 仅作风格统一的双层判断
-    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let supported =
-            caps.multi_draw && !is_stub(dispatch, dispatch.multi_draw_elements as *const ());
+        // C1：以符号存在性为主导（GLES 无 core 名，EXT 后缀加载成功才透传）
+        let supported = !is_stub(dispatch, dispatch.multi_draw_elements as *const ());
         if !supported {
             // 降级：循环 glDrawElements（GLES 2.0 core，恒可用）
             for i in 0..drawcount as isize {
@@ -139,32 +162,34 @@ pub extern "C" fn glMultiDrawElementsBaseVertex(
     drawcount: i32,
     basevertex: *const i32,
 ) {
-    if drawcount <= 0 {
+    // C5：drawcount<0 → GL_INVALID_VALUE（GL 3.3）；==0 → no-op 无错误
+    if handle_drawcount(drawcount) {
         return;
     }
     // 同步 GL_ARRAY_BUFFER / GL_ELEMENT_ARRAY_BUFFER 持久映射的脏区域
     // （若顶点/索引 buffer 是持久映射的）
     sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
     sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
-    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let supported = caps.multi_draw_elements_base_vertex
-            && !is_stub(
-                dispatch,
-                dispatch.multi_draw_elements_base_vertex as *const (),
-            );
+        // C1：以符号存在性为主导（GLES 3.2 core / EXT 后缀）
+        let supported = !is_stub(
+            dispatch,
+            dispatch.multi_draw_elements_base_vertex as *const (),
+        );
         if !supported {
             // 优先尝试 glDrawElementsBaseVertex（保留 basevertex 语义）
-            let base_vertex_ok = caps.draw_elements_base_vertex
-                && !is_stub(dispatch, dispatch.draw_elements_base_vertex as *const ());
+            // C1：同以符号存在性为主导
+            let base_vertex_ok = !is_stub(dispatch, dispatch.draw_elements_base_vertex as *const ());
             if !base_vertex_ok {
-                // 驱动完全不支持 basevertex：降级为普通 glDrawElements，丢弃 basevertex。
-                // 注意：这会导致索引偏移错误，仅作 best-effort，避免崩溃。
+                // 驱动完全不支持 basevertex：降级为普通 glDrawElements，
+                // C3：用 offset_indices 按 basevertex 偏移索引指针补偿
+                // （与单 draw 版 drawing.rs 降级行为一致，避免索引错位）。
                 log::warn!(
-                    "[FluorateGL] glMultiDrawElementsBaseVertex: GLES 不支持 basevertex，已降级为 glDrawElements 循环（索引偏移丢失）"
+                    "[FluorateGL] glMultiDrawElementsBaseVertex: GLES 不支持 basevertex，已降级为 glDrawElements 循环（索引指针按 basevertex 补偿）"
                 );
                 for i in 0..drawcount as isize {
-                    (dispatch.draw_elements)(mode, *count.offset(i), type_, *indices.offset(i));
+                    let idx = offset_indices(*indices.offset(i), *basevertex.offset(i), type_);
+                    (dispatch.draw_elements)(mode, *count.offset(i), type_, idx);
                 }
             } else {
                 for i in 0..drawcount as isize {
@@ -191,9 +216,10 @@ pub extern "C" fn glMultiDrawArraysIndirect(
     mode: u32,
     indirect: *const std::ffi::c_void,
     drawcount: i32,
-    stride: isize,
+    stride: i32,
 ) {
-    if drawcount <= 0 {
+    // C5：drawcount<0 → GL_INVALID_VALUE（GL 3.3）；==0 → no-op 无错误
+    if handle_drawcount(drawcount) {
         return;
     }
     log::debug!(
@@ -204,10 +230,9 @@ pub extern "C" fn glMultiDrawArraysIndirect(
     );
     // 同步 GL_DRAW_INDIRECT_BUFFER 持久映射的脏区域（若 indirect buffer 是持久映射的）
     sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
-    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let supported = caps.multi_draw_indirect
-            && !is_stub(dispatch, dispatch.multi_draw_arrays_indirect as *const ());
+        // C1：以符号存在性为主导（GLES 3.2 core / GL_EXT_multi_draw_indirect）
+        let supported = !is_stub(dispatch, dispatch.multi_draw_arrays_indirect as *const ());
         if !supported {
             // 降级：glDrawArraysIndirect 是 GLES 3.1 core（项目前提），直接循环调用
             let step = array_indirect_stride(stride);
@@ -228,9 +253,10 @@ pub extern "C" fn glMultiDrawElementsIndirect(
     type_: u32,
     indirect: *const std::ffi::c_void,
     drawcount: i32,
-    stride: isize,
+    stride: i32,
 ) {
-    if drawcount <= 0 {
+    // C5：drawcount<0 → GL_INVALID_VALUE（GL 3.3）；==0 → no-op 无错误
+    if handle_drawcount(drawcount) {
         return;
     }
     log::debug!(
@@ -244,10 +270,9 @@ pub extern "C" fn glMultiDrawElementsIndirect(
     sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
     // 同步 GL_ELEMENT_ARRAY_BUFFER 持久映射的脏区域（若索引 buffer 是持久映射的）
     sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
-    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let supported = caps.multi_draw_indirect
-            && !is_stub(dispatch, dispatch.multi_draw_elements_indirect as *const ());
+        // C1：以符号存在性为主导（GLES 3.2 core / GL_EXT_multi_draw_indirect）
+        let supported = !is_stub(dispatch, dispatch.multi_draw_elements_indirect as *const ());
         if !supported {
             // 降级：glDrawElementsIndirect 是 GLES 3.1 core（项目前提），直接循环调用
             let step = element_indirect_stride(stride);
@@ -268,22 +293,22 @@ pub extern "C" fn glMultiDrawArraysIndirectCount(
     indirect: *const std::ffi::c_void,
     drawcount: isize,
     maxdrawcount: i32,
-    stride: isize,
+    stride: i32,
 ) {
-    if maxdrawcount <= 0 {
+    // C5：maxdrawcount<0 → GL_INVALID_VALUE（GL 4.6）；==0 → no-op 无错误
+    if handle_drawcount(maxdrawcount) {
         return;
     }
 
     // 同步 indirect buffer 持久映射脏区域
     sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
 
-    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let supported = caps.indirect_count
-            && !is_stub(
-                dispatch,
-                dispatch.multi_draw_arrays_indirect_count as *const (),
-            );
+        // C1：以符号存在性为主导（GLES 无对应，恒 stub → 恒 CPU 模拟）
+        let supported = !is_stub(
+            dispatch,
+            dispatch.multi_draw_arrays_indirect_count as *const (),
+        );
         if supported {
             (dispatch.multi_draw_arrays_indirect_count)(
                 mode,
@@ -295,7 +320,7 @@ pub extern "C" fn glMultiDrawArraysIndirectCount(
             return;
         }
         // 降级：CPU 端读取 count buffer 的实际 drawcount，循环 glDrawArraysIndirect
-        let Some(actual) = read_parameter_buffer_u32(drawcount) else {
+        let Some(raw) = read_parameter_buffer_u32(drawcount) else {
             // count buffer 未绑定或读取失败，按 maxdrawcount 兜底（best-effort）
             log::debug!(
                 "[FluorateGL] glMultiDrawArraysIndirectCount: count buffer 读取失败，使用 maxdrawcount={} 兜底",
@@ -308,7 +333,13 @@ pub extern "C" fn glMultiDrawArraysIndirectCount(
             }
             return;
         };
-        let actual = actual.min(maxdrawcount as u32) as i32;
+        // C6：count buffer 值按 GLsizei 解释，负值 = 不执行任何 draw
+        // （GL 4.6：值为负时不画；原 min() 把负值当大数导致画满 maxdrawcount）
+        let actual = if (raw as i32) < 0 {
+            0
+        } else {
+            (raw as i32).min(maxdrawcount)
+        };
         let step = array_indirect_stride(stride);
         for i in 0..actual as isize {
             let cmd_ptr = (indirect as *const u8).offset(i * step) as *const std::ffi::c_void;
@@ -325,22 +356,22 @@ pub extern "C" fn glMultiDrawElementsIndirectCount(
     indirect: *const std::ffi::c_void,
     drawcount: isize,
     maxdrawcount: i32,
-    stride: isize,
+    stride: i32,
 ) {
-    if maxdrawcount <= 0 {
+    // C5：maxdrawcount<0 → GL_INVALID_VALUE（GL 4.6）；==0 → no-op 无错误
+    if handle_drawcount(maxdrawcount) {
         return;
     }
 
     // 同步 indirect buffer 持久映射脏区域
     sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
 
-    let caps = backend::capabilities();
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let supported = caps.indirect_count
-            && !is_stub(
-                dispatch,
-                dispatch.multi_draw_elements_indirect_count as *const (),
-            );
+        // C1：以符号存在性为主导（GLES 无对应，恒 stub → 恒 CPU 模拟）
+        let supported = !is_stub(
+            dispatch,
+            dispatch.multi_draw_elements_indirect_count as *const (),
+        );
         if supported {
             (dispatch.multi_draw_elements_indirect_count)(
                 mode,
@@ -353,7 +384,7 @@ pub extern "C" fn glMultiDrawElementsIndirectCount(
             return;
         }
         // 降级：CPU 端读取 count buffer 的实际 drawcount，循环 glDrawElementsIndirect
-        let Some(actual) = read_parameter_buffer_u32(drawcount) else {
+        let Some(raw) = read_parameter_buffer_u32(drawcount) else {
             log::debug!(
                 "[FluorateGL] glMultiDrawElementsIndirectCount: count buffer 读取失败，使用 maxdrawcount={} 兜底",
                 maxdrawcount
@@ -365,7 +396,12 @@ pub extern "C" fn glMultiDrawElementsIndirectCount(
             }
             return;
         };
-        let actual = actual.min(maxdrawcount as u32) as i32;
+        // C6：count buffer 值按 GLsizei 解释，负值 = 不执行任何 draw
+        let actual = if (raw as i32) < 0 {
+            0
+        } else {
+            (raw as i32).min(maxdrawcount)
+        };
         let step = element_indirect_stride(stride);
         for i in 0..actual as isize {
             let cmd_ptr = (indirect as *const u8).offset(i * step) as *const std::ffi::c_void;

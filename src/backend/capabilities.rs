@@ -143,35 +143,63 @@ impl GlesCapabilities {
 ///
 /// GLES 的 GL_VERSION 字符串格式如 "OpenGL ES 3.2 V@0415.0..."，
 /// 解析 "3.2" 部分得到 320。
+///
+/// C1 兜底：部分后端（如 ANGLE）在能力查询时机上下文未完全 current 时
+/// glGetString(GL_VERSION) 返回 null，字符串解析失败 → 用
+/// glGetIntegerv(GL_MAJOR_VERSION/GL_MINOR_VERSION)（GLES 3.0+ core 查询）
+/// 兜底。两者都失败才返回 0（此时拦截层以 dispatch 符号存在性为主导，
+/// 不受 version=0 影响）。
 fn parse_gles_version(dispatch: &GlesDispatch) -> GlesVersion {
     // GL_VERSION = 0x1F02
     let version_ptr = unsafe { (dispatch.get_string)(0x1F02) };
-    if version_ptr.is_null() {
-        return GlesVersion(0);
-    }
-    let version_str = unsafe {
-        std::ffi::CStr::from_ptr(version_ptr)
-            .to_string_lossy()
-            .into_owned()
+    let v = if !version_ptr.is_null() {
+        let version_str = unsafe {
+            std::ffi::CStr::from_ptr(version_ptr)
+                .to_string_lossy()
+                .into_owned()
+        };
+
+        // 查找 "OpenGL ES N.M" 模式
+        version_str
+            .split("OpenGL ES")
+            .nth(1)
+            .and_then(|s| s.trim_start().split_whitespace().next())
+            .and_then(|s| {
+                let mut parts = s.split('.');
+                let major = parts.next()?.parse::<u16>().ok()?;
+                let minor = parts
+                    .next()
+                    .and_then(|m| m.parse::<u16>().ok())
+                    .unwrap_or(0);
+                Some(major * 10 + minor)
+            })
+            .unwrap_or(0)
+    } else {
+        0
     };
 
-    // 查找 "OpenGL ES N.M" 模式
-    let v = version_str
-        .split("OpenGL ES")
-        .nth(1)
-        .and_then(|s| s.trim_start().split_whitespace().next())
-        .and_then(|s| {
-            let mut parts = s.split('.');
-            let major = parts.next()?.parse::<u16>().ok()?;
-            let minor = parts
-                .next()
-                .and_then(|m| m.parse::<u16>().ok())
-                .unwrap_or(0);
-            Some(major * 10 + minor)
-        })
-        .unwrap_or(0);
+    if v != 0 {
+        return GlesVersion(v);
+    }
 
-    GlesVersion(v)
+    // 兜底：glGetIntegerv(GL_MAJOR_VERSION/GL_MINOR_VERSION)
+    // GL_MAJOR_VERSION = 0x821B, GL_MINOR_VERSION = 0x821C
+    let mut major = 0i32;
+    let mut minor = 0i32;
+    unsafe {
+        (dispatch.get_integerv)(0x821B, &mut major);
+        (dispatch.get_integerv)(0x821C, &mut minor);
+    }
+    if major > 0 && minor >= 0 {
+        log::debug!(
+            "[FluorateGL] GL_VERSION 字符串不可用，glGetIntegerv 兜底: {}.{}",
+            major,
+            minor
+        );
+        return GlesVersion(major as u16 * 10 + minor as u16);
+    }
+
+    GlesVersion(0)
 }
 
 /// 通过 glGetStringi 遍历 GLES 扩展列表
