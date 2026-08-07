@@ -539,9 +539,22 @@ pub extern "C" fn glUniformBlockBinding(
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
+            log::debug!(
+                "[FluorateGL] glUniformBlockBinding(program={}, block_index={}, binding={}) -> skipped (program not in IdMap)",
+                program,
+                uniform_block_index,
+                uniform_block_binding
+            );
             return;
         }
         (dispatch.uniform_block_binding)(gles_id, uniform_block_index, uniform_block_binding);
+        log::debug!(
+            "[FluorateGL] glUniformBlockBinding(program={}, block_index={}, binding={}) (gles={})",
+            program,
+            uniform_block_index,
+            uniform_block_binding,
+            gles_id
+        );
     });
 }
 
@@ -607,12 +620,32 @@ pub extern "C" fn glBindFragDataLocationIndexed(
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetUniformBlockIndex(program: u32, uniform_block_name: *const c_char) -> u32 {
+    let name_str = if uniform_block_name.is_null() {
+        "<null>".to_string()
+    } else {
+        unsafe { CStr::from_ptr(uniform_block_name) }
+            .to_string_lossy()
+            .into_owned()
+    };
     backend::with_gles_dispatch(|dispatch| unsafe {
         let gles_id = state::with_state_ref(|s| s.programs.get_gles(program).unwrap_or(0));
         if gles_id == 0 {
+            log::debug!(
+                "[FluorateGL] glGetUniformBlockIndex(program={}, name={:?}) -> 0xFFFFFFFF (program not in IdMap)",
+                program,
+                name_str
+            );
             return u32::MAX;
         }
-        (dispatch.get_uniform_block_index)(gles_id, uniform_block_name)
+        let index = (dispatch.get_uniform_block_index)(gles_id, uniform_block_name);
+        log::debug!(
+            "[FluorateGL] glGetUniformBlockIndex(program={}, name={:?}) -> {} (0x{:08X})",
+            program,
+            name_str,
+            index,
+            index
+        );
+        index
     })
 }
 

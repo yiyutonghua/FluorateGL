@@ -861,6 +861,18 @@ pub extern "C" fn glBindBufferBase(target: u32, index: u32, buffer: u32) {
 
         (dispatch.bind_buffer_base)(target, index, gles_id);
 
+        // 排查日志：记录 UBO 绑定点调用（MC 若绑定成功，后续 glBufferSubData
+        // 才能到达 shader；此调用长期缺失即 UI 消失根因盲区）
+        log::debug!(
+            "[FluorateGL] glBindBufferBase(target=0x{:04X}, index={}, buffer={}): desktop {} -> GLES {} (tid={})",
+            target,
+            index,
+            buffer,
+            buffer,
+            gles_id,
+            state::thread_id_u64()
+        );
+
         // 记录 target → desktop buffer 映射 + 持久映射条目的 bound_target
         // （UBO 通常经 BindBufferBase 绑定，必须记录否则 sync 无法定位）
         state::with_state(|s| {
@@ -900,6 +912,19 @@ pub extern "C" fn glBindBufferRange(
         };
 
         (dispatch.bind_buffer_range)(target, index, gles_id, offset, size);
+
+        // 排查日志：同 glBindBufferBase
+        log::debug!(
+            "[FluorateGL] glBindBufferRange(target=0x{:04X}, index={}, buffer={}, offset={}, size={}): desktop {} -> GLES {} (tid={})",
+            target,
+            index,
+            buffer,
+            offset,
+            size,
+            buffer,
+            gles_id,
+            state::thread_id_u64()
+        );
 
         // 记录 target → desktop buffer 映射 + 持久映射条目的 bound_target
         state::with_state(|s| {
