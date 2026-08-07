@@ -154,7 +154,6 @@ fn strip_bindings(src: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // 如果原文件以换行结尾，保留它
     if src.ends_with('\n') && !result.ends_with('\n') {
         result.push('\n');
     }

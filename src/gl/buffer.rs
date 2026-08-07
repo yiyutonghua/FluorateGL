@@ -243,7 +243,6 @@ pub extern "C" fn glBufferData(
         if let Some(desktop_id) = desktop_id {
             let alloc_size = if size > 0 { size as usize } else { 0 };
             state::with_state(|s| {
-                // 释放旧 shadow（重新分配）
                 if let Some(old) = s.persistent_buffers.remove(&desktop_id) {
                     unsafe { libc::free(old.shadow_ptr as *mut libc::c_void) };
                 }
@@ -289,7 +288,6 @@ pub extern "C" fn glBufferData(
     // GLES buffer 只有初始数据，造成红屏/UI 消失。
     let shadow_realloc = state::with_state_ref(|s| {
         let desktop_id = s.bound_buffers_by_target.get(&target).copied()?;
-        // 仅当该 buffer 已是持久映射的才需要重新分配 shadow
         if s.persistent_buffers.contains_key(&desktop_id) {
             Some(desktop_id)
         } else {
