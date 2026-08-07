@@ -1,13 +1,23 @@
 //! GLSL ES 后处理模块
 //!
-//! 按目标 GLES 版本条件执行（OpenGL target 重构后，spirv-cross 输出原生带
-//! location/binding，不同 ES 版本的语法支持不同）：
+//! 剥离 spirv-cross 注入的 binding/location 限定符，模拟桌面 GL 3.3 语义：
+//! 桌面 shader 无 binding/location 声明（varying 按名匹配、block/sampler 靠
+//! glUniformBlockBinding/glBindBufferBase/glUniform1i 等 API 分配），翻译层
+//! 产物必须模拟该形态。所有 ES 版本（320/310/300）行为一致：
 //!
-//! | 版本 | in/out location | uniform location | binding |
-//! |------|-----------------|------------------|---------|
-//! | 320  | 保留（ES 3.2 合法） | 保留（ES 3.1+ 合法） | 保留（ES 3.1+ 合法） |
-//! | 310  | strip（跨 stage 保守） | strip（保守） | 保留（ES 3.1 合法） |
-//! | 300  | strip（ES 3.0 varying 不支持 location） | strip（ES 3.0 不支持 uniform location，spike_g 实测） | 移除（ES 3.0 不支持 binding） |
+//! | 项 | 处理 | 理由 |
+//! |----|------|------|
+//! | block binding | strip（全版本） | spirv-cross 按 shader 内 block 集合独立分配，
+//!   跨 stage 不一致 → GLES 链接 "binding mismatch"（真机 50 link failed） |
+//! | sampler binding | strip（全版本） | MC 用 glUniform1i 设置采样单元，与桌面一致 |
+//! | varying location | strip（全版本） | 按名匹配链接；spirv-cross 独立分配在
+//!   VS/FS 集合不对称时错位（animate_sprite 实测） |
+//! | uniform location | strip（全版本） | 按 glGetUniformLocation 查询；
+//!   消除 GL_EXT_explicit_uniform_location 扩展依赖 |
+//! | image binding | **保留** | GLES 硬性要求 format+binding（差分已豁免） |
+//! | atomic_uint binding | **保留** | fix_atomic_counter_binding 处理 offset→binding 后必须留 |
+//! | outColorN location | 重注 location=N | Sodium 依赖 outColorN → color attachment N
+//!   （GLES 特有约定，strip 后重新注入） |
 //!
 //! 无条件执行：
 //! - strip_uniform_binding：glslang OpenGL target 无条件给 standalone uniform
@@ -25,35 +35,37 @@ use std::sync::OnceLock;
 
 /// GLSL ES 后处理主入口
 ///
-/// `version` 为目标的 GLES 版本（320/310/300），决定条件 strip 策略
-/// （见模块文档表格）。
+/// `version` 参数保留仅为调用方兼容：剥离策略已无条件化（模拟桌面 GL 3.3
+/// 语义），所有 ES 版本行为一致，版本不再参与条件分支。
 pub fn post_process(src: &str, version: u16) -> String {
+    let _ = version;
     let mut result = src.to_string();
 
-    // 0. 移除 in/out varying 的 layout(location=N)（310/300 回退时）
-    //    320 保留（ES 3.2 中 in/out location 合法，spike 实测 320 产物原生带
-    //    location）。310/300 保守 strip：ES 3.0 的 varying 不支持 location，
-    //    且 strip 后 GLES linker 按变量名匹配，规避跨 stage 计数不一致风险。
-    //    VS attribute 的 location 也被移除——MC 通过 glGetAttribLocation
+    // 0. 移除 in/out varying 的 layout(location=N)（所有 ES 版本）
+    //    桌面 GL 3.3 的 MC shader 无 varying location（按名匹配链接），
+    //    spirv-cross 按 shader 内变量集合独立分配 location，跨 stage 集合
+    //    不对称时必然错位（animate_sprite 实测）。剥离后 GLES linker 按
+    //    变量名匹配，与桌面语义一致。
+    //    VS attribute 的 location 同样剥离——MC 通过 glGetAttribLocation
     //    动态获取 attribute 位置，不依赖硬编码 location。
-    //    outColorN 的 location 由后续 fix_out_color_locations 重新添加。
-    if version < 320 {
-        result = strip_varying_locations(&result);
+    //    outColorN 的 location 由后续 fix_out_color_locations 重新添加
+    //    （Sodium 依赖 outColorN → color attachment N 的 GLES 特有约定）。
+    result = strip_varying_locations(&result);
 
-        // 0.5 移除 standalone uniform 的 layout(location=N)（310/300 回退时）
-        //     GLSL ES 3.00 不支持 uniform location（spike_g 实测 300 es 输出
-        //     带 location 会编译失败）；310 保守 strip（MC 通过
-        //     glGetUniformLocation 动态查询，无需显式 location）。
-        //     uniform block（含 `{`，用 binding 不用 location）不受影响。
-        result = strip_uniform_locations(&result);
-    }
+    // 0.5 移除 standalone uniform 的 layout(location=N)（所有 ES 版本）
+    //    桌面 MC shader 无 uniform location（按 glGetUniformLocation 动态
+    //    查询），剥离后消除 GL_EXT_explicit_uniform_location 扩展依赖（M1 风险）。
+    //    uniform block（含 `{`，用 binding 不用 location）不受影响。
+    result = strip_uniform_locations(&result);
 
-    // 1. 移除 layout(binding=X)（仅 300 es：ES 3.0 不支持 binding 限定符；
-    //    ES 3.1+ 合法，320/310 保留）。注意：image 的 binding 不能移除！
-    //    image 必须通过 layout(binding=N) 与 glBindImageTexture(unit,...) 对应。
-    if version < 310 {
-        result = strip_bindings(&result);
-    }
+    // 1. 移除 layout(binding=X)（所有 ES 版本，模拟桌面默认绑定点语义）
+    //    桌面 shader 的 block/sampler 无 binding 声明，靠 API
+    //    （glUniformBlockBinding/glBindBufferBase/glUniform1i）分配。
+    //    spirv-cross 按 shader 内 block 集合独立分配 binding，跨 stage 不一致
+    //    导致 GLES 链接 "binding mismatch"（真机 50 link failed 崩溃）。
+    //    注意：image 行跳过（GLES 硬性要求 format+binding，差分已豁免）、
+    //    atomic_uint 行跳过（fix_atomic_counter_binding 处理 offset→binding）。
+    result = strip_bindings(&result);
 
     // 1.3 无条件移除 standalone uniform 上的 binding（所有 ES 版本）
     //     glslang OpenGL target 给 standalone uniform 分配 binding decoration，
@@ -92,13 +104,19 @@ pub fn post_process(src: &str, version: u16) -> String {
     result
 }
 
-/// 剥离所有非 image 行的 layout(binding=X)（仅 300 es 使用）
+/// 剥离所有非 image/atomic 行的 layout(binding=X)（所有 ES 版本）
 ///
-/// 按行处理，跳过 image 声明行（保留 image 的 binding）。
+/// 按行处理，跳过 image 声明行（保留 image 的 binding——GLES 硬性要求
+/// format+binding）与 atomic_uint 声明行（保留 binding——fix_atomic_counter_binding
+/// 把 offset 转成 binding 后必须保留）。
 fn strip_bindings(src: &str) -> String {
     let re_is_image = {
         static RE_IS_IMAGE: OnceLock<Regex> = OnceLock::new();
         RE_IS_IMAGE.get_or_init(|| Regex::new(r"(?i)\bimage\w*\s+\w+\s*;").unwrap())
+    };
+    let re_is_atomic = {
+        static RE_IS_ATOMIC: OnceLock<Regex> = OnceLock::new();
+        RE_IS_ATOMIC.get_or_init(|| Regex::new(r"(?i)uniform\s+atomic_uint").unwrap())
     };
     let re_binding = {
         static RE_BINDING: OnceLock<Regex> = OnceLock::new();
@@ -122,8 +140,8 @@ fn strip_bindings(src: &str) -> String {
     let mut result = src
         .lines()
         .map(|line| {
-            // 跳过 image 声明行（保留 image 的 binding）
-            if re_is_image.is_match(line) {
+            // 跳过 image 声明行（保留 image 的 binding）与 atomic_uint 行
+            if re_is_image.is_match(line) || re_is_atomic.is_match(line) {
                 return line.to_string();
             }
             // 非 image 行：移除 binding
@@ -692,23 +710,86 @@ mod tests {
 
     #[test]
     fn test_image_binding_preserved() {
-        // image 的 binding 不应被移除（300 移除 binding 时跳过 image 行）
+        // image 的 binding 不应被移除（全版本：GLES 硬性要求 format+binding）
         let input = "layout(binding = 0, rgba32f) uniform writeonly highp image2D img;";
-        let result = post_process(input, 300);
+        for version in [300u16, 310, 320] {
+            let result = post_process(input, version);
+            assert!(
+                result.contains("binding = 0"),
+                "version {}: image binding should be preserved, got: {}",
+                version,
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn test_atomic_counter_binding_preserved() {
+        // atomic_uint 的 binding 不应被移除（fix_atomic_counter_binding
+        // 把 offset 转成 binding 后必须保留，GLES 硬性要求）
+        let input = "layout(binding = 0) uniform atomic_uint counter;";
+        for version in [300u16, 310, 320] {
+            let result = post_process(input, version);
+            assert!(
+                result.contains("binding = 0"),
+                "version {}: atomic binding should be preserved, got: {}",
+                version,
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn test_atomic_counter_offset_to_binding_all_versions() {
+        // fix_atomic_counter_binding：offset → binding，全版本执行
+        let input = "layout(offset = 4) uniform atomic_uint countArr[4];";
+        let result = post_process(input, 320);
         assert!(
-            result.contains("binding = 0"),
-            "image binding should be preserved, got: {}",
+            result.contains("layout(binding = 4)"),
+            "offset 应转为 binding，got: {}",
             result
         );
     }
 
     #[test]
-    fn test_320_keeps_binding() {
-        // 320 es 保留 binding（ES 3.1+ 支持，spike_c 实测 spirv-cross 输出
-        // layout(binding = 0) 且 11/11 通过）
+    fn test_320_strips_binding() {
+        // 全版本剥离 binding（模拟桌面 GL 3.3：block/sampler 无 binding 声明，
+        // 靠 glUniformBlockBinding/glBindBufferBase/glUniform1i API 分配）
         let input = "layout(binding = 0) uniform sampler2D tex;";
         let result = post_process(input, 320);
-        assert!(result.contains("binding"), "got: {}", result);
+        assert!(
+            !result.contains("binding"),
+            "320 应剥离 binding（桌面语义），got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_320_strips_block_binding() {
+        // UBO block 的 binding 也应剥离（spirv-cross 按 shader 内 block 集合
+        // 独立分配 binding，跨 stage 不一致会导致 GLES 链接 binding mismatch）
+        let input = "layout(binding = 0, std140) uniform DynamicTransforms\n{\n    mat4 ModelViewMat;\n};\n";
+        let result = post_process(input, 320);
+        assert!(
+            !result.contains("binding"),
+            "320 应剥离 block binding，got: {}",
+            result
+        );
+        assert!(result.contains("layout(std140)"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_320_strips_standalone_uniform_binding() {
+        // spirv-cross 输出 `layout(location = 0, binding = 0) uniform mat4 MVP;`
+        // standalone uniform 的 binding 必须剥离（GLES 中 binding 仅对
+        // block/sampler/image/atomic 合法）
+        let input = "layout(location = 0, binding = 0) uniform mat4 MVP;";
+        let result = post_process(input, 320);
+        assert!(
+            !result.contains("binding"),
+            "standalone uniform binding 应剥离，got: {}",
+            result
+        );
     }
 
     #[test]
@@ -770,40 +851,46 @@ mod tests {
     }
 
     #[test]
-    fn test_post_process_320_keeps_locations() {
-        // 320 es：in/out 与 uniform location 全部保留（ES 3.2 合法）
+    fn test_post_process_320_strips_locations() {
+        // 全版本剥离 varying/uniform location（桌面 GL 3.3：MC shader 无
+        // location 声明，varying 按名匹配、uniform 按 glGetUniformLocation 查询）
         let input = "#version 320 es\nlayout(location = 0) uniform mat4 ProjMat;\nlayout(location = 0) in vec3 Position;\nlayout(location = 0) out vec4 fragColor;\nvoid main() { gl_Position = ProjMat * vec4(Position, 1.0); fragColor = vec4(1.0); }\n";
         let result = post_process(input, 320);
         assert!(
-            result.contains("layout(location = 0) uniform mat4 ProjMat"),
-            "320 应保留 uniform location，got: {}",
+            result.contains("uniform mat4 ProjMat;"),
+            "uniform 应保留但无 location，got: {}",
             result
         );
         assert!(
-            result.contains("layout(location = 0) in vec3 Position"),
-            "320 应保留 in location，got: {}",
+            result.contains("in vec3 Position;"),
+            "in 应保留但无 location，got: {}",
             result
         );
         assert!(
-            result.contains("layout(location = 0) out vec4 fragColor"),
-            "320 应保留 out location，got: {}",
+            result.contains("out vec4 fragColor;"),
+            "out 应保留但无 location，got: {}",
+            result
+        );
+        assert!(
+            !result.contains("location"),
+            "320 不应残留任何 location（桌面语义），got: {}",
             result
         );
     }
 
     #[test]
-    fn test_post_process_310_strips_locations_keeps_binding() {
-        // 310 es：strip location（保守），保留 binding（ES 3.1 支持）
+    fn test_post_process_310_strips_locations_and_binding() {
+        // 310 es：全版本统一剥离 location 与 binding（桌面语义，与 320/300 一致）
         let input = "#version 310 es\nlayout(location = 0) uniform mat4 ProjMat;\nlayout(location = 0) in vec3 Position;\nlayout(binding = 0) uniform sampler2D tex;\nvoid main() { gl_Position = ProjMat * vec4(Position, 1.0); }\n";
         let result = post_process(input, 310);
         assert!(
             !result.contains("location"),
-            "310 不应残留 location（保守 strip），got: {}",
+            "310 不应残留 location，got: {}",
             result
         );
         assert!(
-            result.contains("binding = 0"),
-            "310 应保留 binding，got: {}",
+            !result.contains("binding"),
+            "310 不应残留 binding（sampler 行剥离，桌面语义），got: {}",
             result
         );
     }

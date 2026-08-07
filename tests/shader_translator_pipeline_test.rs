@@ -267,9 +267,10 @@ fn translate_output_does_not_contain_binding_in_300_fallback() {
 }
 
 #[test]
-fn translate_output_keeps_binding_in_320() {
-    // 320 es 保留 binding（ES 3.1+ 支持，spike_c 实测 spirv-cross 输出
-    // layout(binding = 0) 且 11/11 通过）
+fn translate_output_does_not_contain_binding_in_320() {
+    // 全版本剥离 binding（桌面 GL 3.3 语义：sampler/block 无 binding 声明，
+    // 靠 glUniform1i/glUniformBlockBinding/glBindBufferBase API 分配；
+    // spirv-cross 独立分配导致跨 stage binding mismatch，必须剥离）
     let src = "#version 450\n\
                layout(binding = 0) uniform sampler2D tex;\n\
                layout(location = 0) in vec2 uv;\n\
@@ -277,7 +278,7 @@ fn translate_output_keeps_binding_in_320() {
                void main() { fragColor = texture(tex, uv); }\n";
     let result = translate(src, GL_FRAGMENT_SHADER);
     if let TranslationResult::Translated(out) = result {
-        assert!(out.contains("binding"), "320 应保留 binding: {}", out);
+        assert!(!out.contains("binding"), "320 应剥离 binding: {}", out);
     } else {
         panic!("expected Translated");
     }

@@ -103,23 +103,22 @@ fn postprocess_preserves_push_constant_layout() {
     assert!(result.contains("layout(push_constant)"));
 }
 
-// ============ binding 保留（320/310 es） ============
+// ============ binding 剥离（全版本，桌面语义） ============
 
 #[test]
-fn postprocess_320_keeps_binding() {
-    // ES 3.1+ 支持 binding 限定符，320 保留（spike_c 实测 spirv-cross 输出
-    // layout(binding = 0) 且 11/11 通过）
+fn postprocess_320_strips_binding() {
+    // 全版本剥离 binding（模拟桌面 GL 3.3：sampler/block 无 binding 声明，
+    // 靠 glUniform1i/glUniformBlockBinding/glBindBufferBase API 分配）
     let src = "layout(binding = 0) uniform sampler2D tex;";
     let result = postprocess::post_process(src, 320);
-    assert!(result.contains("binding"), "320 应保留 binding: {}", result);
+    assert!(!result.contains("binding"), "320 应剥离 binding: {}", result);
 }
 
 #[test]
-fn postprocess_310_keeps_binding() {
-    // ES 3.1 支持 binding，310 保留（仅 strip location）
+fn postprocess_310_strips_binding() {
     let src = "layout(binding = 0) uniform sampler2D tex;";
     let result = postprocess::post_process(src, 310);
-    assert!(result.contains("binding"), "310 应保留 binding: {}", result);
+    assert!(!result.contains("binding"), "310 应剥离 binding: {}", result);
 }
 
 // ============ outColorN location 注入（无条件） ============
@@ -208,30 +207,35 @@ fn postprocess_310_strips_locations() {
 }
 
 #[test]
-fn postprocess_320_keeps_locations() {
-    // 320 保留所有 location（ES 3.2 支持 in/out + uniform location）
+fn postprocess_320_strips_locations() {
+    // 全版本剥离 location（桌面 GL 3.3：varying 按名匹配、uniform 按名查询）
     let src = "#version 320 es\nlayout(location = 0) uniform mat4 MVP;\nlayout(location = 0) in vec3 Position;\nlayout(location = 0) out vec4 fragColor;\nvoid main() {}\n";
     let result = postprocess::post_process(src, 320);
-    assert!(result.contains("layout(location = 0) uniform mat4 MVP"));
-    assert!(result.contains("layout(location = 0) in vec3 Position"));
-    assert!(result.contains("layout(location = 0) out vec4 fragColor"));
+    assert!(
+        !result.contains("location"),
+        "320 不应残留 location: {}",
+        result
+    );
+    assert!(result.contains("uniform mat4 MVP;"));
+    assert!(result.contains("in vec3 Position;"));
+    assert!(result.contains("out vec4 fragColor;"));
 }
 
 // ============ 组合场景 ============
 
 #[test]
 fn postprocess_full_gles_output_cleanup() {
-    // 模拟 spirv-cross 320 es 输出：binding 保留、location 保留、outColor 重注
+    // 模拟 spirv-cross 320 es 输出：binding/location 全剥离、outColor 重注
     let src = "#version 320 es\nlayout(binding = 0) uniform sampler2D Sampler0;\nlayout(location = 0) in vec2 texCoord;\nout vec4 outColor0;\nvoid main() {\n    outColor0 = texture(Sampler0, texCoord);\n}\n";
     let result = postprocess::post_process(src, 320);
-    // 320 保留 binding 和 in/out location
-    assert!(result.contains("binding"), "320 应保留 binding: {}", result);
+    // 全版本剥离 binding 与 in/out location（桌面语义）
+    assert!(!result.contains("binding"), "320 应剥离 binding: {}", result);
     assert!(
-        result.contains("layout(location = 0) in vec2 texCoord"),
-        "320 应保留 in location: {}",
+        !result.contains("layout(location = 0) in"),
+        "320 应剥离 in location: {}",
         result
     );
-    // outColor0 有 location（重注）
+    // outColor0 有 location（重注，Sodium 依赖 outColorN → attachment N）
     assert!(result.contains("layout(location=0) out vec4 outColor0;"));
     // shader body 保留
     assert!(result.contains("texture(Sampler0, texCoord)"));
