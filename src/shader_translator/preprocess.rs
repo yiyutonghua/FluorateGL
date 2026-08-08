@@ -61,8 +61,12 @@ pub fn preprocess(source: &str, stage: u32) -> String {
     // 变量也能获得 location 注入）。
     migrate_legacy_variables(&mut result, stage);
     // samplerBuffer 原样保留（OpenGL target 原生支持 ImageBuffer；转换会破坏 texelFetch 调用）
-    // 注入 textureQueryLod polyfill（GLES 3.0 不支持 GL 4.0 textureQueryLod）
-    inject_texture_query_lod(&mut result);
+    // 注入 textureQueryLod polyfill（GLES 3.0 不支持 GL 4.0 textureQueryLod；
+    // 硬件支持 GL_EXT_texture_query_lod 时跳过注入走原生——spirv-cross 自动
+    // 输出 #extension 声明，见 B②）
+    if should_inject_tql_polyfill() {
+        inject_texture_query_lod(&mut result);
+    }
     // P2：atomic counter → SSBO 模拟（GLES 驱动 atomic counter 上限小；
     // 桌面 GL 3.3 无 atomic counter（GL 4.2+ 特性），仅 GL 4.x shader 输入时触发）
     let (converted, converted_flag) = convert_atomic_counter_to_ssbo(&result);
@@ -269,7 +273,13 @@ fn convert_sampler_buffer(src: &str) -> String {
 /// 注入 textureQueryLod polyfill 函数并替换调用点
 ///
 /// GLES 3.0 不支持 textureQueryLod（GL 4.0），用 dFdx/dFdy + log2 软件实现。
-/// 参考 MobileGlues 的 inject_textureQueryLod。
+/// 参考 MobileGlues 的 inject_textureQueryLod（glsl_for_es.cpp:611-636）。
+///
+/// B① 算法（像素域，对齐 MG）：`log2(max(length(dFdx(uv*texSize)),
+/// length(dFdy(uv*texSize))))`——含 textureSize 因子。旧实现为 UV 域
+/// `0.5*log2(max(dot(dx,dx),dot(dy,dy)))` 缺 texSize 因子 → LOD 系统性偏小
+/// log2(texSize)（texSize=1024 时偏小 10 级 mip，光影包 mip 选偏细）。
+/// 像素域 = UV 域(用 length) + log2(texSize)，语义与硬件 textureQueryLOD 一致。
 ///
 /// 实现：
 /// 1. 在 #version 行之后注入两个 polyfill 重载（sampler2D / sampler3D）
@@ -285,21 +295,24 @@ fn inject_texture_query_lod(result: &mut String) {
     }
 
     // 注入 polyfill 函数（在 #version 行之后）
+    // B①：像素域算法（含 textureSize 因子，对齐 MobileGlues glsl_for_es.cpp:611-636）
     let polyfill = "\
-// textureQueryLod polyfill (GLES 3.0 不支持 GL 4.0 textureQueryLod)
+// textureQueryLod polyfill (GLES 3.0 不支持 GL 4.0 textureQueryLod; pixel-domain)
 vec2 textureQueryLod_polyfill(sampler2D sampler, vec2 coords) {
-  vec2 dx = dFdx(coords);
-  vec2 dy = dFdy(coords);
-  float maxDelta = max(dot(dx, dx), dot(dy, dy));
-  float lod = 0.5 * log2(maxDelta);
-  return vec2(lod, lod);
+  vec2 texSizeF = vec2(textureSize(sampler, 0));
+  vec2 dx = dFdx(coords * texSizeF);
+  vec2 dy = dFdy(coords * texSizeF);
+  float maxDerivative = max(length(dx), length(dy));
+  float lod = log2(maxDerivative);
+  return vec2(lod);
 }
 vec2 textureQueryLod_polyfill(sampler3D sampler, vec3 coords) {
-  vec3 dx = dFdx(coords);
-  vec3 dy = dFdy(coords);
-  float maxDelta = max(dot(dx, dx), dot(dy, dy));
-  float lod = 0.5 * log2(maxDelta);
-  return vec2(lod, lod);
+  vec3 texSizeF = vec3(textureSize(sampler, 0));
+  vec3 dx = dFdx(coords * texSizeF);
+  vec3 dy = dFdy(coords * texSizeF);
+  float maxDerivative = max(length(dx), length(dy));
+  float lod = log2(maxDerivative);
+  return vec2(lod);
 }
 ";
     let insert_pos = find_insert_position(result);
@@ -321,6 +334,25 @@ vec2 textureQueryLod_polyfill(sampler3D sampler, vec3 coords) {
     }
 
     *result = replaced;
+}
+
+/// B②：是否注入 textureQueryLod polyfill。
+///
+/// - 硬件支持 GL_EXT_texture_query_lod（capabilities 扩展字符串）→ **不注入**
+///   （走原生：spirv-cross 自动输出 `#extension GL_EXT_texture_query_lod : require`
+///   + `textureQueryLOD` 调用，已探针验证；纯性能收益）
+/// - 不支持 → 注入（现状行为）
+///
+/// **已知风险**：Mesa llvmpipe 声明该扩展但 GLSL 编译器未实现（探针实测编译
+/// 失败）——扩展字符串声明不可靠。逃生门：环境变量 FLUORATEGL_FORCE_TQL_POLYFILL
+/// （任意非空值）强制注入，供声明不实现的驱动使用。默认不设置时，Mesa 类
+/// 驱动上的 textureQueryLod shader 会编译失败（与 MobileGlues 行为一致——
+/// 它同样仅按扩展字符串判断）。
+fn should_inject_tql_polyfill() -> bool {
+    if std::env::var_os("FLUORATEGL_FORCE_TQL_POLYFILL").is_some() {
+        return true;
+    }
+    !crate::backend::capabilities().texture_query_lod
 }
 
 /// 提取 GLSL 源码中的 #version 行
@@ -856,6 +888,56 @@ void main() {\n\
             "不应残留 atomic_uint 声明，got:\n{}",
             out
         );
+    }
+
+    /// B①：polyfill 应为像素域算法（含 textureSize 因子，对齐 MobileGlues）
+    #[test]
+    fn test_texture_query_lod_pixel_domain() {
+        let input = "#version 330 core\nuniform sampler2D tex;\nin vec2 uv;\nout vec4 c;\nvoid main() { c = vec4(textureQueryLod(tex, uv), 0.0, 1.0); }\n";
+        let result = preprocess(input, 0x8B30);
+        // 注入体应含 textureSize 因子与像素域 log2
+        assert!(
+            result.contains("textureSize(sampler, 0)"),
+            "polyfill 应含 textureSize 因子（像素域），got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("dFdx(coords * texSizeF)"),
+            "像素域：坐标应先乘 texSize 再求导，got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("log2(maxDerivative)"),
+            "像素域：log2 直接作用于 length，got:\n{}",
+            result
+        );
+        // 旧 UV 域特征不应残留
+        assert!(
+            !result.contains("0.5 * log2(maxDelta)"),
+            "旧 UV 域算法不应残留"
+        );
+        assert!(
+            result.contains("textureQueryLod_polyfill(tex, uv)"),
+            "调用点应被替换"
+        );
+    }
+
+    /// B②：环境变量逃生门应强制注入（离线/无 caps 场景默认注入）
+    #[test]
+    fn test_tql_force_polyfill_env() {
+        // 测试环境单线程，set_var 安全（unsafe 块隔离）
+        unsafe {
+            std::env::set_var("FLUORATEGL_FORCE_TQL_POLYFILL", "1");
+        }
+        let input = "#version 330 core\nuniform sampler2D tex;\nin vec2 uv;\nout vec4 c;\nvoid main() { c = vec4(textureQueryLod(tex, uv), 0.0, 1.0); }\n";
+        let result = preprocess(input, 0x8B30);
+        assert!(
+            result.contains("textureQueryLod_polyfill"),
+            "逃生门应强制注入 polyfill"
+        );
+        unsafe {
+            std::env::remove_var("FLUORATEGL_FORCE_TQL_POLYFILL");
+        }
     }
 
     /// P2：无 atomic 的 shader 应原样返回（不转换不加水印）

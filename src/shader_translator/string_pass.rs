@@ -45,6 +45,10 @@ pub fn translate(source: &str, stage: u32) -> String {
     // Legacy GLSL (<=1.30) uses attribute/varying/texture2D.
     output = replace_legacy_syntax(&output, stage);
 
+    // C：剥离 uniform 声明中的初始化器（GLSL ES 禁止 `uniform float x = N;`；
+    // 桌面 shader 可能携带——SPIR-V 主路径不会产出，仅 string_pass 兜底需要）
+    output = strip_uniform_initializers(&output);
+
     // GLSL ES requires explicit precision for float, int and samplers.
     output = inject_precision(&output, stage);
 
@@ -79,6 +83,31 @@ fn replace_version(source: &str) -> String {
         target.to_string()
     })
     .into_owned()
+}
+
+/// 剥离 uniform 声明中的初始化器（C 项，对齐 MobileGlues
+/// glsl_for_es.cpp:220-319 process_uniform_declarations）。
+///
+/// GLSL ES 禁止 `uniform float x = N;`（初始化器），桌面 shader 可能携带。
+/// SPIR-V 主路径（shaderc/spirv-cross）不会产出初始化器，本函数仅
+/// string_pass 兜底路径需要。
+///
+/// 安全处理：
+/// - 单行内 `uniform <类型> <名> = <expr>;` → `uniform <类型> <名>;`
+/// - 支持 `layout(...)` 前缀（`layout(location=0) uniform ...`）
+/// - 数组声明 `uniform float arr[4] = ...;` ✓（`=` 前不跨行匹配）
+/// - 无 `=` 的 uniform 行原样保留；非 uniform 行（const/全局变量初始化器）不触碰
+/// - 限制：初始化器跨行的数组字面量（`= {\n...\n};`）不处理（罕见，MC 不用）
+fn strip_uniform_initializers(source: &str) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"(?m)^(\s*(?:layout\([^)]*\)\s*)?uniform\b[^=;\n]*?)\s*=\s*[^;\n]*;").unwrap()
+    });
+    let out = re.replace_all(source, "$1;").into_owned();
+    if out != source {
+        log::debug!("[ShaderTranslator] string_pass 剥离 uniform 初始化器");
+    }
+    out
 }
 
 fn replace_legacy_syntax(source: &str, stage: u32) -> String {
@@ -648,5 +677,37 @@ void main() {
             !result.contains("minecraft_sample_lightmap"),
             "不应出现 minecraft_sample_lightmap"
         );
+    }
+}
+
+#[cfg(test)]
+mod tql_extra_tests {
+    use super::strip_uniform_initializers;
+
+    /// C：uniform 初始化器应被剥离（保留声明与分号）
+    #[test]
+    fn test_strip_uniform_initializer_basic() {
+        let input = "uniform float x = 1.0;\n";
+        let out = strip_uniform_initializers(input);
+        assert_eq!(out, "uniform float x;\n");
+    }
+
+    /// C：layout 前缀 + 数组声明 + 多声明形式
+    #[test]
+    fn test_strip_uniform_initializer_forms() {
+        let input = "layout(location=0) uniform mat4 MVP = mat4(1.0);\nuniform float arr[4] = {1.0, 2.0, 3.0, 4.0};\nuniform vec2 a, b = vec2(1.0);\n";
+        let out = strip_uniform_initializers(input);
+        assert_eq!(
+            out,
+            "layout(location=0) uniform mat4 MVP;\nuniform float arr[4];\nuniform vec2 a, b;\n"
+        );
+    }
+
+    /// C：无初始化器的 uniform / 非 uniform 行不应被触碰
+    #[test]
+    fn test_strip_uniform_initializer_noop() {
+        let input = "uniform float y;\nconst float k = 2.0;\nfloat g = 3.0;\n";
+        let out = strip_uniform_initializers(input);
+        assert_eq!(out, input);
     }
 }

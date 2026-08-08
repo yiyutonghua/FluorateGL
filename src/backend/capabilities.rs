@@ -55,6 +55,11 @@ pub struct GlesCapabilities {
     /// GL_ARB_indirect_compute / GL 4.6（GLES 几乎无支持）
     /// 覆盖：glMultiDrawArraysIndirectCount, glMultiDrawElementsIndirectCount
     pub indirect_count: bool,
+    /// GL_EXT_texture_query_lod（GLES 扩展）
+    /// 覆盖：textureQueryLod 的硬件支持——支持时 shader 翻译可跳过 polyfill 注入
+    /// （注意：Mesa llvmpipe 声明该扩展但 GLSL 编译器未实现——扩展字符串
+    /// 声明不可靠，preprocess 有 FLUORATEGL_FORCE_TQL_POLYFILL 逃生门）
+    pub texture_query_lod: bool,
 }
 
 impl GlesCapabilities {
@@ -70,6 +75,7 @@ impl GlesCapabilities {
             multi_draw: false,
             indirect_draw: false,
             indirect_count: false,
+            texture_query_lod: false,
         }
     }
 
@@ -111,10 +117,11 @@ impl GlesCapabilities {
             indirect_draw: true,
             // GLES 无标准 indirect count 扩展
             indirect_count: false,
+            texture_query_lod: extensions.iter().any(|e| e == "GL_EXT_texture_query_lod"),
         };
 
         log::info!(
-            "[FluorateGL] GLES 能力检测: version={} base_vertex={} base_instance={} multi_base_vertex={} multi_indirect={} multi_draw={} indirect_draw={} indirect_count={}",
+            "[FluorateGL] GLES 能力检测: version={} base_vertex={} base_instance={} multi_base_vertex={} multi_indirect={} multi_draw={} indirect_draw={} indirect_count={} texture_query_lod={}",
             version.0,
             caps.draw_elements_base_vertex,
             caps.base_instance,
@@ -122,7 +129,8 @@ impl GlesCapabilities {
             caps.multi_draw_indirect,
             caps.multi_draw,
             caps.indirect_draw,
-            caps.indirect_count
+            caps.indirect_count,
+            caps.texture_query_lod
         );
         if !caps.draw_elements_base_vertex {
             log::warn!(
