@@ -106,18 +106,21 @@ define_symbols![
     "glIsEnabled",
     "glIsEnabledi",
     "glGetVertexAttribdv",
-    // ==== GL 导出：src/gl/drawing.rs（共 11 个）====
+    // ==== GL 导出：src/gl/drawing.rs（共 14 个）====
     "glDrawRangeElements",
     "glDrawArraysInstanced",
     "glDrawElementsInstanced",
     "glPrimitiveRestartIndex",
     "glDrawElementsBaseVertex",
+    "glDrawRangeElementsBaseVertex",
     "glDrawArraysIndirect",
     "glDrawElementsIndirect",
     "glDrawArraysInstancedBaseInstance",
     "glDrawElementsInstancedBaseInstance",
     "glDrawElementsInstancedBaseVertex",
     "glDrawElementsInstancedBaseVertexBaseInstance",
+    "glDrawTransformFeedback",
+    "glDrawTransformFeedbackInstanced",
     // ==== GL 导出：src/gl/framebuffer.rs（共 24 个）====
     "glGenFramebuffers",
     "glDeleteFramebuffers",
@@ -489,13 +492,14 @@ mod tests {
         assert!(!is_exported(b"glNonexistent\0"));
     }
 
-    /// 表与代码 no_mangle 数量一致性：EGL 34 + GL 308 = 342
+    /// 表与代码 no_mangle 数量一致性：EGL 34 + GL 311 = 345
+    /// （D1/D2 新增 glDrawRangeElementsBaseVertex + glDrawTransformFeedback ×2）
     #[test]
     fn symbol_count_sanity() {
         let egl = SYMBOLS.iter().filter(|s| s.starts_with(b"egl")).count();
         let gl = SYMBOLS.len() - egl;
         assert_eq!(egl, 34, "EGL 导出数量不符（请核对 src/egl/exports.rs）");
-        assert_eq!(gl, 308, "GL 导出数量不符（请核对 src/gl/*.rs）");
-        assert_eq!(SYMBOLS.len(), 342);
+        assert_eq!(gl, 311, "GL 导出数量不符（请核对 src/gl/*.rs）");
+        assert_eq!(SYMBOLS.len(), 345);
     }
 }

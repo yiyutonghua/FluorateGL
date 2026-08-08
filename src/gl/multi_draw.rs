@@ -230,10 +230,19 @@ pub extern "C" fn glMultiDrawArraysIndirect(
     );
     // 同步 GL_DRAW_INDIRECT_BUFFER 持久映射的脏区域（若 indirect buffer 是持久映射的）
     sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
+    // D3：同步 GL_ARRAY_BUFFER 持久映射的脏区域（顶点数据 buffer 持久映射时
+    // 未上传会导致 indirect draw 使用过期顶点数据——M6 只补了 ELEMENT，ARRAY 是盲区）
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
     backend::with_gles_dispatch(|dispatch| unsafe {
         // C1：以符号存在性为主导（GLES 3.2 core / GL_EXT_multi_draw_indirect）
         let supported = !is_stub(dispatch, dispatch.multi_draw_arrays_indirect as *const ());
         if !supported {
+            // D5：GL 规范 stride 必须 ≥ 0，负值 → GL_INVALID_VALUE。
+            // 放在降级分支内：透传路径由 GLES 驱动报错（不注入避免双重错误）
+            if stride < 0 {
+                inject_gl_error(GL_INVALID_VALUE);
+                return;
+            }
             // 降级：glDrawArraysIndirect 是 GLES 3.1 core（项目前提），直接循环调用
             let step = array_indirect_stride(stride);
             for i in 0..drawcount as isize {
@@ -270,10 +279,18 @@ pub extern "C" fn glMultiDrawElementsIndirect(
     sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
     // 同步 GL_ELEMENT_ARRAY_BUFFER 持久映射的脏区域（若索引 buffer 是持久映射的）
     sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
+    // D3：同步 GL_ARRAY_BUFFER 持久映射的脏区域（顶点数据 buffer，M6 盲区）
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
     backend::with_gles_dispatch(|dispatch| unsafe {
         // C1：以符号存在性为主导（GLES 3.2 core / GL_EXT_multi_draw_indirect）
         let supported = !is_stub(dispatch, dispatch.multi_draw_elements_indirect as *const ());
         if !supported {
+            // D5：GL 规范 stride 必须 ≥ 0，负值 → GL_INVALID_VALUE（降级分支内，
+            // 透传路径由 GLES 驱动报错）
+            if stride < 0 {
+                inject_gl_error(GL_INVALID_VALUE);
+                return;
+            }
             // 降级：glDrawElementsIndirect 是 GLES 3.1 core（项目前提），直接循环调用
             let step = element_indirect_stride(stride);
             for i in 0..drawcount as isize {
@@ -317,6 +334,11 @@ pub extern "C" fn glMultiDrawArraysIndirectCount(
                 maxdrawcount,
                 stride,
             );
+            return;
+        }
+        // D5：GL 4.6 规范 stride 必须 ≥ 0，负值 → GL_INVALID_VALUE（CPU 模拟路径）
+        if stride < 0 {
+            inject_gl_error(GL_INVALID_VALUE);
             return;
         }
         // 降级：CPU 端读取 count buffer 的实际 drawcount，循环 glDrawArraysIndirect
@@ -365,6 +387,10 @@ pub extern "C" fn glMultiDrawElementsIndirectCount(
 
     // 同步 indirect buffer 持久映射脏区域
     sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
+    // D4：同步 GL_ELEMENT_ARRAY_BUFFER 持久映射的脏区域（索引 buffer——与
+    // glDrawElementsIndirect/glMultiDrawElementsIndirect 的 M6 补丁对齐，
+    // 该函数此前遗漏）
+    sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
 
     backend::with_gles_dispatch(|dispatch| unsafe {
         // C1：以符号存在性为主导（GLES 无对应，恒 stub → 恒 CPU 模拟）
@@ -381,6 +407,11 @@ pub extern "C" fn glMultiDrawElementsIndirectCount(
                 maxdrawcount,
                 stride,
             );
+            return;
+        }
+        // D5：GL 4.6 规范 stride 必须 ≥ 0，负值 → GL_INVALID_VALUE（CPU 模拟路径）
+        if stride < 0 {
+            inject_gl_error(GL_INVALID_VALUE);
             return;
         }
         // 降级：CPU 端读取 count buffer 的实际 drawcount，循环 glDrawElementsIndirect

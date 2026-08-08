@@ -801,4 +801,23 @@ mod tests {
             assert_eq!(name, b"GL_ARB_vertex_array_object");
         }
     }
+
+    /// C5/D5：注入错误应在下一次 glGetError 返回（FIFO 优先于驱动错误队列）。
+    #[test]
+    fn injected_gl_error_returned_by_gl_get_error() {
+        use super::{inject_gl_error, INJECTED_GL_ERRORS, glGetError};
+        // 清理可能残留的注入（其他测试/运行时不会注入，防御性清空）
+        INJECTED_GL_ERRORS.lock().unwrap().clear();
+
+        inject_gl_error(0x0501); // GL_INVALID_VALUE
+        inject_gl_error(0x0500); // GL_INVALID_ENUM
+        assert_eq!(glGetError(), 0x0501, "FIFO：先注入先返回");
+        assert_eq!(glGetError(), 0x0500, "FIFO：第二个注入错误");
+        // 队列清空后转发驱动（测试环境无 GLES dispatch → stub 返回 0）
+        assert_eq!(glGetError(), 0, "注入队列空时转发底层 glGetError");
+        assert!(
+            INJECTED_GL_ERRORS.lock().unwrap().is_empty(),
+            "测试后注入队列应为空"
+        );
+    }
 }

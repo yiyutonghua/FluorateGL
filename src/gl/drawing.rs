@@ -197,9 +197,57 @@ pub extern "C" fn glDrawElementsBaseVertex(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+pub extern "C" fn glDrawRangeElementsBaseVertex(
+    mode: u32,
+    start: u32,
+    end: u32,
+    count: i32,
+    type_: u32,
+    indices: *const std::ffi::c_void,
+    basevertex: i32,
+) {
+    // D1：GL 3.3.1 core 导出补齐（此前 dispatch 有字段/加载但无导出符号，
+    // LWJGL 绑定 null 有崩溃风险）。三级降级（同 basevertex 家族模式）：
+    // 透传（GLES 3.2 core 同名）→ glDrawElementsBaseVertex（start/end 是 hint）
+    // → offset_indices 补偿 + glDrawElements
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
+    sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        // C1：以符号存在性为主导
+        let supported = !is_stub(
+            dispatch,
+            dispatch.draw_range_elements_base_vertex as *const (),
+        );
+        if !supported {
+            // 二级：降级为 glDrawElementsBaseVertex（start/end 是 hint，跳过不影响
+            // 正确性——同 glDrawRangeElements 降级策略）
+            let base_vertex_ok =
+                !is_stub(dispatch, dispatch.draw_elements_base_vertex as *const ());
+            if !base_vertex_ok {
+                // 三级：offset_indices 按 basevertex 补偿索引指针
+                warn_base_vertex_unsupported("glDrawRangeElementsBaseVertex");
+                let offset_indices_ptr = offset_indices(indices, basevertex, type_);
+                (dispatch.draw_elements)(mode, count, type_, offset_indices_ptr);
+            } else {
+                (dispatch.draw_elements_base_vertex)(mode, count, type_, indices, basevertex);
+            }
+        } else {
+            (dispatch.draw_range_elements_base_vertex)(
+                mode, start, end, count, type_, indices, basevertex,
+            );
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
 pub extern "C" fn glDrawArraysIndirect(mode: u32, indirect: *const std::ffi::c_void) {
     // 同步 indirect buffer 持久映射脏区域（若 indirect buffer 是持久映射的）
     sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
+    // D3：同步 GL_ARRAY_BUFFER 持久映射脏区域（顶点数据 buffer——M6 审查只补了
+    // ELEMENT，ARRAY 在 indirect 路径被系统性遗漏；Sodium 场景顶点 buffer 为
+    // 持久映射 shadow，未同步会导致 indirect draw 使用过期顶点数据）
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
     log::debug!("[FluorateGL] glDrawArraysIndirect(mode=0x{:04X})", mode);
     // GLES 3.1 core 特性，项目前提，直接转发
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -214,6 +262,8 @@ pub extern "C" fn glDrawElementsIndirect(mode: u32, type_: u32, indirect: *const
     sync_persistent_buffer_if_needed(GL_DRAW_INDIRECT_BUFFER);
     // M6: 索引 buffer 若为持久映射，数据过期会导致索引错乱，与 indirect buffer 一并同步
     sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
+    // D3：同步 GL_ARRAY_BUFFER 持久映射脏区域（顶点数据 buffer——M6 盲区）
+    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
     log::debug!(
         "[FluorateGL] glDrawElementsIndirect(mode=0x{:04X}, type=0x{:04X})",
         mode,
@@ -379,4 +429,37 @@ pub extern "C" fn glDrawElementsInstancedBaseVertexBaseInstance(
             );
         }
     });
+}
+
+/// GL 3.3 core §4.1：glDrawTransformFeedback / glDrawTransformFeedbackInstanced。
+///
+/// D2：导出补齐（此前缺失——LWJGL 绑定 null 有崩溃风险）。GLES 3.1 无对应
+/// 函数（transform feedback 捕获回读绘制在 GLES 中不存在），语义无法模拟，
+/// 故 stub no-op + 首次调用告警。调用方通常先查询扩展/版本再使用，实际
+/// 触发概率低；导出符号存在即可避免 LWJGL 层 null 崩溃。
+static TF_DRAW_WARNED: AtomicBool = AtomicBool::new(false);
+
+fn warn_tf_draw_unsupported(fname: &str) {
+    if !TF_DRAW_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] {}: GLES 无 transform feedback 回读绘制（glDrawTransformFeedback），已 no-op，后续调用将静默跳过",
+            fname
+        );
+    }
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glDrawTransformFeedback(_mode: u32, _id: u32) {
+    warn_tf_draw_unsupported("glDrawTransformFeedback");
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glDrawTransformFeedbackInstanced(
+    _mode: u32,
+    _id: u32,
+    _instancecount: i32,
+) {
+    warn_tf_draw_unsupported("glDrawTransformFeedbackInstanced");
 }
