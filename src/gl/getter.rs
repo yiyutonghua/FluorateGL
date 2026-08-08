@@ -290,7 +290,11 @@ pub extern "C" fn glGetVertexAttribIuiv(index: u32, pname: u32, params: *mut u32
 /// glGetVertexAttribPointerv — GL 2.0（GLES 3.0 原生透传）
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glGetVertexAttribPointerv(index: u32, pname: u32, pointer: *mut *mut std::ffi::c_void) {
+pub extern "C" fn glGetVertexAttribPointerv(
+    index: u32,
+    pname: u32,
+    pointer: *mut *mut std::ffi::c_void,
+) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_vertex_attrib_pointer_v)(index, pname, pointer);
     });
@@ -335,7 +339,13 @@ pub extern "C" fn glGetTexLevelParameterfv(target: u32, level: i32, pname: u32, 
 /// glGetInternalformativ — GL 4.2（GLES 3.0 原生透传；GL 4.2 语义与 GLES 相同）
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glGetInternalformativ(target: u32, internalformat: u32, pname: u32, buf_size: i32, params: *mut i32) {
+pub extern "C" fn glGetInternalformativ(
+    target: u32,
+    internalformat: u32,
+    pname: u32,
+    buf_size: i32,
+    params: *mut i32,
+) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_internalformat_iv)(target, internalformat, pname, buf_size, params);
     });
@@ -456,11 +466,6 @@ pub extern "C" fn glGetInternalformati64v(
 /// glGetQueryIndexediv — GL 4.0（GLES 无对应，stub no-op）
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glGetQueryIndexediv(
-    _target: u32,
-    _index: u32,
-    _pname: u32,
-    _params: *mut i32,
-) {
+pub extern "C" fn glGetQueryIndexediv(_target: u32, _index: u32, _pname: u32, _params: *mut i32) {
     log::debug!("[FluorateGL] glGetQueryIndexediv stub (GLES 无对应)");
 }
