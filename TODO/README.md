@@ -10,6 +10,7 @@
 | ANGLE 后端问题（真机） | 搁置中（m00228 暂放） | [angle.md](angle.md) |
 | 旧厂商扩展（~712） | 待评估（无签名源） | [legacy_extensions.md](legacy_extensions.md) |
 | 扩展字符串声明决策 | 策略已定（m00271） | [extensions_declaration.md](extensions_declaration.md) |
+| SPIRV-Tools Optimizer 接入 | **待确认**（方案已存档） | [spirv_opt_pipeline.md](spirv_opt_pipeline.md) |
 
 ## 各主题要点
 
@@ -17,6 +18,7 @@
 - **ANGLE（真机）**：491 行日志 3 秒崩（UBO 对齐除零、glGetString null、26 个 GLES 函数 missing）；五层链路候选①EGL context 与函数表不匹配②库名（已排除）③版本不配对；盲区=loader 无 dlerror/dladdr、egl 导出无调用日志；恢复步骤见 angle.md
 - **旧扩展（712）**：MG 有我们无、无签名源的旧厂商扩展（glAlphaFragmentOp1ATI 等）；LWJGL 基本不查询；需补则第三轮签名源（Khronos gl.xml 或 MG 手写定义解析）
 - **扩展声明**：安全可声明 4 项（internalformat_query2/KHR_no_error/anisotropic/SSO）vs 行为依赖不声明 5 类（buffer_storage 事故教训/compute/DSA/draw_instanced/TF）；当前 build_fake_extensions 按 caps 校验剔除，不因 stub 全量声明
+- **SPIRV-Tools 接入（待确认）**：shaderc → SPIRV-Tools Optimizer（AggressiveDCE + RemoveUnusedInterfaceVariables 起步）→ spirv-cross；4 阶段（spike 验证/最小接入 fail-open/pass 逐调优/收尾）；不做的 5 个 MobileGL 自研 pass（fork 限制）；完整方案见 spirv_opt_pipeline.md
 
 ## 约定
 
