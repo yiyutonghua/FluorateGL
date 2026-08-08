@@ -87,6 +87,12 @@ GLFn g_fns[] = {
     F(DrawRangeElements, 0),
     F(DrawArraysIndirect, 3), F(DrawElementsIndirect, 3),
     F(DrawElementsBaseVertex, 3),
+    F(DrawRangeElementsBaseVertex, 3),
+    F(DrawArraysInstancedBaseInstance, 3),
+    F(DrawElementsInstancedBaseInstance, 3),
+    F(DrawElementsInstancedBaseVertex, 3),
+    F(DrawElementsInstancedBaseVertexBaseInstance, 3),
+    F(DrawTransformFeedback, 3), F(DrawTransformFeedbackInstanced, 3),
     F(MultiDrawArrays, 3), F(MultiDrawElements, 3),
     F(MultiDrawElementsBaseVertex, 3),
     F(MultiDrawArraysIndirect, 3), F(MultiDrawElementsIndirect, 3),
@@ -3376,6 +3382,256 @@ static void case_e15(const char* case_id, int* step_out) {
     *step_out = step;
 }
 
+/* ============ e16: draw 家族矩阵（Range/Instanced/BaseVertex/BaseInstance/Indirect） ============
+ * 子场景（cls 与函数表一致；0=must 严格对比，3=tbd 差异进 TBD 不 FAIL）：
+ *  a. glDrawRangeElements：正常范围（三角0）+ start>end 错误（INVALID_VALUE）——cls=0 透传
+ *  b. glDrawArraysInstanced / glDrawElementsInstanced（instancecount=2）——cls=0 透传
+ *  c. glDrawElementsBaseVertex 单版本（basevertex={0,3} 两 draw 画三角0+三角1）——cls=3
+ *  d. glDrawArraysInstancedBaseInstance（T6 gl_InstanceID 偏移 shader，baseinstance=1
+ *     → 实例 ID 1,2 位置右移；降级丢 baseinstance 时 hash 不同可区分）——cls=3
+ *  e. glDrawArraysIndirect / glDrawElementsIndirect（16B/20B 命令结构 + DRAW_INDIRECT_BUFFER）
+ *     ——cls=3。desktop 3.3 context 无 indirect（GL 4.0+ 函数），驱动可能报
+ *     INVALID_OPERATION——版本差异进 TBD
+ *  f. glMultiDrawArraysIndirect stride=-1 → INVALID_VALUE（D5 回归锚点）——cls=3。
+ *     desktop 3.3 无 multi-indirect（GL 4.3）报 INVALID_OPERATION 为预期版本差异；
+ *     translate 端 GLES 驱动/注入均报 0x0501
+ *  g. glMultiDrawElementsBaseVertex 指针组合：indices={0,6B} + basevertex={0,3}
+ *     → 画三角0+三角2（D6：offset_indices"指针+basevertex 相加"语义回归锚点，
+ *     e15③ indices 全 0 无法区分相加 vs 只按 basevertex 偏移）——cls=3 */
+static void case_e16(const char* case_id, int* step_out) {
+    int step = *step_out;
+    const int W = 256, H = 256;
+    const uint32_t GL_DRAW_INDIRECT_BUFFER = 0x8F3F;
+
+    typedef void (*vp_t)(int, int, int, int);
+    typedef void (*cc_t)(float, float, float, float);
+    typedef void (*cl_t)(uint32_t);
+    typedef void (*gb_t)(int, uint32_t*);
+    typedef void (*bv_t)(uint32_t, uint32_t);
+    typedef void (*bd_t)(uint32_t, intptr_t, const void*, uint32_t);
+    typedef void (*ea_t)(uint32_t);
+    typedef void (*ap_t)(uint32_t, int, uint32_t, uint8_t, int, const void*);
+    typedef void (*use_t)(uint32_t);
+    typedef int (*gul_t)(uint32_t, const char*);
+    typedef void (*u4_t)(int, float, float, float, float);
+    typedef void (*gvao_t)(int, uint32_t*);
+    typedef void (*bvao_t)(uint32_t);
+    typedef void (*dre_t)(uint32_t, uint32_t, uint32_t, int, uint32_t, const void*);
+    typedef void (*dai_t)(uint32_t, int, int, int);
+    typedef void (*dei_t)(uint32_t, int, uint32_t, const void*, int);
+    typedef void (*debv_t)(uint32_t, int, uint32_t, const void*, int);
+    typedef void (*dabi_t)(uint32_t, int, int, int, uint32_t);
+    typedef void (*dai2_t)(uint32_t, const void*);
+    typedef void (*dei2_t)(uint32_t, uint32_t, const void*);
+    typedef void (*mdai_t)(uint32_t, const void*, int, int);
+    typedef void (*mdebv2_t)(uint32_t, const int*, uint32_t, const void* const*, int, const int*);
+    vp_t vp = (vp_t)g_fn("glViewport");
+    cc_t cc = (cc_t)g_fn("glClearColor");
+    cl_t cl = (cl_t)g_fn("glClear");
+    gb_t gb = (gb_t)g_fn("glGenBuffers");
+    bv_t bv = (bv_t)g_fn("glBindBuffer");
+    bd_t bd = (bd_t)g_fn("glBufferData");
+    ea_t ea = (ea_t)g_fn("glEnableVertexAttribArray");
+    ap_t ap = (ap_t)g_fn("glVertexAttribPointer");
+    use_t use = (use_t)g_fn("glUseProgram");
+    gul_t gul = (gul_t)g_fn("glGetUniformLocation");
+    u4_t u4 = (u4_t)g_fn("glUniform4f");
+    gvao_t gv = (gvao_t)g_fn("glGenVertexArrays");
+    bvao_t bv2 = (bvao_t)g_fn("glBindVertexArray");
+    dre_t dre = (dre_t)g_fn("glDrawRangeElements");
+    dai_t dai = (dai_t)g_fn("glDrawArraysInstanced");
+    dei_t dei = (dei_t)g_fn("glDrawElementsInstanced");
+    debv_t debv = (debv_t)g_fn("glDrawElementsBaseVertex");
+    dabi_t dabi = (dabi_t)g_fn("glDrawArraysInstancedBaseInstance");
+    dai2_t dai2 = (dai2_t)g_fn("glDrawArraysIndirect");
+    dei2_t dei2 = (dei2_t)g_fn("glDrawElementsIndirect");
+    mdai_t mdai = (mdai_t)g_fn("glMultiDrawArraysIndirect");
+    mdebv2_t mdebv2 = (mdebv2_t)g_fn("glMultiDrawElementsBaseVertex");
+    if (!vp || !cc || !cl || !gb || !bv || !bd || !ea || !ap || !use || !gv || !bv2 ||
+        !dre || !dai || !dei) {
+        diff_log_step(case_id, step++, "e16", "(missing 函数指针)");
+        *step_out = step;
+        return;
+    }
+
+    const ShaderPair* p = &SHADER_PAIRS[0];
+    const char* vs; const char* fs;
+    pick_shader(p, &vs, &fs);
+    uint32_t prog = build_program_es(case_id, &step, vs, fs);
+    if (!prog) { *step_out = step; return; }
+    uint32_t tex = 0, fbo = 0, rbo = 0;
+    if (diff_make_render_target(W, H, &tex, &fbo, &rbo) != 0) { *step_out = step; return; }
+    if (vp) vp(0, 0, W, H);
+
+    /* 顶点布局：3 个三角形（左下/右下/左上），9 顶点 × 2 分量 */
+    float verts[18] = { -1,-1, -0.2f,-1, -1,-0.2f,
+                         0.2f,-1, 1,-1, 0.2f,-0.2f,
+                        -1, 0.2f, -0.2f, 0.2f, -1, 1 };
+    uint32_t vao = 0, vbo = 0, ebo = 0;
+    gv(1, &vao);
+    bv2(vao);
+    gb(1, &vbo); bv(GL_ARRAY_BUFFER, vbo);
+    bd(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+    ea(0); ap(0, 2, 0x1406 /*GL_FLOAT*/, 0, 0, (const void*)0);
+    gb(1, &ebo); bv(GL_ELEMENT_ARRAY_BUFFER, ebo);
+    uint16_t idx[9] = { 0,1,2, 3,4,5, 6,7,8 };
+    bd(GL_ELEMENT_ARRAY_BUFFER, sizeof(idx), idx, GL_STATIC_DRAW);
+    use(prog);
+    int loc = gul ? gul(prog, "uColor") : -1;
+
+    /* a. glDrawRangeElements：start/end 范围内单三角形 + start>end 错误 */
+    if (cc) cc(0, 0, 0, 1);
+    if (cl) cl(0x4000 /*GL_COLOR_BUFFER_BIT*/);
+    if (u4) u4(loc, 0, 1, 0, 1);
+    dre(GL_TRIANGLES, 0, 2, 3, GL_UNSIGNED_SHORT, (const void*)0);
+    diff_log_step(case_id, step++, "glDrawRangeElements", "start=0 end=2 count=3 (三角0)");
+    uint64_t hA = diff_render_and_hash(W, H);
+    diff_log_step(case_id, step++, "readPixels_hash", "dre_hash=0x%016llX", (unsigned long long)hA);
+    diff_check_errors(case_id, step++);
+    dre(GL_TRIANGLES, 5, 2, 3, GL_UNSIGNED_SHORT, (const void*)0);
+    diff_log_step(case_id, step++, "glDrawRangeElements", "start=5 end=2 (INVALID_VALUE)");
+    diff_check_errors(case_id, step++);
+
+    /* b. instanced：2 实例画同一三角形（重叠，透传正确性覆盖） */
+    if (cc) cc(0, 0, 0, 1);
+    if (cl) cl(0x4000);
+    if (u4) u4(loc, 0, 0, 1, 1);
+    dai(GL_TRIANGLES, 0, 3, 2);
+    diff_log_step(case_id, step++, "glDrawArraysInstanced", "instancecount=2");
+    uint64_t hB = diff_render_and_hash(W, H);
+    diff_log_step(case_id, step++, "readPixels_hash", "dai_hash=0x%016llX", (unsigned long long)hB);
+    diff_check_errors(case_id, step++);
+    if (cc) cc(0, 0, 0, 1);
+    if (cl) cl(0x4000);
+    dei(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (const void*)0, 2);
+    diff_log_step(case_id, step++, "glDrawElementsInstanced", "instancecount=2");
+    uint64_t hB2 = diff_render_and_hash(W, H);
+    diff_log_step(case_id, step++, "readPixels_hash", "dei_hash=0x%016llX", (unsigned long long)hB2);
+    diff_check_errors(case_id, step++);
+
+    /* c. glDrawElementsBaseVertex 单版本：两 draw 画三角0+三角1 */
+    if (cc) cc(0, 0, 0, 1);
+    if (cl) cl(0x4000);
+    if (u4) u4(loc, 1, 0, 0, 1);
+    if (debv) {
+        debv(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (const void*)0, 0);
+        debv(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (const void*)0, 3);
+        diff_log_step(case_id, step++, "glDrawElementsBaseVertex", "basevertex={0,3}");
+        uint64_t hC = diff_render_and_hash(W, H);
+        diff_log_step(case_id, step++, "readPixels_hash", "debv_hash=0x%016llX", (unsigned long long)hC);
+        diff_check_errors(case_id, step++);
+    } else {
+        /* 等量 (missing) 占位：保持两端步骤数对齐（diff_compare 按行对比） */
+        diff_log_step(case_id, step++, "glDrawElementsBaseVertex", "(missing)");
+        diff_log_step(case_id, step++, "readPixels_hash", "(missing)");
+        diff_check_errors(case_id, step++);
+    }
+
+    /* d. glDrawArraysInstancedBaseInstance：T6 shader 无条件编译（保持两端
+     * compile/link 步骤数一致），dabi 不可用时仅调用行 missing */
+    const ShaderPair* p6 = &SHADER_PAIRS[5]; /* T6 实例位置偏移 */
+    const char* vs6; const char* fs6;
+    pick_shader(p6, &vs6, &fs6);
+    uint32_t prog6 = build_program_es(case_id, &step, vs6, fs6);
+    if (prog6) {
+        use(prog6);
+        int loc6 = gul ? gul(prog6, "uColor") : -1;
+        if (cc) cc(0, 0, 0, 1);
+        if (cl) cl(0x4000);
+        if (u4) u4(loc6, 1, 1, 0, 1);
+        if (dabi) {
+            dabi(GL_TRIANGLES, 0, 3, 2, 1);
+            diff_log_step(case_id, step++, "glDrawArraysInstancedBaseInstance",
+                "instancecount=2 baseinstance=1 (实例 ID 1,2)");
+            uint64_t hD = diff_render_and_hash(W, H);
+            diff_log_step(case_id, step++, "readPixels_hash", "dabi_hash=0x%016llX", (unsigned long long)hD);
+            diff_check_errors(case_id, step++);
+        } else {
+            diff_log_step(case_id, step++, "glDrawArraysInstancedBaseInstance", "(missing)");
+            diff_log_step(case_id, step++, "readPixels_hash", "(missing)");
+            diff_check_errors(case_id, step++);
+        }
+        use(prog);
+    }
+
+    /* e. 单版本 Indirect：DRAW_INDIRECT_BUFFER + 16B/20B 命令结构 */
+    if (dai2 && dei2) {
+        /* DrawArraysIndirectCommand {count, instanceCount, first, baseInstance} 16B */
+        uint32_t cmd_arr[4] = { 3, 1, 0, 0 };
+        /* DrawElementsIndirectCommand {count, instanceCount, firstIndex, baseVertex, baseInstance} 20B */
+        uint32_t cmd_el[5] = { 3, 1, 0, 0, 0 };
+        uint32_t indir = 0;
+        gb(1, &indir);
+        if (cc) cc(0, 0, 0, 1);
+        if (cl) cl(0x4000);
+        if (u4) u4(loc, 0, 1, 1, 1);
+        bv(GL_DRAW_INDIRECT_BUFFER, indir);
+        bd(GL_DRAW_INDIRECT_BUFFER, sizeof(cmd_arr), cmd_arr, GL_STATIC_DRAW);
+        dai2(GL_TRIANGLES, (const void*)0);
+        diff_log_step(case_id, step++, "glDrawArraysIndirect",
+            "cmd={count=3,inst=1,first=0,baseInst=0}");
+        uint64_t hE = diff_render_and_hash(W, H);
+        diff_log_step(case_id, step++, "readPixels_hash", "dai2_hash=0x%016llX", (unsigned long long)hE);
+        diff_check_errors(case_id, step++);
+        if (cc) cc(0, 0, 0, 1);
+        if (cl) cl(0x4000);
+        bd(GL_DRAW_INDIRECT_BUFFER, sizeof(cmd_el), cmd_el, GL_STATIC_DRAW);
+        dei2(GL_TRIANGLES, GL_UNSIGNED_SHORT, (const void*)0);
+        diff_log_step(case_id, step++, "glDrawElementsIndirect",
+            "cmd={count=3,inst=1,firstIdx=0,baseVtx=0,baseInst=0}");
+        uint64_t hE2 = diff_render_and_hash(W, H);
+        diff_log_step(case_id, step++, "readPixels_hash", "dei2_hash=0x%016llX", (unsigned long long)hE2);
+        diff_check_errors(case_id, step++);
+        bv(GL_DRAW_INDIRECT_BUFFER, 0); /* 恢复无绑定 */
+    } else {
+        /* 等量占位：正常分支 6 行（两组 indirect 各 3 行） */
+        diff_log_step(case_id, step++, "glDrawArraysIndirect", "(missing)");
+        diff_log_step(case_id, step++, "readPixels_hash", "(missing)");
+        diff_check_errors(case_id, step++);
+        diff_log_step(case_id, step++, "glDrawElementsIndirect", "(missing)");
+        diff_log_step(case_id, step++, "readPixels_hash", "(missing)");
+        diff_check_errors(case_id, step++);
+    }
+
+    /* f. glMultiDrawArraysIndirect stride=-1 → INVALID_VALUE（D5 回归锚点） */
+    if (mdai) {
+        if (cc) cc(0, 0, 0, 1);
+        if (cl) cl(0x4000);
+        mdai(GL_TRIANGLES, (const void*)0, 1, -1);
+        diff_log_step(case_id, step++, "glMultiDrawArraysIndirect",
+            "drawcount=1 stride=-1 (INVALID_VALUE)");
+        diff_check_errors(case_id, step++);
+    } else {
+        /* 占位：不能调真实 diff_check_errors——正常分支有错误（0x0501）而
+         * missing 分支队列空，会因 err 值不同 FAIL；占位行按 EXP 跳过 */
+        diff_log_step(case_id, step++, "glMultiDrawArraysIndirect", "(missing)");
+        diff_log_step(case_id, step++, "check_glGetError", "(missing)");
+    }
+
+    /* g. MultiDrawElementsBaseVertex 指针组合：indices={0,6B} basevertex={0,3}
+     * → draw1: idx0-2+bv0=三角0；draw2: idx3-5+bv3=顶点6-8=三角2（画三角0+三角2） */
+    if (mdebv2) {
+        int g_count[2] = { 3, 3 };
+        void* g_off[2] = { (void*)(uintptr_t)0, (void*)(uintptr_t)(3 * sizeof(uint16_t)) };
+        int g_bv[2] = { 0, 3 };
+        if (cc) cc(0, 0, 0, 1);
+        if (cl) cl(0x4000);
+        if (u4) u4(loc, 0, 0, 1, 1);
+        mdebv2(GL_TRIANGLES, g_count, GL_UNSIGNED_SHORT, (const void* const*)g_off, 2, g_bv);
+        diff_log_step(case_id, step++, "glMultiDrawElementsBaseVertex",
+            "indices={0,6B} basevertex={0,3} (D6 指针+basevertex 相加)");
+        uint64_t hG = diff_render_and_hash(W, H);
+        diff_log_step(case_id, step++, "readPixels_hash", "mdebv_combo_hash=0x%016llX", (unsigned long long)hG);
+        diff_check_errors(case_id, step++);
+    } else {
+        diff_log_step(case_id, step++, "glMultiDrawElementsBaseVertex", "(missing)");
+        diff_log_step(case_id, step++, "readPixels_hash", "(missing)");
+        diff_check_errors(case_id, step++);
+    }
+
+    *step_out = step;
+}
+
 
 static CaseDef g_cases[] = {
     { "a00", "version/renderer/extensions", case_a00 },
@@ -3429,6 +3685,7 @@ static CaseDef g_cases[] = {
     { "e13", "varying by-name matching", case_e13 },
     { "e14", "BufferStorage semantics", case_e14 },
     { "e15", "MultiDraw 系列语义", case_e15 },
+    { "e16", "draw 家族矩阵（Range/Instanced/BaseVertex/BaseInstance/Indirect）", case_e16 },
     { "f01", "FBO no attach", case_f01 },
     { "f02", "FBO color attach render", case_f02 },
     { "f03", "FBO depth test render", case_f03 },
