@@ -3632,6 +3632,127 @@ static void case_e16(const char* case_id, int* step_out) {
     *step_out = step;
 }
 
+/* ============ e17: 乱序 EBO + basevertex 语义（P1 回归锚点） ============
+ * 验证 basevertex 的"索引值 + basevertex"语义在乱序索引下正确：
+ * 乱序 EBO = {0,2,1, 5,3,4, 8,6,7}（每三角形内部换序 + 三角形间乱序）。
+ *  draw2（indices=6B, bv=3）：逐索引加法 {5,3,4}+3 = {8,6,7} → 顶点 6,7,8 = 左上三角；
+ *  指针偏移（旧实现）读 EBO[3..]={5,3,4} → 顶点 3,4,5 = 右下三角 → hash 不同可区分。
+ * desktop 3.3 原生 glDrawElementsBaseVertex 支持乱序（正确语义）；
+ * translate 端透传（本机 Mesa 支持）/P1 逐索引加法降级（老设备）均应与桌面一致。
+ * cls=3（tbd）：差异进 TBD 不 FAIL。 */
+static void case_e17(const char* case_id, int* step_out) {
+    int step = *step_out;
+    const int W = 256, H = 256;
+
+    typedef void (*vp_t)(int, int, int, int);
+    typedef void (*cc_t)(float, float, float, float);
+    typedef void (*cl_t)(uint32_t);
+    typedef void (*gb_t)(int, uint32_t*);
+    typedef void (*bv_t)(uint32_t, uint32_t);
+    typedef void (*bd_t)(uint32_t, intptr_t, const void*, uint32_t);
+    typedef void (*ea_t)(uint32_t);
+    typedef void (*ap_t)(uint32_t, int, uint32_t, uint8_t, int, const void*);
+    typedef void (*use_t)(uint32_t);
+    typedef int (*gul_t)(uint32_t, const char*);
+    typedef void (*u4_t)(int, float, float, float, float);
+    typedef void (*gvao_t)(int, uint32_t*);
+    typedef void (*bvao_t)(uint32_t);
+    typedef void (*debv_t)(uint32_t, int, uint32_t, const void*, int);
+    typedef void (*mdebv2_t)(uint32_t, const int*, uint32_t, const void* const*, int, const int*);
+    vp_t vp = (vp_t)g_fn("glViewport");
+    cc_t cc = (cc_t)g_fn("glClearColor");
+    cl_t cl = (cl_t)g_fn("glClear");
+    gb_t gb = (gb_t)g_fn("glGenBuffers");
+    bv_t bv = (bv_t)g_fn("glBindBuffer");
+    bd_t bd = (bd_t)g_fn("glBufferData");
+    ea_t ea = (ea_t)g_fn("glEnableVertexAttribArray");
+    ap_t ap = (ap_t)g_fn("glVertexAttribPointer");
+    use_t use = (use_t)g_fn("glUseProgram");
+    gul_t gul = (gul_t)g_fn("glGetUniformLocation");
+    u4_t u4 = (u4_t)g_fn("glUniform4f");
+    gvao_t gv = (gvao_t)g_fn("glGenVertexArrays");
+    bvao_t bv2 = (bvao_t)g_fn("glBindVertexArray");
+    debv_t debv = (debv_t)g_fn("glDrawElementsBaseVertex");
+    mdebv2_t mdebv2 = (mdebv2_t)g_fn("glMultiDrawElementsBaseVertex");
+    if (!vp || !cc || !cl || !gb || !bv || !bd || !ea || !ap || !use || !gv || !bv2 || !debv) {
+        diff_log_step(case_id, step++, "e17", "(missing 函数指针)");
+        *step_out = step;
+        return;
+    }
+
+    const ShaderPair* p = &SHADER_PAIRS[0];
+    const char* vs; const char* fs;
+    pick_shader(p, &vs, &fs);
+    uint32_t prog = build_program_es(case_id, &step, vs, fs);
+    if (!prog) { *step_out = step; return; }
+    uint32_t tex = 0, fbo = 0, rbo = 0;
+    if (diff_make_render_target(W, H, &tex, &fbo, &rbo) != 0) { *step_out = step; return; }
+    if (vp) vp(0, 0, W, H);
+
+    /* 顶点布局：3 个三角形（左下/右下/左上），9 顶点 × 2 分量 */
+    float verts[18] = { -1,-1, -0.2f,-1, -1,-0.2f,
+                         0.2f,-1, 1,-1, 0.2f,-0.2f,
+                        -1, 0.2f, -0.2f, 0.2f, -1, 1 };
+    /* 乱序 EBO：每三角形内部换序（{i+?} 排列）+ 三角形间乱序。
+     * 关键：EBO[3..] 读到的 {5,3,4} ≠ {5,3,4}+3={8,6,7}——指针偏移与逐索引加法可区分 */
+    uint16_t idx[9] = { 0, 2, 1, 5, 3, 4, 8, 6, 7 };
+    uint32_t vao = 0, vbo = 0, ebo = 0;
+    gv(1, &vao);
+    bv2(vao);
+    gb(1, &vbo); bv(GL_ARRAY_BUFFER, vbo);
+    bd(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+    ea(0); ap(0, 2, 0x1406 /*GL_FLOAT*/, 0, 0, (const void*)0);
+    gb(1, &ebo); bv(GL_ELEMENT_ARRAY_BUFFER, ebo);
+    bd(GL_ELEMENT_ARRAY_BUFFER, sizeof(idx), idx, GL_STATIC_DRAW);
+    use(prog);
+    int loc = gul ? gul(prog, "uColor") : -1;
+
+    /* a. basevertex=0：乱序 EBO 画三角0（{0,2,1} 区域=左下） */
+    if (cc) cc(0, 0, 0, 1);
+    if (cl) cl(0x4000 /*GL_COLOR_BUFFER_BIT*/);
+    if (u4) u4(loc, 0, 1, 0, 1);
+    debv(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (const void*)0, 0);
+    diff_log_step(case_id, step++, "glDrawElementsBaseVertex", "乱序EBO bv=0 (三角0)");
+    uint64_t hA = diff_render_and_hash(W, H);
+    diff_log_step(case_id, step++, "readPixels_hash", "e17a_hash=0x%016llX", (unsigned long long)hA);
+    diff_check_errors(case_id, step++);
+
+    /* b. indices=6B(3 元素), bv=3：逐索引 {5,3,4}+3={8,6,7} → 顶点6,7,8=左上(三角2)；
+     * 旧指针偏移读 {5,3,4} → 顶点3,4,5=右下(三角1) → hash 可区分（P1 锚点） */
+    if (cc) cc(0, 0, 0, 1);
+    if (cl) cl(0x4000);
+    if (u4) u4(loc, 1, 0, 0, 1);
+    debv(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT,
+         (const void*)(uintptr_t)(3 * sizeof(uint16_t)), 3);
+    diff_log_step(case_id, step++, "glDrawElementsBaseVertex",
+        "indices=6B bv=3 (逐索引+3 → 三角2)");
+    uint64_t hB = diff_render_and_hash(W, H);
+    diff_log_step(case_id, step++, "readPixels_hash", "e17b_hash=0x%016llX", (unsigned long long)hB);
+    diff_check_errors(case_id, step++);
+
+    /* c. MultiDraw 版本：indices={0,6B} basevertex={0,3} → 三角0+三角2（multi 版 b） */
+    if (mdebv2) {
+        int c_count[2] = { 3, 3 };
+        void* c_off[2] = { (void*)(uintptr_t)0, (void*)(uintptr_t)(3 * sizeof(uint16_t)) };
+        int c_bv[2] = { 0, 3 };
+        if (cc) cc(0, 0, 0, 1);
+        if (cl) cl(0x4000);
+        if (u4) u4(loc, 0, 0, 1, 1);
+        mdebv2(GL_TRIANGLES, c_count, GL_UNSIGNED_SHORT, (const void* const*)c_off, 2, c_bv);
+        diff_log_step(case_id, step++, "glMultiDrawElementsBaseVertex",
+            "乱序EBO indices={0,6B} bv={0,3} (三角0+三角2)");
+        uint64_t hC = diff_render_and_hash(W, H);
+        diff_log_step(case_id, step++, "readPixels_hash", "e17c_hash=0x%016llX", (unsigned long long)hC);
+        diff_check_errors(case_id, step++);
+    } else {
+        diff_log_step(case_id, step++, "glMultiDrawElementsBaseVertex", "(missing)");
+        diff_log_step(case_id, step++, "readPixels_hash", "(missing)");
+        diff_check_errors(case_id, step++);
+    }
+
+    *step_out = step;
+}
+
 
 static CaseDef g_cases[] = {
     { "a00", "version/renderer/extensions", case_a00 },
@@ -3686,6 +3807,7 @@ static CaseDef g_cases[] = {
     { "e14", "BufferStorage semantics", case_e14 },
     { "e15", "MultiDraw 系列语义", case_e15 },
     { "e16", "draw 家族矩阵（Range/Instanced/BaseVertex/BaseInstance/Indirect）", case_e16 },
+    { "e17", "乱序 EBO + basevertex 语义（P1 锚点）", case_e17 },
     { "f01", "FBO no attach", case_f01 },
     { "f02", "FBO color attach render", case_f02 },
     { "f03", "FBO depth test render", case_f03 },

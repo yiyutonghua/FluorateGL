@@ -25,7 +25,7 @@
 use crate::backend;
 use crate::backend::dispatch::GlesDispatch;
 use crate::gl::buffer::{read_parameter_buffer_u32, sync_persistent_buffer_if_needed};
-use crate::gl::drawing::offset_indices;
+use crate::gl::drawing::draw_elements_basevertex_exact;
 use crate::gl::exports::inject_gl_error;
 
 /// GL_INVALID_VALUE（0x0501）：drawcount/maxdrawcount 为负时的规范错误
@@ -181,15 +181,22 @@ pub extern "C" fn glMultiDrawElementsBaseVertex(
             // C1：同以符号存在性为主导
             let base_vertex_ok = !is_stub(dispatch, dispatch.draw_elements_base_vertex as *const ());
             if !base_vertex_ok {
-                // 驱动完全不支持 basevertex：降级为普通 glDrawElements，
-                // C3：用 offset_indices 按 basevertex 偏移索引指针补偿
-                // （与单 draw 版 drawing.rs 降级行为一致，避免索引错位）。
+                // 驱动完全不支持 basevertex：降级循环，
+                // P1：每 draw 用逐索引加法精确模拟（读索引 + basevertex → 临时 EBO）。
+                // 旧 C3 指针偏移仅对顺序索引等价，乱序 EBO 画错。
                 log::warn!(
-                    "[FluorateGL] glMultiDrawElementsBaseVertex: GLES 不支持 basevertex，已降级为 glDrawElements 循环（索引指针按 basevertex 补偿）"
+                    "[FluorateGL] glMultiDrawElementsBaseVertex: GLES 不支持 basevertex，已降级为逐索引加法循环（精确模拟）"
                 );
                 for i in 0..drawcount as isize {
-                    let idx = offset_indices(*indices.offset(i), *basevertex.offset(i), type_);
-                    (dispatch.draw_elements)(mode, *count.offset(i), type_, idx);
+                    draw_elements_basevertex_exact(
+                        dispatch,
+                        mode,
+                        *count.offset(i),
+                        type_,
+                        *indices.offset(i),
+                        *basevertex.offset(i),
+                        None,
+                    );
                 }
             } else {
                 for i in 0..drawcount as isize {

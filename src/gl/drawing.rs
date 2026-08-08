@@ -64,41 +64,166 @@ fn is_stub(dispatch: &GlesDispatch, ptr: *const ()) -> bool {
     ptr == dispatch.stub as *const ()
 }
 
-/// 按 basevertex 偏移 indices 指针（BaseVertex 降级分支用）。
+/// BaseVertex 精确降级：逐索引加法（P1 修复，对齐 MobileGlues drawing.cpp:160-247）。
 ///
-/// GL 3.3 core 语义：实际索引 = 索引值 + basevertex，等价于将 indices 指针按索引
-/// 元素大小前移 basevertex 个元素。负 basevertex 时 offset 为负仍合法——宿主保证
-/// index + basevertex ≥ 0，偏移后的指针仍落在同一 buffer 内。type_size 按 GL 索引
-/// 类型推导：GL_UNSIGNED_BYTE(0x1401)=1、GL_UNSIGNED_SHORT(0x1403)=2、
-/// GL_UNSIGNED_INT(0x1405)=4。
+/// 旧实现 offset_indices 用指针偏移（indices + basevertex×type_size），
+/// 其等价性仅对顺序索引成立：`indices[i]+bv == indices[i+bv]` 需索引值
+/// 连续递增。乱序/重复索引的 EBO 下两者不等价（如 EBO={0,5,2} + bv=3，
+/// 正确=顶点{3,8,5}，指针偏移却读 EBO[3..]）→ 画错。
 ///
-/// pub(crate)：multi_draw.rs 的 glMultiDrawElementsBaseVertex 降级分支共用
-/// （C3：MultiDraw 第三级降级与单 draw 版行为对齐）。
-pub(crate) fn offset_indices(
+/// 本实现精确模拟 GL 3.3 语义"实际索引 = 索引值 + basevertex"：
+/// 1. 读索引：绑定 EBO 时 map 读（draw 前已 sync shadow，数据一致）；
+///    client 指针（无 EBO）直接拷贝
+/// 2. 逐索引 +basevertex（u32 wrapping——索引越界是 app 错误，wrap 无害，
+///    与 MobileGlues 直接加法一致）
+/// 3. 写入临时 EBO（STREAM_DRAW）重画，恢复原绑定
+///
+/// `instancecount = Some(n)` 时走 instanced 版本（同 MobileGlues 无此路径，
+/// 我们为 glDrawElementsInstancedBaseVertex 家族复用）。
+/// 任何失败路径 best-effort 回退原 draw（与旧行为一致的降级），不崩溃。
+///
+/// pub(crate)：multi_draw.rs 的 glMultiDrawElementsBaseVertex 第三级降级共用
+/// （P1：MultiDraw 逐 draw 精确模拟与单 draw 版行为对齐）。
+pub(crate) fn draw_elements_basevertex_exact(
+    dispatch: &GlesDispatch,
+    mode: u32,
+    count: i32,
+    type_: u32,
     indices: *const std::ffi::c_void,
     basevertex: i32,
-    type_: u32,
-) -> *const std::ffi::c_void {
-    if basevertex == 0 {
-        return indices;
+    instancecount: Option<i32>,
+) {
+    if count <= 0 {
+        return;
     }
-    let type_size = match type_ {
+    // 快速路径：basevertex=0 语义等同普通 draw（零转换开销）
+    if basevertex == 0 {
+        unsafe {
+            match instancecount {
+                Some(ic) => {
+                    (dispatch.draw_elements_instanced)(mode, count, type_, indices, ic)
+                }
+                None => (dispatch.draw_elements)(mode, count, type_, indices),
+            }
+        }
+        return;
+    }
+
+    const GL_MAP_READ_BIT: u32 = 0x0001;
+    const GL_STREAM_DRAW: u32 = 0x88E0;
+
+    let index_size = match type_ {
         // GL_UNSIGNED_BYTE
-        0x1401 => 1,
+        0x1401 => 1usize,
         // GL_UNSIGNED_SHORT
         0x1403 => 2,
         // GL_UNSIGNED_INT
         0x1405 => 4,
         _ => {
             log::error!(
-                "[FluorateGL] offset_indices: 未知索引类型 0x{:04X}，无法计算 basevertex 偏移，按原指针降级",
+                "[FluorateGL] draw_elements_basevertex_exact: 未知索引类型 0x{:04X}，无法精确模拟，按原 draw 降级",
                 type_
             );
-            return indices;
+            unsafe {
+                match instancecount {
+                    Some(ic) => {
+                        (dispatch.draw_elements_instanced)(mode, count, type_, indices, ic)
+                    }
+                    None => (dispatch.draw_elements)(mode, count, type_, indices),
+                }
+            }
+            return;
         }
     };
+    let n_bytes = (count as usize).saturating_mul(index_size);
+    if n_bytes == 0 {
+        return;
+    }
+
+    // 读索引源：绑定 EBO → map GLES buffer（draw 前 sync 保证数据最新）；
+    // 无 EBO → client 指针
+    let ebo_gles = crate::state::with_state_ref(|s| {
+        s.bound_buffers_by_target
+            .get(&GL_ELEMENT_ARRAY_BUFFER)
+            .copied()
+            .and_then(|d| s.buffers.get_gles(d))
+    })
+    .unwrap_or(0);
+
+    let mut temp: Vec<u8> = Vec::with_capacity(n_bytes);
     unsafe {
-        (indices as *const u8).offset(basevertex as isize * type_size) as *const std::ffi::c_void
+        if ebo_gles != 0 {
+            let src = (dispatch.map_buffer_range)(
+                GL_ELEMENT_ARRAY_BUFFER,
+                indices as isize,
+                n_bytes as isize,
+                GL_MAP_READ_BIT,
+            );
+            if src.is_null() {
+                log::warn!(
+                    "[FluorateGL] draw_elements_basevertex_exact: EBO map 失败（offset=0x{:x}），按原 draw best-effort 降级",
+                    indices as usize
+                );
+                match instancecount {
+                    Some(ic) => {
+                        (dispatch.draw_elements_instanced)(mode, count, type_, indices, ic)
+                    }
+                    None => (dispatch.draw_elements)(mode, count, type_, indices),
+                }
+                return;
+            }
+            std::ptr::copy_nonoverlapping(src as *const u8, temp.as_mut_ptr(), n_bytes);
+            (dispatch.unmap_buffer)(GL_ELEMENT_ARRAY_BUFFER);
+        } else {
+            // client 指针（无 EBO 绑定）
+            std::ptr::copy_nonoverlapping(indices as *const u8, temp.as_mut_ptr(), n_bytes);
+        }
+    }
+
+    // 逐索引 +basevertex（u32 wrapping，负 basevertex 由宿主保证索引+bv ≥ 0）
+    match type_ {
+        0x1401 => {
+            for v in temp.iter_mut() {
+                *v = v.wrapping_add(basevertex as u8);
+            }
+        }
+        0x1403 => {
+            for chunk in temp.chunks_exact_mut(2) {
+                let v = u16::from_le_bytes([chunk[0], chunk[1]]).wrapping_add(basevertex as u16);
+                let b = v.to_le_bytes();
+                chunk[0] = b[0];
+                chunk[1] = b[1];
+            }
+        }
+        0x1405 => {
+            for chunk in temp.chunks_exact_mut(4) {
+                let v =
+                    u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                        .wrapping_add(basevertex as u32);
+                let b = v.to_le_bytes();
+                chunk.copy_from_slice(&b);
+            }
+        }
+        _ => unreachable!(), // 上面已校验
+    }
+
+    // 临时 EBO 重画（MobileGlues 同款：gen → bind → data → draw → delete → 恢复）
+    unsafe {
+        let mut tmp_buf: u32 = 0;
+        (dispatch.gen_buffers)(1, &mut tmp_buf);
+        (dispatch.bind_buffer)(GL_ELEMENT_ARRAY_BUFFER, tmp_buf);
+        (dispatch.buffer_data)(
+            GL_ELEMENT_ARRAY_BUFFER,
+            n_bytes as isize,
+            temp.as_ptr() as *const std::ffi::c_void,
+            GL_STREAM_DRAW,
+        );
+        match instancecount {
+            Some(ic) => (dispatch.draw_elements_instanced)(mode, count, type_, std::ptr::null(), ic),
+            None => (dispatch.draw_elements)(mode, count, type_, std::ptr::null()),
+        }
+        (dispatch.delete_buffers)(1, &mut tmp_buf);
+        (dispatch.bind_buffer)(GL_ELEMENT_ARRAY_BUFFER, ebo_gles);
     }
 }
 
@@ -184,11 +309,10 @@ pub extern "C" fn glDrawElementsBaseVertex(
         // 短路强制降级，导致 basevertex 语义丢失（Sodium 渲染错误风险）。
         let supported = !is_stub(dispatch, dispatch.draw_elements_base_vertex as *const ());
         if !supported {
-            // 降级为普通 glDrawElements：用 basevertex 偏移 indices 指针补偿索引错位
-            // （原实现丢弃 basevertex 导致顶点错位，仅 best-effort 避免崩溃）。
+            // 降级：P1 逐索引加法精确模拟（读索引 + basevertex → 临时 EBO 重画）。
+            // 旧实现指针偏移仅对顺序索引等价，乱序 EBO 画错。
             warn_base_vertex_unsupported("glDrawElementsBaseVertex");
-            let offset_indices_ptr = offset_indices(indices, basevertex, type_);
-            (dispatch.draw_elements)(mode, count, type_, offset_indices_ptr);
+            draw_elements_basevertex_exact(dispatch, mode, count, type_, indices, basevertex, None);
         } else {
             (dispatch.draw_elements_base_vertex)(mode, count, type_, indices, basevertex);
         }
@@ -209,7 +333,7 @@ pub extern "C" fn glDrawRangeElementsBaseVertex(
     // D1：GL 3.3.1 core 导出补齐（此前 dispatch 有字段/加载但无导出符号，
     // LWJGL 绑定 null 有崩溃风险）。三级降级（同 basevertex 家族模式）：
     // 透传（GLES 3.2 core 同名）→ glDrawElementsBaseVertex（start/end 是 hint）
-    // → offset_indices 补偿 + glDrawElements
+    // → P1 逐索引加法精确模拟 + glDrawElements
     sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
     sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -224,10 +348,11 @@ pub extern "C" fn glDrawRangeElementsBaseVertex(
             let base_vertex_ok =
                 !is_stub(dispatch, dispatch.draw_elements_base_vertex as *const ());
             if !base_vertex_ok {
-                // 三级：offset_indices 按 basevertex 补偿索引指针
+                // 三级：P1 逐索引加法精确模拟
                 warn_base_vertex_unsupported("glDrawRangeElementsBaseVertex");
-                let offset_indices_ptr = offset_indices(indices, basevertex, type_);
-                (dispatch.draw_elements)(mode, count, type_, offset_indices_ptr);
+                draw_elements_basevertex_exact(
+                    dispatch, mode, count, type_, indices, basevertex, None,
+                );
             } else {
                 (dispatch.draw_elements_base_vertex)(mode, count, type_, indices, basevertex);
             }
@@ -361,15 +486,16 @@ pub extern "C" fn glDrawElementsInstancedBaseVertex(
             dispatch.draw_elements_instanced_base_vertex as *const (),
         );
         if !supported {
-            // 降级为 glDrawElementsInstanced：用 basevertex 偏移 indices 指针补偿索引错位
+            // 降级：P1 逐索引加法精确模拟（保留 instancecount）
             warn_base_vertex_unsupported("glDrawElementsInstancedBaseVertex");
-            let offset_indices_ptr = offset_indices(indices, basevertex, type_);
-            (dispatch.draw_elements_instanced)(
+            draw_elements_basevertex_exact(
+                dispatch,
                 mode,
                 count,
                 type_,
-                offset_indices_ptr,
-                instancecount,
+                indices,
+                basevertex,
+                Some(instancecount),
             );
         } else {
             (dispatch.draw_elements_instanced_base_vertex)(
@@ -406,16 +532,17 @@ pub extern "C" fn glDrawElementsInstancedBaseVertexBaseInstance(
         );
         if !supported {
             // 同时丢失 basevertex 和 baseinstance，触发两类首次告警；
-            // basevertex 用 indices 指针偏移补偿，baseinstance 无法补偿
+            // basevertex 用 P1 逐索引加法精确模拟，baseinstance 无法补偿
             warn_base_vertex_unsupported("glDrawElementsInstancedBaseVertexBaseInstance");
             warn_base_instance_unsupported("glDrawElementsInstancedBaseVertexBaseInstance");
-            let offset_indices_ptr = offset_indices(indices, basevertex, type_);
-            (dispatch.draw_elements_instanced)(
+            draw_elements_basevertex_exact(
+                dispatch,
                 mode,
                 count,
                 type_,
-                offset_indices_ptr,
-                instancecount,
+                indices,
+                basevertex,
+                Some(instancecount),
             );
         } else {
             (dispatch.draw_elements_instanced_base_vertex_base_instance)(
@@ -462,4 +589,34 @@ pub extern "C" fn glDrawTransformFeedbackInstanced(
     _instancecount: i32,
 ) {
     warn_tf_draw_unsupported("glDrawTransformFeedbackInstanced");
+}
+
+/// GL_SHADER_STORAGE_BARRIER_BIT（glMemoryBarrier 补位用；注意不是 target 值 0x90F2）
+const GL_SHADER_STORAGE_BARRIER_BIT: u32 = 0x00002000;
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glDispatchCompute(
+    num_groups_x: u32,
+    num_groups_y: u32,
+    num_groups_z: u32,
+) {
+    // P2：compute 分发的运行时载体（GLES 3.1 core 透传）。
+    // 依赖：shader 翻译管线已把 atomic_uint 改写为 SSBO；app 的
+    // GL_ATOMIC_COUNTER_BUFFER 绑定在 glBindBufferBase/Range 时已转发到
+    // GL_SHADER_STORAGE_BUFFER（见 buffer.rs），此处无需额外处理。
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.dispatch_compute)(num_groups_x, num_groups_y, num_groups_z);
+    });
+}
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glMemoryBarrier(barriers: u32) {
+    // P2：补 GL_SHADER_STORAGE_BARRIER_BIT——atomic→SSBO 模拟后跨 dispatch 的
+    // 可见性依赖 SSBO barrier（对齐 MobileGlues drawing.cpp:149-158；
+    // OR 操作无副作用）。
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.memory_barrier)(barriers | GL_SHADER_STORAGE_BARRIER_BIT);
+    });
 }
