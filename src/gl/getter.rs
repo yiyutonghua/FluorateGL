@@ -250,3 +250,217 @@ pub extern "C" fn glGetVertexAttribdv(index: u32, pname: u32, params: *mut f64) 
         }
     }
 }
+
+// ==== GL 2.0-3.3 core 查询类补齐（GLES 原生透传 / 模拟）====
+
+/// glIsVertexArray — GL 3.0 core（GLES 3.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glIsVertexArray(array: u32) -> u8 {
+    backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.is_vertex_array)(array) })
+}
+
+/// glGetVertexAttribiv — GL 2.0（GLES 3.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetVertexAttribiv(index: u32, pname: u32, params: *mut i32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_vertex_attrib_iv)(index, pname, params);
+    });
+}
+
+/// glGetVertexAttribIiv — GL 3.0（GLES 3.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetVertexAttribIiv(index: u32, pname: u32, params: *mut i32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_vertex_attrib_i_iv)(index, pname, params);
+    });
+}
+
+/// glGetVertexAttribIuiv — GL 3.0（GLES 3.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetVertexAttribIuiv(index: u32, pname: u32, params: *mut u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_vertex_attrib_i_uiv)(index, pname, params);
+    });
+}
+
+/// glGetVertexAttribPointerv — GL 2.0（GLES 3.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetVertexAttribPointerv(index: u32, pname: u32, pointer: *mut *mut std::ffi::c_void) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_vertex_attrib_pointer_v)(index, pname, pointer);
+    });
+}
+
+/// glGetTexParameterfv — GL 1.1（GLES 3.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetTexParameterfv(target: u32, pname: u32, params: *mut f32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_tex_parameter_fv)(target, pname, params);
+    });
+}
+
+/// glGetTexParameterIiv — GL 3.0（GLES 3.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetTexParameterIiv(target: u32, pname: u32, params: *mut i32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_tex_parameter_i_iv)(target, pname, params);
+    });
+}
+
+/// glGetTexParameterIuiv — GL 3.0（GLES 3.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetTexParameterIuiv(target: u32, pname: u32, params: *mut u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_tex_parameter_i_uiv)(target, pname, params);
+    });
+}
+
+/// glGetTexLevelParameterfv — GL 1.2（GLES 3.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetTexLevelParameterfv(target: u32, level: i32, pname: u32, params: *mut f32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_tex_level_parameter_fv)(target, level, pname, params);
+    });
+}
+
+/// glGetInternalformativ — GL 4.2（GLES 3.0 原生透传；GL 4.2 语义与 GLES 相同）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetInternalformativ(target: u32, internalformat: u32, pname: u32, buf_size: i32, params: *mut i32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_internalformat_iv)(target, internalformat, pname, buf_size, params);
+    });
+}
+
+/// glGetFramebufferParameteriv — GL 4.3（GLES 3.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetFramebufferParameteriv(target: u32, pname: u32, params: *mut i32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_framebuffer_parameter_iv)(target, pname, params);
+    });
+}
+
+/// glGetRenderbufferParameteriv — GL 3.0（GLES 3.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetRenderbufferParameteriv(target: u32, pname: u32, params: *mut i32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_renderbuffer_parameter_iv)(target, pname, params);
+    });
+}
+
+/// glGetMultisamplefv — GL 3.2（GLES 3.1 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetMultisamplefv(pname: u32, index: u32, val: *mut f32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_multisample_fv)(pname, index, val);
+    });
+}
+
+/// glGetBufferParameteri64v — GL 3.2（GLES 3.2 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetBufferParameteri64v(target: u32, pname: u32, params: *mut i64) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_buffer_parameter_i64v)(target, pname, params);
+    });
+}
+
+/// glGetPointerv — GL 1.1（GLES 3.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetPointerv(pname: u32, params: *mut *mut std::ffi::c_void) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_pointer_v)(pname, params);
+    });
+}
+
+/// glSampleCoverage — GL 1.3（GLES 3.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glSampleCoverage(value: f32, invert: u8) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.sample_coverage)(value, invert);
+    });
+}
+
+/// glSampleMaski — GL 3.2（GLES 3.1 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glSampleMaski(mask_number: u32, mask: u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.sample_mask_i)(mask_number, mask);
+    });
+}
+
+/// glBlendColor — GL 1.4（GLES 2.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glBlendColor(red: f32, green: f32, blue: f32, alpha: f32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.blend_color)(red, green, blue, alpha);
+    });
+}
+
+/// glPointParameterf — GL 1.4（GLES 2.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glPointParameterf(pname: u32, param: f32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.point_parameter_f)(pname, param);
+    });
+}
+
+/// glPointParameterfv — GL 1.4（GLES 2.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glPointParameterfv(pname: u32, params: *const f32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.point_parameter_fv)(pname, params);
+    });
+}
+
+/// glHint — GL 1.0（GLES 2.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glHint(target: u32, mode: u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.hint)(target, mode);
+    });
+}
+
+/// glGetInternalformati64v — GL 4.2（GLES 无对应，stub 返回 0）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetInternalformati64v(
+    _target: u32,
+    _internalformat: u32,
+    _pname: u32,
+    _buf_size: i32,
+    _params: *mut i64,
+) {
+    log::debug!("[FluorateGL] glGetInternalformati64v stub (GLES 无对应)");
+}
+
+/// glGetQueryIndexediv — GL 4.0（GLES 无对应，stub no-op）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetQueryIndexediv(
+    _target: u32,
+    _index: u32,
+    _pname: u32,
+    _params: *mut i32,
+) {
+    log::debug!("[FluorateGL] glGetQueryIndexediv stub (GLES 无对应)");
+}

@@ -370,6 +370,88 @@ define_symbols![
     "glProvokingVertex",
     "glBeginConditionalRender",
     "glEndConditionalRender",
+    // ==== GL 补齐：阶段 1（GL 3.0-3.3 core，共 74 个）====
+    // —— sampler.rs（14）——
+    "glGenSamplers",
+    "glDeleteSamplers",
+    "glIsSampler",
+    "glBindSampler",
+    "glSamplerParameteri",
+    "glSamplerParameterf",
+    "glSamplerParameteriv",
+    "glSamplerParameterfv",
+    "glSamplerParameterIiv",
+    "glSamplerParameterIuiv",
+    "glGetSamplerParameteriv",
+    "glGetSamplerParameterfv",
+    "glGetSamplerParameterIiv",
+    "glGetSamplerParameterIuiv",
+    // —— transform_feedback.rs（13）——
+    "glGenTransformFeedbacks",
+    "glDeleteTransformFeedbacks",
+    "glIsTransformFeedback",
+    "glBindTransformFeedback",
+    "glBeginTransformFeedback",
+    "glEndTransformFeedback",
+    "glPauseTransformFeedback",
+    "glResumeTransformFeedback",
+    "glTransformFeedbackBufferBase",
+    "glTransformFeedbackBufferRange",
+    "glGetTransformFeedbackiv",
+    "glDrawTransformFeedbackStream",
+    "glDrawTransformFeedbackStreamInstanced",
+    // —— program.rs（9）——
+    "glUniform1ui",
+    "glUniform2ui",
+    "glUniform3ui",
+    "glUniform4ui",
+    "glUniform1uiv",
+    "glUniform2uiv",
+    "glUniform3uiv",
+    "glUniform4uiv",
+    "glGetUniformuiv",
+    // —— getter.rs（23）——
+    "glIsVertexArray",
+    "glGetVertexAttribiv",
+    "glGetVertexAttribIiv",
+    "glGetVertexAttribIuiv",
+    "glGetVertexAttribPointerv",
+    "glGetTexParameterfv",
+    "glGetTexParameterIiv",
+    "glGetTexParameterIuiv",
+    "glGetTexLevelParameterfv",
+    "glGetInternalformativ",
+    "glGetFramebufferParameteriv",
+    "glGetRenderbufferParameteriv",
+    "glGetMultisamplefv",
+    "glGetBufferParameteri64v",
+    "glGetPointerv",
+    "glSampleCoverage",
+    "glSampleMaski",
+    "glBlendColor",
+    "glPointParameterf",
+    "glPointParameterfv",
+    "glHint",
+    "glGetInternalformati64v",
+    "glGetQueryIndexediv",
+    // —— texture.rs（3）——
+    "glCopyTexImage2D",
+    "glCopyTexSubImage2D",
+    "glCopyTexSubImage3D",
+    // —— vertex_array.rs（8）——
+    "glVertexAttribP1ui",
+    "glVertexAttribP2ui",
+    "glVertexAttribP3ui",
+    "glVertexAttribP4ui",
+    "glVertexAttribP1uiv",
+    "glVertexAttribP2uiv",
+    "glVertexAttribP3uiv",
+    "glVertexAttribP4uiv",
+    // —— 补登记（已导出未登记）——
+    "glGetBooleani_v",
+    "glGetDoublei_v",
+    "glGetFloati_v",
+    "glGetIntegeri_v",
 ];
 
 /// 本库是否导出了该符号（name 为函数名字节串，带或不带尾 NUL 均可；
@@ -494,15 +576,14 @@ mod tests {
         assert!(!is_exported(b"glNonexistent\0"));
     }
 
-    /// 表与代码 no_mangle 数量一致性：EGL 34 + GL 313 = 347
-    /// （D1/D2 新增 glDrawRangeElementsBaseVertex + glDrawTransformFeedback ×2；
-    ///  P2 新增 glDispatchCompute + glMemoryBarrier）
+    /// 表与代码 no_mangle 数量一致性：EGL 34 + GL 387 = 421
+    /// （D1/D2 + P2 + 阶段 1 补齐 74 个 GL 3.0-3.3 core）
     #[test]
     fn symbol_count_sanity() {
         let egl = SYMBOLS.iter().filter(|s| s.starts_with(b"egl")).count();
         let gl = SYMBOLS.len() - egl;
         assert_eq!(egl, 34, "EGL 导出数量不符（请核对 src/egl/exports.rs）");
-        assert_eq!(gl, 313, "GL 导出数量不符（请核对 src/gl/*.rs）");
-        assert_eq!(SYMBOLS.len(), 347);
+        assert_eq!(gl, 387, "GL 导出数量不符（请核对 src/gl/*.rs）");
+        assert_eq!(SYMBOLS.len(), 421);
     }
 }

@@ -326,6 +326,36 @@ pub extern "C" fn glUniformMatrix4fv(location: i32, count: i32, transpose: u8, v
     });
 }
 
+// ==== Unsigned uniform 系列（GL 3.0 core 补齐，GLES 3.0 原生透传）====
+macro_rules! uniform_ui_fn {
+    ($name:ident, $field:ident, $($arg:ident: $ty:ty),*) => {
+        #[unsafe(no_mangle)]
+        #[allow(non_snake_case)]
+        pub extern "C" fn $name(location: i32, $($arg: $ty),*) {
+            backend::with_gles_dispatch(|dispatch| unsafe {
+                (dispatch.$field)(location, $($arg),*);
+            });
+        }
+    };
+}
+
+uniform_ui_fn!(glUniform1ui, uniform_1ui, v0: u32);
+uniform_ui_fn!(glUniform2ui, uniform_2ui, v0: u32, v1: u32);
+uniform_ui_fn!(glUniform3ui, uniform_3ui, v0: u32, v1: u32, v2: u32);
+uniform_ui_fn!(glUniform4ui, uniform_4ui, v0: u32, v1: u32, v2: u32, v3: u32);
+uniform_ui_fn!(glUniform1uiv, uniform_1uiv, count: i32, value: *const u32);
+uniform_ui_fn!(glUniform2uiv, uniform_2uiv, count: i32, value: *const u32);
+uniform_ui_fn!(glUniform3uiv, uniform_3uiv, count: i32, value: *const u32);
+uniform_ui_fn!(glUniform4uiv, uniform_4uiv, count: i32, value: *const u32);
+
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glGetUniformuiv(program: u32, location: i32, params: *mut u32) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.get_uniform_uiv)(program, location, params);
+    });
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glDetachShader(program: u32, shader: u32) {

@@ -901,3 +901,31 @@ pub extern "C" fn glVertexAttribBinding(attribindex: u32, bindingindex: u32) {
         (dispatch.vertex_attrib_binding)(attribindex, bindingindex);
     });
 }
+
+// ==== Packed vertex attrib（GL 3.3 core 补齐，stub）====
+//
+// glVertexAttribP1ui-P4ui 把 packed 整数格式（如 2_10_10_10）打包进 attrib。
+// GLES 无 P 系列函数（GLES 用 glVertexAttribPointer 的 GL_UNSIGNED_INT_2_10_10_10_REV
+// 类型），语义需 CPU 展开模拟——MC 不使用 packed attrib，stub + debug 日志
+// （与 MobileGlues STUB 策略一致：函数存在不崩溃）。
+macro_rules! packed_attrib_stub {
+    ($name:ident, $n:expr, $($arg:ident: $ty:ty),*) => {
+        #[unsafe(no_mangle)]
+        #[allow(non_snake_case, unused_variables)]
+        pub extern "C" fn $name($($arg: $ty),*) {
+            log::debug!(
+                "[FluorateGL] {} stub: GLES 无 glVertexAttribP* 系列（packed attrib 未模拟）",
+                stringify!($name)
+            );
+        }
+    };
+}
+
+packed_attrib_stub!(glVertexAttribP1ui, 1, index: u32, type_: u32, normalized: u8, value: u32);
+packed_attrib_stub!(glVertexAttribP2ui, 2, index: u32, type_: u32, normalized: u8, value: u32);
+packed_attrib_stub!(glVertexAttribP3ui, 3, index: u32, type_: u32, normalized: u8, value: u32);
+packed_attrib_stub!(glVertexAttribP4ui, 4, index: u32, type_: u32, normalized: u8, value: u32);
+packed_attrib_stub!(glVertexAttribP1uiv, 1, index: u32, type_: u32, normalized: u8, value: *const u32);
+packed_attrib_stub!(glVertexAttribP2uiv, 2, index: u32, type_: u32, normalized: u8, value: *const u32);
+packed_attrib_stub!(glVertexAttribP3uiv, 3, index: u32, type_: u32, normalized: u8, value: *const u32);
+packed_attrib_stub!(glVertexAttribP4uiv, 4, index: u32, type_: u32, normalized: u8, value: *const u32);

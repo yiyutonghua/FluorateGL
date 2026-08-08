@@ -1097,3 +1097,62 @@ pub extern "C" fn glFramebufferTexture3D(
         (dispatch.framebuffer_texture_layer)(target, attachment, gles_texture, level, zoffset);
     });
 }
+
+// ==== 纹理拷贝（GL 1.x-2.0 core 补齐，GLES 2.0/3.0 原生透传）====
+
+/// glCopyTexImage2D — GL 1.1（GLES 2.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glCopyTexImage2D(
+    target: u32,
+    level: i32,
+    internalformat: u32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    border: i32,
+) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.copy_tex_image_2d)(target, level, internalformat, x, y, width, height, border);
+    });
+}
+
+/// glCopyTexSubImage2D — GL 1.1（GLES 2.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glCopyTexSubImage2D(
+    target: u32,
+    level: i32,
+    xoffset: i32,
+    yoffset: i32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.copy_tex_sub_image_2d)(target, level, xoffset, yoffset, x, y, width, height);
+    });
+}
+
+/// glCopyTexSubImage3D — GL 1.2（GLES 3.0 原生透传）
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glCopyTexSubImage3D(
+    target: u32,
+    level: i32,
+    xoffset: i32,
+    yoffset: i32,
+    zoffset: i32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) {
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        (dispatch.copy_tex_sub_image_3d)(
+            target, level, xoffset, yoffset, zoffset, x, y, width, height,
+        );
+    });
+}
