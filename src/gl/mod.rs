@@ -29,6 +29,7 @@ pub mod query;
 pub mod render_state;
 pub mod sampler;
 pub mod shader;
+pub mod stub_exports;
 pub mod sync;
 pub mod texture;
 pub mod transform_feedback;
