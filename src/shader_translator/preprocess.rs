@@ -49,6 +49,13 @@ pub fn preprocess(source: &str, stage: u32) -> String {
     let mut result = remove_line_directives(source);
     strip_mc_version_comment(&mut result);
     force_glsl_version(&mut result);
+    // P4：GL_ARB_derivative_control 宏分支改写（对齐 MobileGlues glsl_for_es.cpp:711-712）。
+    // glslang OpenGL target 450 下该扩展宏是否定义取决于实现，若 shader 内有
+    // `#ifdef GL_ARB_derivative_control` 分支（如 dFdxFine 优化路径），宏未定义时
+    // 走 else 分支——改写为强制走"无该宏"路径（#ifdef→#if 0），与 GLES 实际能力
+    // 一致（GLES 无 derivative control 扩展语义，只有 dFdx/dFdy 基础版）。
+    replace_all(&mut result, "#ifdef GL_ARB_derivative_control", "#if 0");
+    replace_all(&mut result, "#ifndef GL_ARB_derivative_control", "#if 1");
     // attribute/varying 老语法在 450 core 被移除（"removed in version 420"），
     // 按 stage 迁移为 in/out（必须先于 inject_missing_locations，让迁移后的
     // 变量也能获得 location 注入）。
@@ -60,6 +67,19 @@ pub fn preprocess(source: &str, stage: u32) -> String {
     inject_missing_uniform_locations(&mut result);
     inject_missing_bindings(&mut result);
     result
+}
+
+/// 字符串级全局替换（与 MobileGlues replace_all 对齐）。
+fn replace_all(result: &mut String, from: &str, to: &str) {
+    if from.is_empty() {
+        return;
+    }
+    let mut start = 0;
+    while let Some(pos) = result[start..].find(from) {
+        let abs = start + pos;
+        result.replace_range(abs..abs + from.len(), to);
+        start = abs + to.len();
+    }
 }
 
 /// 迁移 GLSL 老语法的 attribute/varying 关键字为 in/out
@@ -647,6 +667,27 @@ mod tests {
         let input = "#version 330\n#line 0 2\nvoid main() {}\n";
         let result = remove_line_directives(input);
         assert!(!result.contains("#line"));
+    }
+
+    /// P4：GL_ARB_derivative_control 宏分支应被改写为强制走无该宏路径
+    #[test]
+    fn test_derivative_control_macro_rewrite() {
+        let input = "#version 330 core\n#ifdef GL_ARB_derivative_control\nfloat a = dFdxFine(x);\n#else\nfloat a = dFdx(x);\n#endif\n#ifndef GL_ARB_derivative_control\nfloat b = dFdy(x);\n#endif\nvoid main() {}\n";
+        let result = preprocess(input, 0x8B31);
+        assert!(
+            result.contains("#if 0\nfloat a = dFdxFine(x);"),
+            "#ifdef 应改写为 #if 0（强制跳过扩展分支），got: {}",
+            result
+        );
+        assert!(
+            result.contains("#if 1\nfloat b = dFdy(x);"),
+            "#ifndef 应改写为 #if 1（强制进入无扩展分支），got: {}",
+            result
+        );
+        assert!(
+            !result.contains("GL_ARB_derivative_control"),
+            "改写后不应残留扩展宏名"
+        );
     }
 
     #[test]
