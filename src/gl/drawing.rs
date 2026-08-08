@@ -100,9 +100,7 @@ pub(crate) fn draw_elements_basevertex_exact(
     if basevertex == 0 {
         unsafe {
             match instancecount {
-                Some(ic) => {
-                    (dispatch.draw_elements_instanced)(mode, count, type_, indices, ic)
-                }
+                Some(ic) => (dispatch.draw_elements_instanced)(mode, count, type_, indices, ic),
                 None => (dispatch.draw_elements)(mode, count, type_, indices),
             }
         }
@@ -126,9 +124,7 @@ pub(crate) fn draw_elements_basevertex_exact(
             );
             unsafe {
                 match instancecount {
-                    Some(ic) => {
-                        (dispatch.draw_elements_instanced)(mode, count, type_, indices, ic)
-                    }
+                    Some(ic) => (dispatch.draw_elements_instanced)(mode, count, type_, indices, ic),
                     None => (dispatch.draw_elements)(mode, count, type_, indices),
                 }
             }
@@ -165,9 +161,7 @@ pub(crate) fn draw_elements_basevertex_exact(
                     indices as usize
                 );
                 match instancecount {
-                    Some(ic) => {
-                        (dispatch.draw_elements_instanced)(mode, count, type_, indices, ic)
-                    }
+                    Some(ic) => (dispatch.draw_elements_instanced)(mode, count, type_, indices, ic),
                     None => (dispatch.draw_elements)(mode, count, type_, indices),
                 }
                 return;
@@ -197,9 +191,8 @@ pub(crate) fn draw_elements_basevertex_exact(
         }
         0x1405 => {
             for chunk in temp.chunks_exact_mut(4) {
-                let v =
-                    u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
-                        .wrapping_add(basevertex as u32);
+                let v = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                    .wrapping_add(basevertex as u32);
                 let b = v.to_le_bytes();
                 chunk.copy_from_slice(&b);
             }
@@ -219,7 +212,9 @@ pub(crate) fn draw_elements_basevertex_exact(
             GL_STREAM_DRAW,
         );
         match instancecount {
-            Some(ic) => (dispatch.draw_elements_instanced)(mode, count, type_, std::ptr::null(), ic),
+            Some(ic) => {
+                (dispatch.draw_elements_instanced)(mode, count, type_, std::ptr::null(), ic)
+            }
             None => (dispatch.draw_elements)(mode, count, type_, std::ptr::null()),
         }
         (dispatch.delete_buffers)(1, &mut tmp_buf);
@@ -583,11 +578,7 @@ pub extern "C" fn glDrawTransformFeedback(_mode: u32, _id: u32) {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glDrawTransformFeedbackInstanced(
-    _mode: u32,
-    _id: u32,
-    _instancecount: i32,
-) {
+pub extern "C" fn glDrawTransformFeedbackInstanced(_mode: u32, _id: u32, _instancecount: i32) {
     warn_tf_draw_unsupported("glDrawTransformFeedbackInstanced");
 }
 
@@ -596,11 +587,7 @@ const GL_SHADER_STORAGE_BARRIER_BIT: u32 = 0x00002000;
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "C" fn glDispatchCompute(
-    num_groups_x: u32,
-    num_groups_y: u32,
-    num_groups_z: u32,
-) {
+pub extern "C" fn glDispatchCompute(num_groups_x: u32, num_groups_y: u32, num_groups_z: u32) {
     // P2：compute 分发的运行时载体（GLES 3.1 core 透传）。
     // 依赖：shader 翻译管线已把 atomic_uint 改写为 SSBO；app 的
     // GL_ATOMIC_COUNTER_BUFFER 绑定在 glBindBufferBase/Range 时已转发到

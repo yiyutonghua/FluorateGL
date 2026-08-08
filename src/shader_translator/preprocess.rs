@@ -824,7 +824,9 @@ void main() {\n\
             out
         );
         assert!(
-            out.contains("layout(binding=3, std430) buffer AtomicCounterSSBO_3 { uint counters[4]; };"),
+            out.contains(
+                "layout(binding=3, std430) buffer AtomicCounterSSBO_3 { uint counters[4]; };"
+            ),
             "数组声明应改写为 SSBO 数组，got:\n{}",
             out
         );
@@ -848,10 +850,7 @@ void main() {\n\
             "Counter 读取应改为直接变量访问，got:\n{}",
             out
         );
-        assert!(
-            out.contains(ATOMIC_SSBO_WATERMARK),
-            "应插入 watermark"
-        );
+        assert!(out.contains(ATOMIC_SSBO_WATERMARK), "应插入 watermark");
         assert!(
             !out.contains("atomic_uint"),
             "不应残留 atomic_uint 声明，got:\n{}",

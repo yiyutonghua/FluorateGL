@@ -281,8 +281,7 @@ pub struct GlesDispatch {
     pub multi_draw_elements_indirect: unsafe extern "C" fn(u32, u32, *const c_void, i32, i32),
     // GL 4.6 / GL_ARB_indirect_compute indirect count（GLES 几乎无支持，stub 时告警）
     // drawcount 参数为 GLintptr（buffer offset，isize）；maxdrawcount/stride 为 GLsizei（i32）
-    pub multi_draw_arrays_indirect_count:
-        unsafe extern "C" fn(u32, *const c_void, isize, i32, i32),
+    pub multi_draw_arrays_indirect_count: unsafe extern "C" fn(u32, *const c_void, isize, i32, i32),
     pub multi_draw_elements_indirect_count:
         unsafe extern "C" fn(u32, u32, *const c_void, isize, i32, i32),
 
@@ -1077,11 +1076,7 @@ impl GlesDispatch {
             // GLES 无 core glMultiDrawArrays/Elements，仅 GL_EXT_multi_draw_arrays
             // 提供 EXT 后缀名（Adreno/Mesa 均支持）——core 名几乎必然 stub，
             // 补 EXT 后缀恢复原生透传（C4）
-            multi_draw_arrays: load_opt_suffixes!(
-                "glMultiDrawArrays",
-                "",
-                "glMultiDrawArraysEXT"
-            ),
+            multi_draw_arrays: load_opt_suffixes!("glMultiDrawArrays", "", "glMultiDrawArraysEXT"),
             multi_draw_elements: load_opt_suffixes!(
                 "glMultiDrawElements",
                 "",

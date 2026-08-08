@@ -179,7 +179,8 @@ pub extern "C" fn glMultiDrawElementsBaseVertex(
         if !supported {
             // 优先尝试 glDrawElementsBaseVertex（保留 basevertex 语义）
             // C1：同以符号存在性为主导
-            let base_vertex_ok = !is_stub(dispatch, dispatch.draw_elements_base_vertex as *const ());
+            let base_vertex_ok =
+                !is_stub(dispatch, dispatch.draw_elements_base_vertex as *const ());
             if !base_vertex_ok {
                 // 驱动完全不支持 basevertex：降级循环，
                 // P1：每 draw 用逐索引加法精确模拟（读索引 + basevertex → 临时 EBO）。

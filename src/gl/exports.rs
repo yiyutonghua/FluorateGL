@@ -805,7 +805,7 @@ mod tests {
     /// C5/D5：注入错误应在下一次 glGetError 返回（FIFO 优先于驱动错误队列）。
     #[test]
     fn injected_gl_error_returned_by_gl_get_error() {
-        use super::{inject_gl_error, INJECTED_GL_ERRORS, glGetError};
+        use super::{INJECTED_GL_ERRORS, glGetError, inject_gl_error};
         // 清理可能残留的注入（其他测试/运行时不会注入，防御性清空）
         INJECTED_GL_ERRORS.lock().unwrap().clear();
 

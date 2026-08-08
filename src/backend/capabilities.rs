@@ -206,9 +206,7 @@ fn parse_gles_version(dispatch: &GlesDispatch) -> GlesVersion {
 
     // P3：全部失败 → 兜底 310（项目前提 GLES 3.1+，避免误判为 3.0 导致
     // GL_DEPTH_CLAMP 等 3.2 特性判定与透传行为不一致）
-    log::warn!(
-        "[FluorateGL] GL_VERSION 与 glGetIntegerv 均不可用，version 兜底为 3.1（项目前提）"
-    );
+    log::warn!("[FluorateGL] GL_VERSION 与 glGetIntegerv 均不可用，version 兜底为 3.1（项目前提）");
     GlesVersion(31)
 }
 
