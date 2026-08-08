@@ -147,8 +147,13 @@ impl GlesCapabilities {
 /// C1 兜底：部分后端（如 ANGLE）在能力查询时机上下文未完全 current 时
 /// glGetString(GL_VERSION) 返回 null，字符串解析失败 → 用
 /// glGetIntegerv(GL_MAJOR_VERSION/GL_MINOR_VERSION)（GLES 3.0+ core 查询）
-/// 兜底。两者都失败才返回 0（此时拦截层以 dispatch 符号存在性为主导，
-/// 不受 version=0 影响）。
+/// 兜底。
+///
+/// P3：两者都失败时兜底返回 310（项目前提 GLES 3.1+，对齐 MobileGlues
+/// getter.cpp:219-232 的兜底策略——它兜底 300，我们 310 更贴前提）。
+/// 拦截层以 dispatch 符号存在性为主导（C1），兜底版本仅影响
+/// version.at_least 类判定（如 GL_DEPTH_CLAMP 的 3.2 感知过滤），
+/// 310 兜底保证 GLES 3.1+ 设备不被误判为 3.0。
 fn parse_gles_version(dispatch: &GlesDispatch) -> GlesVersion {
     // GL_VERSION = 0x1F02
     let version_ptr = unsafe { (dispatch.get_string)(0x1F02) };
@@ -199,7 +204,12 @@ fn parse_gles_version(dispatch: &GlesDispatch) -> GlesVersion {
         return GlesVersion(major as u16 * 10 + minor as u16);
     }
 
-    GlesVersion(0)
+    // P3：全部失败 → 兜底 310（项目前提 GLES 3.1+，避免误判为 3.0 导致
+    // GL_DEPTH_CLAMP 等 3.2 特性判定与透传行为不一致）
+    log::warn!(
+        "[FluorateGL] GL_VERSION 与 glGetIntegerv 均不可用，version 兜底为 3.1（项目前提）"
+    );
+    GlesVersion(31)
 }
 
 /// 通过 glGetStringi 遍历 GLES 扩展列表

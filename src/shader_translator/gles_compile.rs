@@ -44,8 +44,10 @@ pub fn compile(spv: &[u32], version: u16) -> Result<String, SpirvCrossError> {
     options.version = match version {
         320 => GlslVersion::Glsl320Es,
         310 => GlslVersion::Glsl310Es,
+        // 300 分支保留为防御性（300 已从候选列表剔除——项目前提 GLES 3.1+，
+        // 仅当未来有调用方显式请求 300 时生效）
         300 => GlslVersion::Glsl300Es,
-        _ => GlslVersion::Glsl300Es,
+        _ => GlslVersion::Glsl310Es,
     };
 
     // 根据实际需求调整精度设置
@@ -91,7 +93,9 @@ pub fn compile(spv: &[u32], version: u16) -> Result<String, SpirvCrossError> {
 
 /// 根据原始桌面 GLSL 版本推导候选 GLES 版本列表
 ///
-/// 策略：高版本桌面 GLSL → 尝试 GLES 320/310/300，否则尝试 310/300
+/// 策略：高版本桌面 GLSL → 尝试 GLES 320/310，否则尝试 310。
+/// （300 已剔除：项目前提 GLES 3.1+，且 300 输出无 SSBO/binding 支持，
+/// 与 310 行为差异大——用户指令"只支持 gles310+"）
 pub fn gles_version_candidates(source: &str) -> Vec<u16> {
     let desktop_version = preprocess::extract_version(source)
         .and_then(|line| {
@@ -101,7 +105,7 @@ pub fn gles_version_candidates(source: &str) -> Vec<u16> {
         })
         .unwrap_or(150);
     match desktop_version {
-        460 | 450 | 440 | 430 | 420 | 410 | 400 | 330 => vec![320, 310, 300],
-        _ => vec![310, 300],
+        460 | 450 | 440 | 430 | 420 | 410 | 400 | 330 => vec![320, 310],
+        _ => vec![310],
     }
 }

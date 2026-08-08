@@ -17,21 +17,21 @@ use fluorategl::shader_translator::{gles_compile, spirv_compile};
 fn gles_version_candidates_for_330() {
     let src = "#version 330 core\nvoid main() {}\n";
     let candidates = gles_compile::gles_version_candidates(src);
-    assert_eq!(candidates, vec![320, 310, 300]);
+    assert_eq!(candidates, vec![320, 310]);
 }
 
 #[test]
 fn gles_version_candidates_for_450() {
     let src = "#version 450 core\nvoid main() {}\n";
     let candidates = gles_compile::gles_version_candidates(src);
-    assert_eq!(candidates, vec![320, 310, 300]);
+    assert_eq!(candidates, vec![320, 310]);
 }
 
 #[test]
 fn gles_version_candidates_for_460() {
     let src = "#version 460 core\nvoid main() {}\n";
     let candidates = gles_compile::gles_version_candidates(src);
-    assert_eq!(candidates, vec![320, 310, 300]);
+    assert_eq!(candidates, vec![320, 310]);
 }
 
 #[test]
@@ -39,14 +39,14 @@ fn gles_version_candidates_for_150() {
     // #version 150 < 330，走默认分支
     let src = "#version 150 core\nvoid main() {}\n";
     let candidates = gles_compile::gles_version_candidates(src);
-    assert_eq!(candidates, vec![310, 300]);
+    assert_eq!(candidates, vec![310]);
 }
 
 #[test]
 fn gles_version_candidates_for_120() {
     let src = "#version 120\nvoid main() {}\n";
     let candidates = gles_compile::gles_version_candidates(src);
-    assert_eq!(candidates, vec![310, 300]);
+    assert_eq!(candidates, vec![310]);
 }
 
 #[test]
@@ -54,13 +54,13 @@ fn gles_version_candidates_for_no_version() {
     // 无 #version 指令，默认 150
     let src = "void main() {}\n";
     let candidates = gles_compile::gles_version_candidates(src);
-    assert_eq!(candidates, vec![310, 300]);
+    assert_eq!(candidates, vec![310]);
 }
 
 #[test]
 fn gles_version_candidates_for_empty_input() {
     let candidates = gles_compile::gles_version_candidates("");
-    assert_eq!(candidates, vec![310, 300]);
+    assert_eq!(candidates, vec![310]);
 }
 
 #[test]
