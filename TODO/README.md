@@ -4,13 +4,19 @@
 
 ## 当前待办总览
 
-| 主题 | 状态 | 文件 | 说明 |
-|---|---|---|---|
-| 固定管线函数（~715） | 待办（暂不实现） | [fixed_pipeline.md](fixed_pipeline.md) | glBegin/glMatrixMode/glColor3f 等桌面 1.x-2.1 固定管线函数；北极星=GL 3.3 core 无固定管线，GLES 无对应；若需兼容旧应用再评估 |
-| ANGLE 后端问题（真机） | 搁置中 | — | 真机 ANGLE 后端 GLES 函数表缺失（capabilities 检测 version=0，491 行日志待精读）；EGL 导出调用日志增强待办（loader dlerror/路径记录、egl 导出调用日志） |
-| 旧厂商扩展（~712） | 待评估 | — | MG 有我们无、无签名源的旧扩展（glAlphaFragmentOp1ATI 等）；LWJGL 基本不查询，边际价值低；如需可补第三轮签名源（MG 手写定义解析） |
-| 安全可声明扩展 | 待决策 | — | 查询/微调类 stub 无副作用，可考虑入 FAKE_EXTENSIONS：GL_ARB_internalformat_query2、GL_KHR_no_error、GL_ARB_texture_filter_anisotropic、GL_ARB_separate_shader_objects |
-| 行为依赖扩展（不建议声明） | 已定（不声明） | — | buffer_storage（Adreno 事故教训）、compute_shader/image_load_store、DSA、draw_instanced 系、transform_feedback 系——stub 会导致应用走错误路径 |
+| 主题 | 状态 | 文件 |
+|---|---|---|
+| 固定管线函数（~715） | 待办（暂不实现） | [fixed_pipeline.md](fixed_pipeline.md) |
+| ANGLE 后端问题（真机） | 搁置中（m00228 暂放） | [angle.md](angle.md) |
+| 旧厂商扩展（~712） | 待评估（无签名源） | [legacy_extensions.md](legacy_extensions.md) |
+| 扩展字符串声明决策 | 策略已定（m00271） | [extensions_declaration.md](extensions_declaration.md) |
+
+## 各主题要点
+
+- **固定管线（715）**：glBegin/glMatrixMode/glColor3f 等桌面 1.x-2.1 函数；北极星=GL 3.3 core 无固定管线、GLES 无对应；完整清单见 fixed_pipeline.md
+- **ANGLE（真机）**：491 行日志 3 秒崩（UBO 对齐除零、glGetString null、26 个 GLES 函数 missing）；五层链路候选①EGL context 与函数表不匹配②库名（已排除）③版本不配对；盲区=loader 无 dlerror/dladdr、egl 导出无调用日志；恢复步骤见 angle.md
+- **旧扩展（712）**：MG 有我们无、无签名源的旧厂商扩展（glAlphaFragmentOp1ATI 等）；LWJGL 基本不查询；需补则第三轮签名源（Khronos gl.xml 或 MG 手写定义解析）
+- **扩展声明**：安全可声明 4 项（internalformat_query2/KHR_no_error/anisotropic/SSO）vs 行为依赖不声明 5 类（buffer_storage 事故教训/compute/DSA/draw_instanced/TF）；当前 build_fake_extensions 按 caps 校验剔除，不因 stub 全量声明
 
 ## 约定
 
