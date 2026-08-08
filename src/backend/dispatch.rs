@@ -313,6 +313,10 @@ pub struct GlesDispatch {
     pub resume_transform_feedback: unsafe extern "C" fn(),
     pub is_transform_feedback: unsafe extern "C" fn(u32) -> u8,
 
+    // Compute（GLES 3.1 core；P2 atomic→SSBO 模拟的运行时载体）
+    pub dispatch_compute: unsafe extern "C" fn(u32, u32, u32),
+    pub memory_barrier: unsafe extern "C" fn(u32),
+
     // Sampler
     pub gen_samplers: unsafe extern "C" fn(i32, *mut u32),
     pub delete_samplers: unsafe extern "C" fn(i32, *const u32),
@@ -339,11 +343,11 @@ pub struct GlesDispatch {
 }
 
 // 编译期约束：GlesDispatch 必须全部为函数指针（全指针布局），且字段总数精确匹配。
-// 字段数 = 264（stub 槽 + 263 个 GL 函数指针）。
+// 字段数 = 266（stub 槽 + 265 个 GL 函数指针；P2 新增 dispatch_compute/memory_barrier）。
 // ⚠️ 若结构体字段增减，必须同步更新此处 264，否则编译失败——防止显式初始化
 // 遗漏字段时静默出错（原 % 断言只能捕获"总大小非 8 倍数"，捕获不了字段数漂移）。
 const _: () = assert!(
-    std::mem::size_of::<GlesDispatch>() == 264 * std::mem::size_of::<unsafe extern "C" fn()>()
+    std::mem::size_of::<GlesDispatch>() == 266 * std::mem::size_of::<unsafe extern "C" fn()>()
 );
 
 // —— 按签名类别的安全 no-op stub（零参数，忽略入参，返回安全常量）——
@@ -692,6 +696,8 @@ impl GlesDispatch {
             pause_transform_feedback: stub!(),
             resume_transform_feedback: stub!(),
             is_transform_feedback: stub!(gl_stub_zero_u8 as unsafe extern "C" fn() -> u8),
+            dispatch_compute: stub!(),
+            memory_barrier: stub!(),
 
             // Sampler
             gen_samplers: stub!(),
@@ -1172,6 +1178,9 @@ impl GlesDispatch {
                 std::mem::transmute(load!("glResumeTransformFeedback"))
             },
             is_transform_feedback: unsafe { std::mem::transmute(load!("glIsTransformFeedback")) },
+            // GLES 3.1 core（项目前提，必选加载）
+            dispatch_compute: unsafe { std::mem::transmute(load!("glDispatchCompute")) },
+            memory_barrier: unsafe { std::mem::transmute(load!("glMemoryBarrier")) },
 
             gen_samplers: unsafe { std::mem::transmute(load!("glGenSamplers")) },
             delete_samplers: unsafe { std::mem::transmute(load!("glDeleteSamplers")) },

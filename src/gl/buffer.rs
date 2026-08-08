@@ -15,6 +15,9 @@ const GL_MAP_COHERENT_BIT: u32 = 0x0080;
 const GL_PARAMETER_BUFFER: u32 = 0x80EE;
 /// GL_COPY_READ_BUFFER：用于临时绑定 count buffer 读取数据（合法的通用 target）
 const GL_COPY_READ_BUFFER: u32 = 0x8F36;
+/// P2：atomic counter buffer → SSBO 绑定转发常量（与 drawing.rs 定义保持一致）
+const GL_ATOMIC_COUNTER_BUFFER: u32 = 0x92C0;
+const GL_SHADER_STORAGE_BUFFER: u32 = 0x90F2;
 
 /// 将桌面 GL 的 glMapBufferRange access flags 翻译为 GLES 3.1 支持的位。
 ///
@@ -871,7 +874,17 @@ pub extern "C" fn glBindBufferBase(target: u32, index: u32, buffer: u32) {
             })
         };
 
-        (dispatch.bind_buffer_base)(target, index, gles_id);
+        // P2：atomic counter buffer 绑定转发到 SSBO 绑定点（shader 翻译管线已把
+        // atomic_uint 改写为 SSBO，见 preprocess.rs convert_atomic_counter_to_ssbo；
+        // GLES 3.1 的 GL_ATOMIC_COUNTER_BUFFER target 本身合法，但 shader 侧
+        // 期望的是 binding=N 的 SSBO）。state 记录仍按原 target（查询/同步语义不变）。
+        let gles_target = if target == GL_ATOMIC_COUNTER_BUFFER {
+            GL_SHADER_STORAGE_BUFFER
+        } else {
+            target
+        };
+
+        (dispatch.bind_buffer_base)(gles_target, index, gles_id);
 
         // 排查日志：记录 UBO 绑定点调用（MC 若绑定成功，后续 glBufferSubData
         // 才能到达 shader；此调用长期缺失即 UI 消失根因盲区）
@@ -923,7 +936,14 @@ pub extern "C" fn glBindBufferRange(
             })
         };
 
-        (dispatch.bind_buffer_range)(target, index, gles_id, offset, size);
+        // P2：同 glBindBufferBase——atomic counter buffer 转发 SSBO 绑定点
+        let gles_target = if target == GL_ATOMIC_COUNTER_BUFFER {
+            GL_SHADER_STORAGE_BUFFER
+        } else {
+            target
+        };
+
+        (dispatch.bind_buffer_range)(gles_target, index, gles_id, offset, size);
 
         // 排查日志：同 glBindBufferBase
         log::debug!(

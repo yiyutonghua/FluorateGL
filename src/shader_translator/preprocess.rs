@@ -63,10 +63,124 @@ pub fn preprocess(source: &str, stage: u32) -> String {
     // samplerBuffer 原样保留（OpenGL target 原生支持 ImageBuffer；转换会破坏 texelFetch 调用）
     // 注入 textureQueryLod polyfill（GLES 3.0 不支持 GL 4.0 textureQueryLod）
     inject_texture_query_lod(&mut result);
+    // P2：atomic counter → SSBO 模拟（GLES 驱动 atomic counter 上限小；
+    // 桌面 GL 3.3 无 atomic counter（GL 4.2+ 特性），仅 GL 4.x shader 输入时触发）
+    let (converted, converted_flag) = convert_atomic_counter_to_ssbo(&result);
+    if converted_flag {
+        log::debug!(
+            "[ShaderTranslator] preprocess: atomic counter 已改写为 SSBO（{} chars -> {} chars）",
+            result.len(),
+            converted.len()
+        );
+        result = converted;
+    }
     inject_missing_locations(&mut result);
     inject_missing_uniform_locations(&mut result);
     inject_missing_bindings(&mut result);
     result
+}
+
+/// P2：atomic counter → SSBO 模拟（对齐 MobileGlues glsl_for_es.cpp:476-559）。
+///
+/// 背景：GLES 驱动的 atomic counter 上限小（移动 GPU fragment stage 常为 0 或 8，
+/// Mesa 为 4096），超出即编译失败；SSBO 的 atomicAdd 无上限且 GLES 3.1+ 原生
+/// 支持（已探针验证）。桌面 GL 3.3 无 atomic counter（GL 4.2+），本路径仅在
+/// GL 4.x shader 被喂给翻译管线时触发。
+///
+/// 改写：
+/// - 声明 `layout(binding=N, offset=0) uniform atomic_uint NAME;` →
+///   `layout(binding=N, std430) buffer AtomicCounterSSBO_N { uint NAME; };`
+///   （数组 `atomic_uint NAME[K]` → `uint NAME[K]`，声明块内）
+/// - 调用：atomicCounterIncrement(NAME) → atomicAdd(NAME, 1u)、
+///   atomicCounterDecrement(NAME) → atomicAdd(NAME, uint(-1))、
+///   atomicCounterAdd(NAME, X) → atomicAdd(NAME, X)、
+///   atomicCounter(NAME) → NAME（数组索引 `NAME[i]` 均支持）
+/// - 文件尾插入 watermark（供运行时/日志识别转换）
+///
+/// 限制标注：不插入 memoryBarrierBuffer（同一 invocation 内 atomic 顺序由程序
+/// 序保证；跨 invocation 可见性由 app 的 glMemoryBarrier 负责——运行时层
+/// glMemoryBarrier 已补 GL_SHADER_STORAGE_BARRIER_BIT）。
+pub(crate) const ATOMIC_SSBO_WATERMARK: &str = "// [FluorateGL] atomic counter emulated as SSBO";
+
+pub(crate) fn convert_atomic_counter_to_ssbo(source: &str) -> (String, bool) {
+    if !source.contains("atomic_uint") && !source.contains("atomicCounter") {
+        return (source.to_string(), false);
+    }
+
+    let mut result = source.to_string();
+
+    // 1. 声明改写：layout(binding=N[, offset=M]) uniform atomic_uint NAME[K];
+    //    → layout(binding=N, std430) buffer AtomicCounterSSBO_N { uint NAME[K]; };
+    static RE_DECL: OnceLock<Regex> = OnceLock::new();
+    let re_decl = RE_DECL.get_or_init(|| {
+        Regex::new(
+            r"(?i)layout\s*\(\s*binding\s*=\s*(\d+)\s*(?:,\s*offset\s*=\s*\d+\s*)?\)\s*uniform\s+atomic_uint\s+(\w+)(\s*\[\s*\d+\s*\])?\s*;",
+        )
+        .unwrap()
+    });
+    let mut decl_found = false;
+    result = re_decl
+        .replace_all(&result, |caps: &regex::Captures| {
+            decl_found = true;
+            let binding = &caps[1];
+            let name = &caps[2];
+            let arr = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+            format!(
+                "layout(binding={}, std430) buffer AtomicCounterSSBO_{} {{ uint {}{}; }};",
+                binding, binding, name, arr
+            )
+        })
+        .into_owned();
+
+    // 2. 调用改写（顺序重要：先长模式后短模式，`atomicCounter(` 不会误匹配
+    //    `atomicCounterIncrement(`——其后是字母非左括号）
+    static RE_INCR: OnceLock<Regex> = OnceLock::new();
+    static RE_DECR: OnceLock<Regex> = OnceLock::new();
+    static RE_ADD: OnceLock<Regex> = OnceLock::new();
+    static RE_READ: OnceLock<Regex> = OnceLock::new();
+    let re_incr = RE_INCR.get_or_init(|| {
+        Regex::new(r"(?i)\batomicCounterIncrement\s*\(\s*(\w+)(\s*\[[^\]]*\])?\s*\)").unwrap()
+    });
+    let re_decr = RE_DECR.get_or_init(|| {
+        Regex::new(r"(?i)\batomicCounterDecrement\s*\(\s*(\w+)(\s*\[[^\]]*\])?\s*\)").unwrap()
+    });
+    let re_add = RE_ADD.get_or_init(|| {
+        Regex::new(r"(?i)\batomicCounterAdd\s*\(\s*(\w+)(\s*\[[^\]]*\])?\s*,\s*([^)]+)\)").unwrap()
+    });
+    let re_read = RE_READ.get_or_init(|| {
+        Regex::new(r"(?i)\batomicCounter\s*\(\s*(\w+)(\s*\[[^\]]*\])?\s*\)").unwrap()
+    });
+    let mut call_found = false;
+    let mut has_call = |r: &Regex, s: &str, repl: &str| -> String {
+        let out = r
+            .replace_all(s, |caps: &regex::Captures| {
+                call_found = true;
+                let name = &caps[1];
+                let idx = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                match repl {
+                    "incr" => format!("atomicAdd({}{}, 1u)", name, idx),
+                    "decr" => format!("atomicAdd({}{}, uint(-1))", name, idx),
+                    "add" => format!("atomicAdd({}{}, {})", name, idx, &caps[3]),
+                    "read" => format!("{}{}", name, idx),
+                    _ => unreachable!(),
+                }
+            })
+            .into_owned();
+        out
+    };
+    // 顺序：Increment/Decrement/Add 先（更长模式），Counter 读取最后
+    result = has_call(&re_incr, &result, "incr");
+    result = has_call(&re_decr, &result, "decr");
+    result = has_call(&re_add, &result, "add");
+    result = has_call(&re_read, &result, "read");
+
+    let converted = decl_found || call_found;
+    if converted {
+        result.push('\n');
+        result.push_str(ATOMIC_SSBO_WATERMARK);
+        result.push('\n');
+    }
+    (result, converted)
 }
 
 /// 字符串级全局替换（与 MobileGlues replace_all 对齐）。
@@ -688,6 +802,70 @@ mod tests {
             !result.contains("GL_ARB_derivative_control"),
             "改写后不应残留扩展宏名"
         );
+    }
+
+    /// P2：atomic counter 声明与调用应改写为 SSBO + atomicAdd
+    #[test]
+    fn test_atomic_counter_to_ssbo_conversion() {
+        let input = "#version 450 core\n\
+layout(binding = 2, offset = 0) uniform atomic_uint counter;\n\
+layout(binding = 3, offset = 4) uniform atomic_uint counters[4];\n\
+void main() {\n\
+    uint a = atomicCounterIncrement(counter);\n\
+    atomicCounterDecrement(counters[1]);\n\
+    atomicCounterAdd(counter, 5u);\n\
+    uint b = atomicCounter(counters[2]);\n\
+}\n";
+        let (out, converted) = convert_atomic_counter_to_ssbo(input);
+        assert!(converted, "应检测到 atomic counter 并转换");
+        assert!(
+            out.contains("layout(binding=2, std430) buffer AtomicCounterSSBO_2 { uint counter; };"),
+            "声明应改写为 SSBO，got:\n{}",
+            out
+        );
+        assert!(
+            out.contains("layout(binding=3, std430) buffer AtomicCounterSSBO_3 { uint counters[4]; };"),
+            "数组声明应改写为 SSBO 数组，got:\n{}",
+            out
+        );
+        assert!(
+            out.contains("atomicAdd(counter, 1u)"),
+            "Increment 应改写为 atomicAdd(+1)，got:\n{}",
+            out
+        );
+        assert!(
+            out.contains("atomicAdd(counters[1], uint(-1))"),
+            "Decrement 应改写为 atomicAdd(-1)，got:\n{}",
+            out
+        );
+        assert!(
+            out.contains("atomicAdd(counter, 5u)"),
+            "Add 应改写为 atomicAdd(+X)，got:\n{}",
+            out
+        );
+        assert!(
+            out.contains("uint b = counters[2];"),
+            "Counter 读取应改为直接变量访问，got:\n{}",
+            out
+        );
+        assert!(
+            out.contains(ATOMIC_SSBO_WATERMARK),
+            "应插入 watermark"
+        );
+        assert!(
+            !out.contains("atomic_uint"),
+            "不应残留 atomic_uint 声明，got:\n{}",
+            out
+        );
+    }
+
+    /// P2：无 atomic 的 shader 应原样返回（不转换不加水印）
+    #[test]
+    fn test_atomic_counter_to_ssbo_noop() {
+        let input = "#version 330 core\nvoid main() {}\n";
+        let (out, converted) = convert_atomic_counter_to_ssbo(input);
+        assert!(!converted, "无 atomic counter 不应转换");
+        assert_eq!(out, input, "应原样返回");
     }
 
     #[test]
