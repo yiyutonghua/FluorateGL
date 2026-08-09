@@ -17,7 +17,9 @@ use std::fmt;
 const SPIRV_MAGIC: u32 = 0x0723_0203;
 
 /// pass 链版本：变更 pass 链时必须递增（cache.rs compute_key 依赖）
-pub const OPT_PIPELINE_VERSION: u32 = 1;
+/// v1: AggressiveDCE + RemoveUnusedInterfaceVariables
+/// v2: + EliminateDeadConstant（S2-2）
+pub const OPT_PIPELINE_VERSION: u32 = 2;
 
 /// 优化失败错误（fail-open：调用方收到 Err 后回退原始 SPIR-V）
 #[derive(Debug)]
@@ -40,7 +42,8 @@ impl fmt::Display for OptError {
     }
 }
 
-/// 对 SPIR-V 模块运行固定 pass 链（AggressiveDCE + RemoveUnusedInterfaceVariables）。
+/// 对 SPIR-V 模块运行固定 pass 链（AggressiveDCE + RemoveUnusedInterfaceVariables
+/// + EliminateDeadConstant）。
 ///
 /// 返回优化后的 SPIR-V words；任何失败返回 `Err`——调用方（spirv_pass.rs）应
 /// fail-open 回退原始 SPIR-V（永不劣化不变式）。
@@ -58,6 +61,8 @@ pub fn run(spv: &[u32]) -> Result<Vec<u32>, OptError> {
     let mut optimizer = spirv_tools::opt::create(Some(spirv_tools::TargetEnv::Universal_1_5));
     optimizer.register_pass(spirv_tools::opt::Passes::AggressiveDCE);
     optimizer.register_pass(spirv_tools::opt::Passes::RemoveUnusedInterfaceVariables);
+    // S2-2：删未使用的常量（低风险——活跃常量/名字不变）
+    optimizer.register_pass(spirv_tools::opt::Passes::EliminateDeadConstant);
 
     let mut msg_cb = |msg: spirv_tools::error::Message| {
         log::debug!(
