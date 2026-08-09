@@ -1,8 +1,32 @@
 # SPIRV-Tools Optimizer Pass 链接入方案（FluorateGL）
 
-**状态：已存档待确认（2026-08-08）**
+**状态：已实施（阶段 1-3 完成，2026-08-09）**
+**最终 pass 链 v2**：AggressiveDCE → RemoveUnusedInterfaceVariables → EliminateDeadConstant（OPT_PIPELINE_VERSION=2）
+**env 修正项（spike 实测）**：`TargetEnv::Universal_1_5`（Vulkan_1_1 上限 1.3、OpenGL_4_5 上限 1.0 均拒绝 SPIR-V 1.5 输出）
+**验证数字**：test 305 全绿；差分 A:338 / B:302 0 FAIL；glslang_suite 1049（基线 1080，改善 31）；nm GL 1392；opt 开销 <1ms/shader（bench_opt）
 **目标链**：shaderc (OpenGL 450 / Zero) → SPIRV-Tools Optimizer（标准 pass 链）→ spirv-cross → GLES 3.2/3.1
 **约束**：fail-open 永不劣化；差分 hash 为最终裁决
+
+## 实施记录（阶段 1-3 已完成）
+
+### 已接入
+- spirv_opt.rs（OPT_PIPELINE_VERSION=2）+ spirv_pass() fail-open + cache key 并入版本（commit 87bc761/43ea09e）
+- 验证矩阵全过（详见各阶段报告）；性能基准 tools/bench_opt.sh
+
+### 阶段 2 结论（不接入项，含原因）
+- **CompactIds ❌**：与链组合触发 SPIRV-Tools 内部断言 abort
+  （`pass.cpp:44 assertion "An analysis in the context is out of date"`）——native
+  崩溃无法 fail-open 捕获（进程直接死）。待上游排查 pass 顺序/analysis 交互
+- **EliminateDeadMembers ❌**：会删除 block 未使用成员并重排 std140 布局——
+  app 按原声明上传的 buffer 数据错位（GL 3.3 语义下优化器无权改 block 布局；
+  该 pass 为 Vulkan descriptor 反射场景设计）
+- **S2-5 RedundancyElimination/SimplifyInstructions ⏭️ 跳过**：收益边际 +
+  CompactIds 教训（每 pass 有 analysis 断言风险，差分门验证成本>收益）
+
+### 后续路线
+- S3-4 真机验证（独立待办，跑一局确认渲染无回归）
+- MobileGL 自研 pass：fork spirv-tools-rs C 桥（LGPL 声明）或关注官方新 pass；
+  当前标准链已覆盖公共收益（死代码/接口/常量）
 
 ## 1. 阶段划分
 

@@ -4,9 +4,13 @@
 //! 1. preprocess：GLSL 预处理（移除 #line、统一版本 450、迁移 attribute/varying、
 //!    注入 location/binding）
 //! 2. spirv_compile：GLSL → SPIR-V 编译（shaderc, OpenGL target）
-//! 3. spirv_pass：SPIR-V 中间处理 Pass（预留扩展点，当前为直通）
+//! 3. spirv_pass：SPIR-V 中间处理 Pass——**已接入 spirv-tools optimizer**
+//!    （pass 链 v2：AggressiveDCE → RemoveUnusedInterfaceVariables →
+//!    EliminateDeadConstant，见 spirv_opt.rs；OPT_PIPELINE_VERSION 随链变更
+//!    递增并参与 cache key；fail-open：优化失败回退原始 SPIR-V，永不劣化）
 //! 4. gles_compile：SPIR-V → GLSL ES 编译（spirv-cross2）
 //! 5. postprocess：GLSL ES 后处理（按版本条件 strip location/binding、处理 outColor）
+//! 6. string_pass：SPIR-V 管线失败时的纯文本兜底（translate() 永不返回 Failed）
 
 use crate::shader_translator::{cache, gles_compile, spirv_compile, spirv_opt, string_pass};
 

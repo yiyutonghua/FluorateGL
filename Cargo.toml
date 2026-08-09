@@ -42,3 +42,7 @@ path = "tests/glsl/glslang_suite.rs"
 [[example]]
 name = "translate_test"
 path = "tests/glsl/translate_test.rs"
+
+[[example]]
+name = "bench_opt"
+path = "tests/glsl/bench_opt.rs"
