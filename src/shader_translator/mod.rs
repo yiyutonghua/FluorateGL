@@ -15,6 +15,7 @@ pub mod macros;
 pub mod postprocess;
 pub mod preprocess;
 pub mod spirv_compile;
+pub mod spirv_opt;
 pub mod spirv_pass;
 pub mod string_pass;
 

@@ -45,6 +45,9 @@ impl ShaderCache {
         hasher.update(source.as_bytes());
         hasher.update(stage.to_le_bytes());
         hasher.update(gles_version.to_le_bytes());
+        // pass 链版本：变更 spirv_opt pass 链时必须递增 OPT_PIPELINE_VERSION，
+        // 否则旧缓存（不同优化产物）会错误命中（S1-4）
+        hasher.update(super::spirv_opt::OPT_PIPELINE_VERSION.to_le_bytes());
 
         // 源码特征
         let features = [

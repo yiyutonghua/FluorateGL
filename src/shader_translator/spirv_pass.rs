@@ -8,7 +8,7 @@
 //! 4. gles_compile：SPIR-V → GLSL ES 编译（spirv-cross2）
 //! 5. postprocess：GLSL ES 后处理（按版本条件 strip location/binding、处理 outColor）
 
-use crate::shader_translator::{cache, gles_compile, spirv_compile, string_pass};
+use crate::shader_translator::{cache, gles_compile, spirv_compile, spirv_opt, string_pass};
 
 #[derive(Debug, Clone)]
 pub enum TranslationResult {
@@ -203,15 +203,25 @@ fn translate_internal(source: &str, stage: u32) -> TranslationResult {
 
 /// SPIR-V 中间处理 Pass
 ///
-/// 当前为直通（返回原始 SPIR-V），预留扩展点用于：
-/// - SPIR-V 优化（spirv-tools）
+/// 已接入 spirv-tools optimizer（阶段 1：AggressiveDCE +
+/// RemoveUnusedInterfaceVariables，见 spirv_opt.rs）。fail-open：
+/// 优化失败回退原始 SPIR-V（永不劣化——translate() 输出与未接入时逐字节一致）。
+///
+/// 预留扩展点仍可用于：
 /// - 精度修正 Pass
 /// - 插值修饰符 Pass
 /// - 位置不变性 Pass
-///
-/// 对齐 MobileGL 的 SpirvPasses 体系，但当前 FluorateGL 不需要这些复杂处理。
 fn spirv_pass(spv: &[u32]) -> Vec<u32> {
-    spv.to_vec()
+    match spirv_opt::run(spv) {
+        Ok(optimized) => optimized,
+        Err(e) => {
+            log::warn!(
+                "[ShaderTranslator] spirv-opt 失败回退原始 SPIR-V: {}（fail-open）",
+                e
+            );
+            spv.to_vec()
+        }
+    }
 }
 
 #[cfg(test)]
