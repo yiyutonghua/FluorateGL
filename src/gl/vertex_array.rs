@@ -2,6 +2,11 @@ use crate::backend;
 use crate::state;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// GL_ELEMENT_ARRAY_BUFFER target（VAO 状态的一部分）
+const GL_ELEMENT_ARRAY_BUFFER: u32 = 0x8893;
+/// GL_ELEMENT_ARRAY_BUFFER_BINDING 查询枚举
+const GL_ELEMENT_ARRAY_BUFFER_BINDING: u32 = 0x8895;
+
 /// VAO 相关资源 desktop ID 查找失败首次告警标志
 /// glBindVertexArray：VAO ID 未在 IdMap 中找到
 static VAO_ID_MISS_WARNED: AtomicBool = AtomicBool::new(false);
@@ -10,6 +15,10 @@ static VERTEX_BUFFER_ID_MISS_WARNED: AtomicBool = AtomicBool::new(false);
 /// ARB_vertex_attrib_binding 系列（GLES 3.1 core）函数为 stub 时的首次告警标志
 /// 覆盖：glBindVertexBuffer / glVertexAttribFormat / glVertexAttribIFormat / glVertexAttribBinding
 static VERTEX_ATTRIB_BINDING_STUB_WARNED: AtomicBool = AtomicBool::new(false);
+/// VAO→IBO 绑定跟踪（对齐 MG buffer.cpp 的 get_ibo_by_vao）：切 VAO 后从驱动读回
+/// GL_ELEMENT_ARRAY_BUFFER_BINDING 并回译 desktop ID 失败时的首次告警标志。
+/// 触发场景：跨线程创建的 GLES buffer（未注册进 IdMap）。
+static ELEMENT_ARRAY_BINDING_TRANSLATE_WARNED: AtomicBool = AtomicBool::new(false);
 
 /// 首次告警：glBindVertexArray 的 VAO desktop ID 未在 IdMap 中找到。
 fn warn_vao_id_miss(array: u32) {
@@ -45,6 +54,17 @@ fn warn_vertex_attrib_binding_stub(fname: &str) {
     }
 }
 
+/// 首次告警：glBindVertexArray 后从驱动读回的 GL_ELEMENT_ARRAY_BUFFER_BINDING
+/// 的 GLES ID 无对应 desktop ID（跨线程或资源已释放），写 0 并告警一次。
+fn warn_element_array_binding_translate_miss(gles_id: u32) {
+    if !ELEMENT_ARRAY_BINDING_TRANSLATE_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glBindVertexArray: GLES IBO {} 无对应 desktop ID，ELEMENT_ARRAY_BUFFER 绑定记录写 0 (跨线程或资源已释放，后续将静默降级)",
+            gles_id
+        );
+    }
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGenVertexArrays(n: i32, arrays: *mut u32) {
@@ -65,7 +85,17 @@ pub extern "C" fn glDeleteVertexArrays(n: i32, arrays: *const u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         for i in 0..n as isize {
             let desktop_id = *arrays.offset(i);
-            if let Some(gles_id) = state::with_state(|s| s.vertex_arrays.delete(desktop_id)) {
+            let gles_id = state::with_state(|s| {
+                // 删除当前绑定的 VAO 时，GLES 规范（§2.10）保证绑定回退 VAO 0，
+                // 且 VAO 0 的 ELEMENT_ARRAY_BUFFER 绑定为 0——同步 CPU 端跟踪
+                // （对齐 MG buffer.cpp：删除对象时绑定状态跟随驱动）。
+                if s.bound_vertex_array == desktop_id {
+                    s.bound_vertex_array = 0;
+                    s.bound_buffers_by_target.insert(GL_ELEMENT_ARRAY_BUFFER, 0);
+                }
+                s.vertex_arrays.delete(desktop_id)
+            });
+            if let Some(gles_id) = gles_id {
                 (dispatch.delete_vertex_arrays)(1, &gles_id);
             }
         }
@@ -75,20 +105,52 @@ pub extern "C" fn glDeleteVertexArrays(n: i32, arrays: *const u32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glBindVertexArray(array: u32) {
+    let gles_id = if array == 0 {
+        0
+    } else {
+        state::with_state(|s| {
+            s.vertex_arrays.get_gles(array).unwrap_or_else(|| {
+                warn_vao_id_miss(array);
+                0
+            })
+        })
+    };
+
     backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = if array == 0 {
-            0
-        } else {
+        (dispatch.bind_vertex_array)(gles_id);
+    });
+
+    // VAO→IBO 绑定跟踪（对齐 MG buffer.cpp：glBindVertexArray 里
+    // set_bound_buffer_by_target(GL_ELEMENT_ARRAY_BUFFER, get_ibo_by_vao(array))）。
+    //
+    // GLES 中 GL_ELEMENT_ARRAY_BUFFER 绑定是 per-VAO 状态：切 VAO 时驱动自动恢复
+    // 新 VAO 的 IBO 绑定（VAO 0 的 IBO 绑定恒为 0，GLES 规范 §2.10），而 CPU 端
+    // bound_buffers_by_target 是跨 VAO 的进程级记录，不修正会在 VAO 切换后与驱动
+    // 脱节（持久映射同步 / 绑定查询拿到上一个 VAO 的 IBO）。MG 用纯 CPU 表维护，
+    // 我们以驱动为状态源（bind 后读回 GL_ELEMENT_ARRAY_BUFFER_BINDING）再回译，
+    // 与 IdMap 架构一致，且对驱动内部临时绑定（save/restore 窗口外）天然准确。
+    let ibo = if array == 0 {
+        0
+    } else {
+        let mut gles_ibo: i32 = 0;
+        backend::with_gles_dispatch(|dispatch| unsafe {
+            (dispatch.get_integerv)(GL_ELEMENT_ARRAY_BUFFER_BINDING, &mut gles_ibo);
+        });
+        if gles_ibo != 0 {
             state::with_state(|s| {
-                s.vertex_arrays.get_gles(array).unwrap_or_else(|| {
-                    warn_vao_id_miss(array);
+                s.buffers.get_desktop(gles_ibo as u32).unwrap_or_else(|| {
+                    warn_element_array_binding_translate_miss(gles_ibo as u32);
                     0
                 })
             })
-        };
-
-        (dispatch.bind_vertex_array)(gles_id);
-        state::with_state(|s| s.bound_vertex_array = array);
+        } else {
+            0
+        }
+    };
+    state::with_state(|s| {
+        s.bound_vertex_array = array;
+        s.bound_buffers_by_target
+            .insert(GL_ELEMENT_ARRAY_BUFFER, ibo);
     });
 }
 

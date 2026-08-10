@@ -1,35 +1,152 @@
 use crate::backend;
 use crate::state;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 // glMapBufferRange access bits（桌面 GL 与 GLES 共享的低 16 位语义）
 // GLES 3.1 仅支持 READ/WRITE/INVALIDATE_RANGE/INVALIDATE_BUFFER/FLUSH_EXPLICIT/UNSYNCHRONIZED，
-// 不支持 PERSISTENT(0x0040)/COHERENT(0x0080)（桌面 GL 4.4 / GL_ARB_buffer_storage 引入）。
+// 不支持 PERSISTENT(0x0040)/COHERENT(0x0080)（桌面 GL 4.4 / GL_ARB_buffer_storage 引入；
+// GLES 需 GL_EXT_buffer_storage）。
 const GL_MAP_READ_BIT: u32 = 0x0001;
 const GL_MAP_WRITE_BIT: u32 = 0x0002;
+const GL_MAP_FLUSH_EXPLICIT_BIT: u32 = 0x0010;
 const GL_MAP_PERSISTENT_BIT: u32 = 0x0040;
 const GL_MAP_COHERENT_BIT: u32 = 0x0080;
+/// GL_DYNAMIC_STORAGE_BIT（glBufferStorage flags，GL 4.4 / GL_ARB_buffer_storage）
+const GL_DYNAMIC_STORAGE_BIT: u32 = 0x0100;
 
 /// GL_PARAMETER_BUFFER（GL 4.6 引入，glMultiDraw*IndirectCount 的 count 来源）
 /// GLES 不识别该 target，下传会触发 GL_INVALID_ENUM，仅在 state 中记录绑定。
 const GL_PARAMETER_BUFFER: u32 = 0x80EE;
-/// GL_COPY_READ_BUFFER：用于临时绑定 count buffer 读取数据（合法的通用 target）
+/// GL_COPY_WRITE_BUFFER：MG（buffer.cpp:991-1012 borrowed_target_t）借用该通用
+/// target 在单次调用期间代持 GL_PARAMETER_BUFFER 的绑定（绑定查询枚举同值 0x8F37）
+const GL_COPY_WRITE_BUFFER: u32 = 0x8F37;
+/// GL_COPY_READ_BUFFER：GetBufferSubData 的 COPY 中转（源 buffer 不可 map 时借用）
 const GL_COPY_READ_BUFFER: u32 = 0x8F36;
+/// GL_ELEMENT_ARRAY_BUFFER：IBO 绑定是 VAO state（per-VAO 记录用）
+const GL_ELEMENT_ARRAY_BUFFER: u32 = 0x8893;
 /// P2：atomic counter buffer → SSBO 绑定转发常量（与 drawing.rs 定义保持一致）
 const GL_ATOMIC_COUNTER_BUFFER: u32 = 0x92C0;
 const GL_SHADER_STORAGE_BUFFER: u32 = 0x90F2;
+/// 错误码（set_gl_error 上报用；exports.rs 内以字面量使用，此处集中命名）
+const GL_INVALID_ENUM: u32 = 0x0500;
+const GL_INVALID_VALUE: u32 = 0x0501;
 
-/// 将桌面 GL 的 glMapBufferRange access flags 翻译为 GLES 3.1 支持的位。
+// ===== glTexBuffer 模拟（MG buffer.cpp:793-960）使用的常量 =====
+const GL_TEXTURE_BUFFER: u32 = 0x8C2A;
+const GL_TEXTURE_2D: u32 = 0x0DE1;
+const GL_TEXTURE0: u32 = 0x84C0;
+const GL_PIXEL_UNPACK_BUFFER: u32 = 0x88EC;
+const GL_PIXEL_UNPACK_BUFFER_BINDING: u32 = 0x88EF;
+const GL_BUFFER_SIZE: u32 = 0x8764;
+const GL_ACTIVE_TEXTURE: u32 = 0x84E0;
+const GL_TEXTURE_BINDING_2D: u32 = 0x8069;
+const GL_UNPACK_ALIGNMENT: u32 = 0x0CF5;
+const GL_UNPACK_ROW_LENGTH: u32 = 0x0CF2;
+const GL_UNPACK_SKIP_PIXELS: u32 = 0x0CF4;
+const GL_UNPACK_SKIP_ROWS: u32 = 0x0CF3;
+const GL_NEAREST: u32 = 0x2600;
+const GL_CLAMP_TO_EDGE: u32 = 0x812F;
+const GL_TEXTURE_MIN_FILTER: u32 = 0x2801;
+const GL_TEXTURE_MAG_FILTER: u32 = 0x2800;
+const GL_TEXTURE_WRAP_S: u32 = 0x2802;
+const GL_TEXTURE_WRAP_T: u32 = 0x2803;
+const GL_TEXTURE_BASE_LEVEL: u32 = 0x813C;
+const GL_TEXTURE_MAX_LEVEL: u32 = 0x813D;
+// transfer 对（get_internal_format_transfer 输出）
+const GL_RED: u32 = 0x1903;
+const GL_RED_INTEGER: u32 = 0x8D94;
+const GL_RG: u32 = 0x8227;
+const GL_RG_INTEGER: u32 = 0x8228;
+const GL_RGB: u32 = 0x1907;
+const GL_RGB_INTEGER: u32 = 0x8D98;
+const GL_RGBA: u32 = 0x1908;
+const GL_RGBA_INTEGER: u32 = 0x8D99;
+const GL_UNSIGNED_BYTE: u32 = 0x1401;
+const GL_BYTE: u32 = 0x1400;
+const GL_SHORT: u32 = 0x1402;
+const GL_UNSIGNED_SHORT: u32 = 0x1403;
+const GL_INT: u32 = 0x1404;
+const GL_UNSIGNED_INT: u32 = 0x1405;
+const GL_FLOAT: u32 = 0x1406;
+const GL_HALF_FLOAT: u32 = 0x140B;
+// 内部格式（sized internalformat）
+const GL_R8: u32 = 0x8229;
+const GL_R16: u32 = 0x822A;
+const GL_R8I: u32 = 0x8231;
+const GL_R8UI: u32 = 0x8232;
+const GL_R16I: u32 = 0x8233;
+const GL_R16UI: u32 = 0x8234;
+const GL_R16F: u32 = 0x822D;
+const GL_R32I: u32 = 0x8235;
+const GL_R32UI: u32 = 0x8236;
+const GL_R32F: u32 = 0x822E;
+const GL_RG8: u32 = 0x822B;
+const GL_RG16: u32 = 0x822C;
+const GL_RG8I: u32 = 0x8237;
+const GL_RG8UI: u32 = 0x8238;
+const GL_RG16I: u32 = 0x8239;
+const GL_RG16UI: u32 = 0x823A;
+const GL_RG16F: u32 = 0x822F;
+const GL_RG32I: u32 = 0x823B;
+const GL_RG32UI: u32 = 0x823C;
+const GL_RG32F: u32 = 0x8230;
+const GL_RGB8: u32 = 0x8051;
+const GL_RGB16: u32 = 0x8054;
+const GL_RGB8I: u32 = 0x8D8F;
+const GL_RGB8UI: u32 = 0x8D7D;
+const GL_RGB16I: u32 = 0x8D89;
+const GL_RGB16UI: u32 = 0x8D77;
+const GL_RGB16F: u32 = 0x881B;
+const GL_RGB32I: u32 = 0x8D83;
+const GL_RGB32UI: u32 = 0x8D71;
+const GL_RGB32F: u32 = 0x8815;
+const GL_RGBA8: u32 = 0x8058;
+const GL_RGBA16: u32 = 0x805B;
+const GL_RGBA8I: u32 = 0x8D8E;
+const GL_RGBA8UI: u32 = 0x8D7C;
+const GL_RGBA16I: u32 = 0x8D88;
+const GL_RGBA16UI: u32 = 0x8D76;
+const GL_RGBA16F: u32 = 0x881A;
+const GL_RGBA32I: u32 = 0x8D82;
+const GL_RGBA32UI: u32 = 0x8D70;
+const GL_RGBA32F: u32 = 0x8814;
+const GL_DEPTH_COMPONENT16: u32 = 0x81A5;
+const GL_DEPTH_COMPONENT24: u32 = 0x81A6;
+const GL_DEPTH_COMPONENT32: u32 = 0x81A7;
+const GL_DEPTH_COMPONENT32F: u32 = 0x8CAC;
+const GL_DEPTH24_STENCIL8: u32 = 0x88F0;
+const GL_DEPTH32F_STENCIL8: u32 = 0x8CAD;
+const GL_STENCIL_INDEX8: u32 = 0x8D48;
+const GL_COMPRESSED_RGB_S3TC_DXT1_EXT: u32 = 0x83F0;
+const GL_COMPRESSED_RGBA_S3TC_DXT1_EXT: u32 = 0x83F1;
+const GL_COMPRESSED_RGBA_S3TC_DXT3_EXT: u32 = 0x83F2;
+const GL_COMPRESSED_RGBA_S3TC_DXT5_EXT: u32 = 0x83F3;
+
+/// buffer_coherent_as_flush 配置（MG config/settings.cpp:186 语义）：
+/// ANGLE 后端 → false（ANGLE 自管同步），其余后端（system/llvmpipe）→ true。
+/// 影响三处行为（与 MG buffer.cpp 完全对齐）：
+/// - glMapBufferRange：清除 GL_MAP_FLUSH_EXPLICIT_BIT（映射即自动可见）
+/// - glBufferStorage：PERSISTENT/DYNAMIC 时追加 WRITE|COHERENT|PERSISTENT
+/// - glFlushMappedBufferRange：no-op
+/// 惰性初始化（OnceLock），首次调用时从环境配置推断一次。
+static BUFFER_COHERENT_AS_FLUSH: OnceLock<bool> = OnceLock::new();
+fn buffer_coherent_as_flush() -> bool {
+    *BUFFER_COHERENT_AS_FLUSH.get_or_init(|| {
+        let cfg = crate::config::Config::from_env();
+        cfg.backend != crate::config::Backend::Angle
+    })
+}
+
+/// 将桌面 GL 的 glMapBuffer access 枚举/位值翻译为 GLES 3.1 支持的位。
 ///
-/// GLES 3.1 不支持 PERSISTENT/COHERENT 位，需剥离：
-/// - PERSISTENT（映射期间 buffer 仍可被 GPU 使用）：无法完美模拟，剥离后配合
-///   shadow 路径（持久映射 buffer 走 shadow_ptr）保证数据同步。
-/// - COHERENT（GPU/CPU 访问自动可见）：GLES 无对应语义，直接剥离，保留 GLES
-///   默认的显式 flush 语义（映射后 flush 数据才可见）。
-///   注意：不能转成 UNSYNCHRONIZED——两者语义不同（UNSYNCHRONIZED 是跳过
-///   映射前的同步保护，可能与 in-flight draw 产生竞态），故直接丢弃该位。
+/// 仅服务 glMapBuffer 的兜底分支（MG buffer.cpp:1055-1066 对未知 access 直接返回
+/// nullptr，我们保留更宽容的位剥离：fail-open，避免未知枚举静默失败）：
+/// - PERSISTENT/COHERENT 是 GLES 3.1 不支持位，剥离（GLES 3.1 下透传会失败）
+/// - 剥离后若无任何有效读写位，补 GL_MAP_WRITE_BIT 避免 GLES 返回 NULL
 ///
-/// 剥离后若没有任何有效的读写位，补 GL_MAP_WRITE_BIT 避免 GLES 返回 NULL。
+/// 注意：glMapBufferRange 不再走此翻译——MG 语义为直接透传（驱动若支持
+/// GL_EXT_buffer_storage 则 PERSISTENT/COHERENT 位合法），见 glMapBufferRange。
 fn translate_map_access(access: u32) -> u32 {
     let mut out = access & !GL_MAP_PERSISTENT_BIT;
     out &= !GL_MAP_COHERENT_BIT;
@@ -105,24 +222,220 @@ fn warn_tex_buffer_id_miss(fname: &str, target: u32, desktop_id: u32) {
     }
 }
 
+/// 记录 glBufferData/glBufferStorage 的 size（MG buffer.cpp:1020 set_buffer_data_size
+/// 等价物），供 getter 查询 GL_BUFFER_SIZE 等使用（跨域协调点：getter.rs 域对接）。
+fn record_buffer_size(target: u32, size: isize) {
+    let desktop_id = state::with_state_ref(|s| s.bound_buffers_by_target.get(&target).copied());
+    if let Some(desktop_id) = desktop_id {
+        let recorded = if size > 0 { size as usize } else { 0 };
+        state::with_state(|s| {
+            s.buffer_sizes.insert(desktop_id, recorded);
+        });
+    }
+}
+
+/// 懒创建：确保桌面 buffer 在 GLES 后端存在（MG find_real_buffer + 懒 gen 等价物）。
+///
+/// - `desktop_id == 0` → 返回 0（解绑语义）
+/// - 未登记（宿主从未 glGenBuffers）→ 返回 0（调用方走 warn+绑 0 路径，保持既有语义）
+/// - 已登记未创建（alloc_pending）→ 首次真实使用：glGenBuffers 一次并登记映射
+///   （MG lazy 状态机核心：MC 大量 gen 不用的 buffer 名永不触碰驱动，修复
+///   Adreno 高区块数崩溃）
+/// - 已创建 → 直接返回映射
+fn ensure_gles_buffer(desktop_id: u32) -> u32 {
+    if desktop_id == 0 {
+        return 0;
+    }
+    if !state::with_state_ref(|s| s.buffers.contains(desktop_id)) {
+        return 0;
+    }
+    if let Some(gles_id) = state::with_state_ref(|s| s.buffers.get_gles(desktop_id)) {
+        return gles_id;
+    }
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        let mut gles_id = 0u32;
+        (dispatch.gen_buffers)(1, &mut gles_id);
+        state::with_state(|s| s.buffers.bind_gles(desktop_id, gles_id));
+        log::debug!(
+            "[FluorateGL] lazy buffer create: desktop {} -> GLES {} (首次真实使用)",
+            desktop_id,
+            gles_id
+        );
+        gles_id
+    })
+}
+
+/// glTexBuffer 模拟的首次告警标志（对应 MG BU_WARN_ONCE 语义，避免刷屏）
+/// 拒绝原因：内部格式无 texel 大小表条目
+static TEX_BUFFER_EMULATE_SIZE_WARNED: AtomicBool = AtomicBool::new(false);
+/// 拒绝原因：内部格式无 GLES 可接受的传输对
+static TEX_BUFFER_EMULATE_TRANSFER_WARNED: AtomicBool = AtomicBool::new(false);
+/// 拒绝原因：buffer 太小容不下一个 texel
+static TEX_BUFFER_EMULATE_SMALL_WARNED: AtomicBool = AtomicBool::new(false);
+
+fn warn_tex_buffer_emulate_once(flag: &AtomicBool, msg: &str) {
+    if !flag.swap(true, Ordering::Relaxed) {
+        log::warn!("[FluorateGL] {}", msg);
+    }
+}
+
+/// texture buffer 模拟开关（MG gles/loader.cpp:160-162 set_hardware）：
+/// GLES <= 3.1 → 模拟（GLES 3.1 无 GL_EXT_texture_buffer 或驱动差异大）；
+/// GLES >= 3.2 → 原生 glTexBuffer 路径。
+/// 查询 capabilities（OnceLock 缓存，廉价）。
+fn emulate_texture_buffer() -> bool {
+    !crate::backend::capabilities().version.at_least(3, 2)
+}
+
+/// 内部格式 → GLES 可接受的 (format, type) 传输对（MG buffer.cpp:634-680
+/// get_internal_format_transfer）。ES 校验 internalformat/format/type 三元组，
+/// 硬编码错误对会让 glTexImage2D 报 GL_INVALID_OPERATION 且 level 0 未定义。
+/// 无合法对的格式（normalised 16-bit 需 EXT_texture_norm16、depth 格式非
+/// texture buffer 格式）返回 None，调用方丢弃该调用而不是瞎猜。
+fn get_internal_format_transfer(internalformat: u32) -> Option<(u32, u32)> {
+    Some(match internalformat {
+        GL_R8 => (GL_RED, GL_UNSIGNED_BYTE),
+        GL_R8I => (GL_RED_INTEGER, GL_BYTE),
+        GL_R8UI => (GL_RED_INTEGER, GL_UNSIGNED_BYTE),
+        GL_R16I => (GL_RED_INTEGER, GL_SHORT),
+        GL_R16UI => (GL_RED_INTEGER, GL_UNSIGNED_SHORT),
+        GL_R16F => (GL_RED, GL_HALF_FLOAT),
+        GL_R32I => (GL_RED_INTEGER, GL_INT),
+        GL_R32UI => (GL_RED_INTEGER, GL_UNSIGNED_INT),
+        GL_R32F => (GL_RED, GL_FLOAT),
+
+        GL_RG8 => (GL_RG, GL_UNSIGNED_BYTE),
+        GL_RG8I => (GL_RG_INTEGER, GL_BYTE),
+        GL_RG8UI => (GL_RG_INTEGER, GL_UNSIGNED_BYTE),
+        GL_RG16I => (GL_RG_INTEGER, GL_SHORT),
+        GL_RG16UI => (GL_RG_INTEGER, GL_UNSIGNED_SHORT),
+        GL_RG16F => (GL_RG, GL_HALF_FLOAT),
+        GL_RG32I => (GL_RG_INTEGER, GL_INT),
+        GL_RG32UI => (GL_RG_INTEGER, GL_UNSIGNED_INT),
+        GL_RG32F => (GL_RG, GL_FLOAT),
+
+        GL_RGB8 => (GL_RGB, GL_UNSIGNED_BYTE),
+        GL_RGB8I => (GL_RGB_INTEGER, GL_BYTE),
+        GL_RGB8UI => (GL_RGB_INTEGER, GL_UNSIGNED_BYTE),
+        GL_RGB16I => (GL_RGB_INTEGER, GL_SHORT),
+        GL_RGB16UI => (GL_RGB_INTEGER, GL_UNSIGNED_SHORT),
+        GL_RGB16F => (GL_RGB, GL_HALF_FLOAT),
+        GL_RGB32I => (GL_RGB_INTEGER, GL_INT),
+        GL_RGB32UI => (GL_RGB_INTEGER, GL_UNSIGNED_INT),
+        GL_RGB32F => (GL_RGB, GL_FLOAT),
+
+        GL_RGBA8 => (GL_RGBA, GL_UNSIGNED_BYTE),
+        GL_RGBA8I => (GL_RGBA_INTEGER, GL_BYTE),
+        GL_RGBA8UI => (GL_RGBA_INTEGER, GL_UNSIGNED_BYTE),
+        GL_RGBA16I => (GL_RGBA_INTEGER, GL_SHORT),
+        GL_RGBA16UI => (GL_RGBA_INTEGER, GL_UNSIGNED_SHORT),
+        GL_RGBA16F => (GL_RGBA, GL_HALF_FLOAT),
+        GL_RGBA32I => (GL_RGBA_INTEGER, GL_INT),
+        GL_RGBA32UI => (GL_RGBA_INTEGER, GL_UNSIGNED_INT),
+        GL_RGBA32F => (GL_RGBA, GL_FLOAT),
+        _ => return None,
+    })
+}
+
+/// 内部格式的 texel 大小（字节）（MG buffer.cpp:682-775 get_internal_format_size）。
+/// 与传输表共用同一组常量，两表不会漂移。未知格式返回 0（调用方拒绝）。
+fn get_internal_format_size(internalformat: u32) -> usize {
+    match internalformat {
+        GL_R8 => 1,
+        GL_R8I | GL_R8UI => 1,
+        GL_R16 => 2,
+        GL_R16I | GL_R16UI | GL_R16F => 2,
+        GL_R32I | GL_R32UI | GL_R32F => 4,
+
+        GL_RG8 => 2,
+        GL_RG8I | GL_RG8UI => 2,
+        GL_RG16 => 4,
+        GL_RG16I | GL_RG16UI | GL_RG16F => 4,
+        GL_RG32I | GL_RG32UI | GL_RG32F => 8,
+
+        GL_RGB8 => 3,
+        GL_RGB8I | GL_RGB8UI => 3,
+        GL_RGB16 => 6,
+        GL_RGB16I | GL_RGB16UI | GL_RGB16F => 6,
+        GL_RGB32I | GL_RGB32UI | GL_RGB32F => 12,
+
+        GL_RGBA8 => 4,
+        GL_RGBA8I | GL_RGBA8UI => 4,
+        GL_RGBA16 => 8,
+        GL_RGBA16I | GL_RGBA16UI | GL_RGBA16F => 8,
+        GL_RGBA32I | GL_RGBA32UI | GL_RGBA32F => 16,
+
+        GL_DEPTH_COMPONENT16 => 2,
+        GL_DEPTH_COMPONENT24 => 3,
+        GL_DEPTH_COMPONENT32 => 4,
+        GL_DEPTH_COMPONENT32F => 4,
+        GL_DEPTH24_STENCIL8 => 4,
+        GL_DEPTH32F_STENCIL8 => 5,
+
+        GL_STENCIL_INDEX8 => 1,
+
+        GL_COMPRESSED_RGB_S3TC_DXT1_EXT | GL_COMPRESSED_RGBA_S3TC_DXT1_EXT => 8,
+        GL_COMPRESSED_RGBA_S3TC_DXT3_EXT | GL_COMPRESSED_RGBA_S3TC_DXT5_EXT => 16,
+
+        _ => 0,
+    }
+}
+
+/// MG borrowed_target_t（buffer.cpp:991-1012）等价物。
+///
+/// GLES 没有 GL_PARAMETER_BUFFER 绑定槽：`requested == GL_PARAMETER_BUFFER` 时，
+/// 把参数 buffer 的 GLES id 临时绑到 GL_COPY_WRITE_BUFFER（GLES 定义为无自身语义的
+/// 通用 target，借用不可见），调用 `f(dispatch, GL_COPY_WRITE_BUFFER)` 后恢复原绑定；
+/// 其他 target 直接 `f(dispatch, requested)`。
+///
+/// 保存/恢复用驱动查询（GL_COPY_WRITE_BUFFER_BINDING），与 MG 一致——不依赖本层
+/// 跟踪状态，能反映所有直连 GLES 的路径造成的真实绑定。
+fn with_borrowed_target<R>(
+    requested: u32,
+    f: impl FnOnce(&backend::dispatch::GlesDispatch, u32) -> R,
+) -> R {
+    if requested != GL_PARAMETER_BUFFER {
+        return backend::with_gles_dispatch(|d| f(d, requested));
+    }
+    // GL_PARAMETER_BUFFER 绑定的 desktop buffer → 其 GLES id（ensure 懒创建：
+    // bind 分支已创建，这里幂等覆盖"未 bind 直接 bufferData"的宿主行为；
+    // 未登记 id 返回 0，后续调用自然失败，fail-safe）
+    let desktop_id =
+        state::with_state_ref(|s| s.bound_buffers_by_target.get(&GL_PARAMETER_BUFFER).copied())
+            .unwrap_or(0);
+    let gles_id = if desktop_id == 0 {
+        0
+    } else {
+        ensure_gles_buffer(desktop_id)
+    };
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        let mut saved: i32 = 0;
+        (dispatch.get_integerv)(GL_COPY_WRITE_BUFFER, &mut saved);
+        (dispatch.bind_buffer)(GL_COPY_WRITE_BUFFER, gles_id);
+        let r = f(dispatch, GL_COPY_WRITE_BUFFER);
+        (dispatch.bind_buffer)(GL_COPY_WRITE_BUFFER, saved as u32);
+        r
+    })
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGenBuffers(n: i32, buffers: *mut u32) {
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        for i in 0..n as isize {
-            let mut gles_id = 0u32;
-            (dispatch.gen_buffers)(1, &mut gles_id);
-
-            let desktop_id = state::with_state(|s| s.buffers.alloc(gles_id));
-            log::debug!(
-                "[FluorateGL] glGenBuffers: GLES {} -> desktop {} (tid={})",
-                gles_id,
-                desktop_id,
-                state::thread_id_u64()
-            );
+    // MG 语义（buffer.cpp:470-476 gen_buffer）：只登记 fake id，不创建 GLES 对象。
+    // 首次真实使用（bind/upload/map/delete 路径）经 ensure_gles_buffer 懒创建——
+    // MC 会创建几万个 buffer name 但大多不使用，eager 创建会压垮 Adreno 驱动
+    // （开发者原话：高区块数崩溃）。
+    for i in 0..n as isize {
+        let desktop_id = state::with_state(|s| s.buffers.alloc_pending());
+        log::debug!(
+            "[FluorateGL] glGenBuffers: desktop {} (lazy, 未创建 GLES 对象, tid={})",
+            desktop_id,
+            state::thread_id_u64()
+        );
+        unsafe {
             *buffers.offset(i) = desktop_id;
         }
-    });
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -131,18 +444,20 @@ pub extern "C" fn glDeleteBuffers(n: i32, buffers: *const u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
         for i in 0..n as isize {
             let desktop_id = *buffers.offset(i);
-            // 释放持久映射的 shadow memory（若存在）
-            state::with_state(|s| {
-                if let Some(pm) = s.persistent_buffers.remove(&desktop_id) {
-                    libc::free(pm.shadow_ptr as *mut libc::c_void);
-                    log::debug!(
-                        "[FluorateGL] glDeleteBuffers: freed shadow memory (desktop={}, size={})",
-                        desktop_id,
-                        pm.shadow_size
-                    );
-                }
-            });
-            if let Some(gles_id) = state::with_state(|s| s.buffers.delete(desktop_id)) {
+            // MG（buffer.cpp:487-489）：删除 PARAMETER_BUFFER 绑定的 buffer 时清空
+            // 绑定槽——该槽是 multi_draw 读取 count 的唯一数据源，无驱动侧绑定可
+            // 交叉校验；且删除的 id 可能被复用，stale 槽会静默指向别人的 buffer。
+            if desktop_id != 0 {
+                state::with_state(|s| {
+                    if s.bound_buffers_by_target.get(&GL_PARAMETER_BUFFER) == Some(&desktop_id) {
+                        s.bound_buffers_by_target.remove(&GL_PARAMETER_BUFFER);
+                    }
+                    s.buffer_sizes.remove(&desktop_id);
+                });
+            }
+            // lazy：仅已创建后端对象的 buffer 需要调用 glDeleteBuffers；
+            // 永不使用的 pending buffer 只清记录（MG remove_buffer 语义）
+            if let Some(gles_id) = state::with_state_ref(|s| s.buffers.get_gles(desktop_id)) {
                 log::debug!(
                     "[FluorateGL] glDeleteBuffers: desktop {} -> GLES {} (deleted, tid={})",
                     desktop_id,
@@ -152,10 +467,13 @@ pub extern "C" fn glDeleteBuffers(n: i32, buffers: *const u32) {
                 (dispatch.delete_buffers)(1, &gles_id);
             } else {
                 log::debug!(
-                    "[FluorateGL] glDeleteBuffers: desktop {} NOT FOUND in IdMap, ignored",
+                    "[FluorateGL] glDeleteBuffers: desktop {} 未创建后端对象（lazy），仅清理记录",
                     desktop_id
                 );
             }
+            state::with_state(|s| {
+                s.buffers.delete(desktop_id);
+            });
         }
     });
 }
@@ -164,11 +482,18 @@ pub extern "C" fn glDeleteBuffers(n: i32, buffers: *const u32) {
 #[allow(non_snake_case)]
 pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
     // GL_PARAMETER_BUFFER 是 GL 4.6 引入的 target（glMultiDraw*IndirectCount 的 count 来源），
-    // GLES 不识别该 target，下传会触发 GL_INVALID_ENUM。仅记录 state 用于 CPU 端模拟。
+    // GLES 不识别该 target，下传会触发 GL_INVALID_ENUM。仅记录 state 用于 CPU 端模拟
+    // （MG buffer.cpp:510-521：绑定由本层跟踪，backing 对象必须存在——否则
+    // glBufferData 借用 GL_COPY_WRITE_BUFFER 时没有真实对象可操作）。
     if target == GL_PARAMETER_BUFFER {
         state::with_state(|s| {
             s.bound_buffers_by_target.insert(target, buffer);
         });
+        // MG（buffer.cpp:515-519）：backing 对象立即懒创建（已登记的 buffer）；
+        // 未登记 id 不创建（read_parameter_buffer_u32 时自然失败，fail-safe）
+        if buffer != 0 {
+            ensure_gles_buffer(buffer);
+        }
         log::debug!(
             "[FluorateGL] glBindBuffer(GL_PARAMETER_BUFFER): desktop {} recorded (not forwarded, tid={})",
             buffer,
@@ -178,15 +503,15 @@ pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
     }
 
     backend::with_gles_dispatch(|dispatch| unsafe {
+        // lazy 状态机：已登记（gen 过）的 buffer 在首次 bind 时创建 GLES 对象；
+        // 未登记的 id 保持 warn + 绑 0（既有语义，兼容测试/差分）
         let gles_id = if buffer == 0 {
             0
+        } else if !state::with_state_ref(|s| s.buffers.contains(buffer)) {
+            warn_buffer_id_miss("glBindBuffer", target, buffer);
+            0
         } else {
-            state::with_state(|s| {
-                s.buffers.get_gles(buffer).unwrap_or_else(|| {
-                    warn_buffer_id_miss("glBindBuffer", target, buffer);
-                    0
-                })
-            })
+            ensure_gles_buffer(buffer)
         };
 
         if buffer != 0 && gles_id != 0 {
@@ -201,24 +526,23 @@ pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
 
         (dispatch.bind_buffer)(target, gles_id);
 
-        // 记录 target → desktop buffer ID 映射，供持久映射模拟查询
+        // 记录 target → desktop buffer ID 映射（供绑定查询/参数 buffer 读取定位）
         state::with_state(|s| {
             s.bound_buffers_by_target.insert(target, buffer);
             if target == 0x8892 || target == 0x8893 {
                 s.bound_buffer = buffer;
             }
-            // 持久映射 buffer 记录绑定 target（sync 时按 bound_target 定位上传目标）
-            if let Some(pm) = s.persistent_buffers.get_mut(&buffer) {
-                pm.bound_target = target;
-            } else if buffer == 0 {
-                // 解绑：清空该 target 上持久映射条目的绑定标记
-                for pm in s.persistent_buffers.values_mut() {
-                    if pm.bound_target == target {
-                        pm.bound_target = 0;
-                    }
-                }
-            }
         });
+
+        // MG（buffer.cpp:524-527 update_vao_ibo_binding）：桌面 GL 语义下
+        // ELEMENT_ARRAY_BUFFER 绑定是 VAO state，记录到当前 VAO 名下。
+        // glBindVertexArray 恢复绑定记录的配套改动在 vertex_array.rs（跨域协调点）。
+        if target == GL_ELEMENT_ARRAY_BUFFER {
+            state::with_state(|s| {
+                s.element_array_buffer_per_vao
+                    .insert(s.bound_vertex_array, buffer);
+            });
+        }
     });
 }
 
@@ -240,111 +564,12 @@ pub extern "C" fn glBufferData(
         usage,
         bound_desktop
     );
-    // GL_PARAMETER_BUFFER 用 shadow memory 管理，不下传 GLES
-    if target == GL_PARAMETER_BUFFER {
-        let desktop_id = state::with_state_ref(|s| s.bound_buffers_by_target.get(&target).copied());
-        if let Some(desktop_id) = desktop_id {
-            let alloc_size = if size > 0 { size as usize } else { 0 };
-            state::with_state(|s| {
-                if let Some(old) = s.persistent_buffers.remove(&desktop_id) {
-                    unsafe { libc::free(old.shadow_ptr as *mut libc::c_void) };
-                }
-                if alloc_size > 0 {
-                    let shadow_ptr = unsafe { libc::malloc(alloc_size) as *mut u8 };
-                    if !shadow_ptr.is_null() {
-                        if !data.is_null() {
-                            unsafe {
-                                std::ptr::copy_nonoverlapping(
-                                    data as *const u8,
-                                    shadow_ptr,
-                                    alloc_size,
-                                );
-                            }
-                        }
-                        s.persistent_buffers.insert(
-                            desktop_id,
-                            state::PersistentMapping {
-                                shadow_ptr,
-                                shadow_size: alloc_size,
-                                gles_buffer_id: 0,
-                                dirty_offset: 0,
-                                dirty_length: 0,
-                                // PARAMETER_BUFFER 不下传 GLES，不参与 sync
-                                bound_target: 0,
-                            },
-                        );
-                    }
-                }
-            });
-            log::debug!(
-                "[FluorateGL] glBufferData(GL_PARAMETER_BUFFER): shadow size={}",
-                alloc_size
-            );
-        }
-        return;
-    }
-
-    // 仅持久映射 buffer（已通过 glBufferStorage(PERSISTENT) 创建 shadow）需要重新分配 shadow：
-    // 大小可能变化，先释放旧 shadow 再分配新的。普通 buffer 的 glBufferData 只下传 GLES，
-    // 不创建 shadow——否则 glMapBufferRange 会误走 shadow 路径返回 shadow_ptr，
-    // 而 dirty_length=0（本函数所设）导致 draw 前 sync 空转，宿主写入的数据丢失在 shadow 中，
-    // GLES buffer 只有初始数据，造成红屏/UI 消失。
-    let shadow_realloc = state::with_state_ref(|s| {
-        let desktop_id = s.bound_buffers_by_target.get(&target).copied()?;
-        if s.persistent_buffers.contains_key(&desktop_id) {
-            Some(desktop_id)
-        } else {
-            None
-        }
+    // MG 语义（buffer.cpp:1014-1022）：纯透传（GL_PARAMETER_BUFFER 借用
+    // GL_COPY_WRITE_BUFFER 代持）+ 记录 size（供 getter 查询）
+    with_borrowed_target(target, |dispatch, t| unsafe {
+        (dispatch.buffer_data)(t, size, data, usage);
     });
-    if let Some(desktop_id) = shadow_realloc {
-        let gles_id = state::with_state_ref(|s| s.buffers.get_gles(desktop_id));
-        if let Some(gles_id) = gles_id {
-            let alloc_size = if size > 0 { size as usize } else { 0 };
-            state::with_state(|s| {
-                // 释放旧 shadow（大小可能变化）
-                if let Some(old) = s.persistent_buffers.remove(&desktop_id) {
-                    unsafe { libc::free(old.shadow_ptr as *mut libc::c_void) };
-                }
-                if alloc_size > 0 {
-                    let shadow_ptr = unsafe { libc::malloc(alloc_size) as *mut u8 };
-                    if !shadow_ptr.is_null() {
-                        if !data.is_null() {
-                            unsafe {
-                                std::ptr::copy_nonoverlapping(
-                                    data as *const u8,
-                                    shadow_ptr,
-                                    alloc_size,
-                                );
-                            }
-                        }
-                        s.persistent_buffers.insert(
-                            desktop_id,
-                            state::PersistentMapping {
-                                shadow_ptr,
-                                shadow_size: alloc_size,
-                                gles_buffer_id: gles_id,
-                                dirty_offset: 0,
-                                // glBufferData 已下传 GLES，无需再 sync
-                                dirty_length: 0,
-                                // 当前绑定 target（glBindBuffer 已先于 BufferData 发生）
-                                bound_target: target,
-                            },
-                        );
-                    }
-                }
-            });
-            log::debug!(
-                "[FluorateGL] glBufferData(0x{:04X}): persistent shadow reallocated size={}",
-                target,
-                alloc_size
-            );
-        }
-    }
-
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.buffer_data)(target, size, data, usage);
-    });
+    record_buffer_size(target, size);
 }
 
 #[unsafe(no_mangle)]
@@ -365,50 +590,9 @@ pub extern "C" fn glBufferSubData(
         if data.is_null() { "null" } else { "non-null" },
         bound_desktop
     );
-    // GL_PARAMETER_BUFFER 写入 shadow memory，不下传 GLES（非法 target）
-    if target == GL_PARAMETER_BUFFER {
-        state::with_state(|s| {
-            let desktop_id = match s.bound_buffers_by_target.get(&target).copied() {
-                Some(id) => id,
-                None => return,
-            };
-            if let Some(pm) = s.persistent_buffers.get_mut(&desktop_id) {
-                let off = if offset > 0 { offset as usize } else { 0 };
-                let len = if size > 0 { size as usize } else { 0 };
-                if off + len <= pm.shadow_size && !data.is_null() {
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            data as *const u8,
-                            pm.shadow_ptr.add(off),
-                            len,
-                        );
-                    }
-                }
-            }
-        });
-        return;
-    }
-
-    // 持久映射 buffer：同时更新 shadow memory（保持 shadow 与 GLES buffer 一致），
-    // 并下传 GLES。避免宿主混合使用 map 和 sub_data 写入时数据不一致。
-    state::with_state(|s| {
-        let Some(desktop_id) = s.bound_buffers_by_target.get(&target).copied() else {
-            return;
-        };
-        let Some(pm) = s.persistent_buffers.get_mut(&desktop_id) else {
-            return;
-        };
-        let off = if offset > 0 { offset as usize } else { 0 };
-        let len = if size > 0 { size as usize } else { 0 };
-        if off + len <= pm.shadow_size && !data.is_null() {
-            unsafe {
-                std::ptr::copy_nonoverlapping(data as *const u8, pm.shadow_ptr.add(off), len);
-            }
-        }
-    });
-
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.buffer_sub_data)(target, offset, size, data);
+    // MG 语义（buffer.cpp:1026-1032）：纯透传（GL_PARAMETER_BUFFER 借用代持）
+    with_borrowed_target(target, |dispatch, t| unsafe {
+        (dispatch.buffer_sub_data)(t, offset, size, data);
     });
 }
 
@@ -416,159 +600,43 @@ fn is_stub(dispatch: &backend::dispatch::GlesDispatch, f: *const ()) -> bool {
     f == dispatch.stub as *const ()
 }
 
-/// GL_BUFFER_STORAGE_FLAGS 查询的 bit（桌面 GL 4.4 / GL_ARB_buffer_storage）
-const GL_MAP_PERSISTENT_BIT_STORAGE: u32 = 0x0040;
-
-/// 同步所有持久映射 buffer 的 shadow memory 到 GLES buffer（若存在脏区域）。
-///
-/// 在 draw call 前调用，确保 GLES buffer 包含 shadow memory 的最新数据。
-/// **全量遍历** `persistent_buffers` 中 `dirty_length > 0` 的条目，按各自记录的
-/// `bound_target` 用 glBufferSubData 上传——GL_UNIFORM_BUFFER / TRANSFORM_FEEDBACK_BUFFER
-/// / SHADER_STORAGE_BUFFER 等所有走 shadow 路径的 target 都被覆盖，不再依赖调用方
-/// 传入的 target（修复：UBO shadow 脏区永不消费导致矩阵恒 0 的黑屏根因）。
-///
-/// `target` 参数保留以兼容既有 28 处调用点（GL_ARRAY_BUFFER / GL_ELEMENT_ARRAY_BUFFER /
-/// GL_DRAW_INDIRECT_BUFFER），但同步范围以全量遍历为准；该参数仅用于命中时的日志过滤。
-///
-/// 借用约束：先在 with_state 中收集待同步列表（同时消费清零 dirty），再在
-/// with_gles_dispatch 中执行 glBufferSubData，避免 RefCell 借用冲突。
-///
-/// 同步目标定位：shadow 条目记录 `bound_target`（glBindBuffer / glBindBufferBase /
-/// glBindBufferRange 更新）。若该 target 当前绑定的 GLES buffer 与 shadow 的
-/// gles_buffer_id 不一致（宿主 flush 后改绑的异常路径），临时改绑原 target 上传后
-/// 恢复原绑定（GLES 的通用绑定点与 BindBufferBase 的索引绑定相互独立，改绑不影响
-/// 索引绑定的实际使用）。
-/// GL_PARAMETER_BUFFER 无对应 GLES buffer（gles_buffer_id=0），跳过同步。
-pub(crate) fn sync_persistent_buffer_if_needed(target: u32) {
-    // 收集所有脏区域（消费并清零 dirty，避免重复上传）
-    // 元组：(desktop_id, gles_id, offset, length, shadow_ptr, bound_target)
-    let pending: Vec<(u32, u32, usize, usize, *mut u8, u32)> = state::with_state(|s| {
-        s.persistent_buffers
-            .iter_mut()
-            .filter(|(_, pm)| pm.dirty_length > 0 && pm.gles_buffer_id != 0 && pm.bound_target != 0)
-            .map(|(desktop_id, pm)| {
-                let (off, len) = (pm.dirty_offset, pm.dirty_length);
-                pm.dirty_offset = 0;
-                pm.dirty_length = 0;
-                (
-                    *desktop_id,
-                    pm.gles_buffer_id,
-                    off,
-                    len,
-                    pm.shadow_ptr,
-                    pm.bound_target,
-                )
-            })
-            .collect()
-    });
-    if pending.is_empty() {
-        return;
-    }
-
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        for (desktop_id, gles_id, off, len, shadow_ptr, bound_target) in &pending {
-            // 校验/恢复：该 target 当前绑定的 GLES buffer 是否就是 shadow 的 GLES buffer
-            let current_gles = state::with_state_ref(|s| {
-                s.bound_buffers_by_target
-                    .get(bound_target)
-                    .copied()
-                    .and_then(|d| s.buffers.get_gles(d))
-                    .unwrap_or(0)
-            });
-            let needs_restore = current_gles != *gles_id;
-            if needs_restore {
-                (dispatch.bind_buffer)(*bound_target, *gles_id);
-            }
-            let ptr = shadow_ptr.add(*off) as *const std::ffi::c_void;
-            (dispatch.buffer_sub_data)(*bound_target, *off as isize, *len as isize, ptr);
-            if needs_restore {
-                (dispatch.bind_buffer)(*bound_target, current_gles);
-            }
-            log::debug!(
-                "[FluorateGL] sync_persistent_buffer: target=0x{:04X} desktop={} offset={} len={} (target_arg=0x{:04X})",
-                bound_target,
-                desktop_id,
-                off,
-                len,
-                target
-            );
-        }
-    });
-}
-
 /// 从 GL_PARAMETER_BUFFER 读取实际 draw count（u32），用于模拟 glMultiDraw*IndirectCount。
 ///
-/// 原生 GLES 不支持从 GPU buffer 读 count，需在 CPU 侧读出后循环调用对应的
-/// 单次 Indirect。两级读取策略：
-///
-/// 1. **shadow memory**（Sodium 典型场景，count buffer 是持久映射的）：
-///    直接从 `shadow_ptr + offset` 读 4 字节，零 GLES 调用、零同步开销。
-///    shadow memory 是宿主写入的唯一目的地，是 CPU 可见的最新数据源。
-/// 2. **glMapBufferRange 兜底**（非持久映射的 count buffer）：
-///    借 GL_COPY_READ_BUFFER 临时绑定 count buffer → `glMapBufferRange(READ_BIT)`
-///    读 4 字节 → `glUnmapBuffer` → 恢复原绑定。
+/// MG 语义（buffer.cpp:991-1012 borrowed_target_t）：GL_PARAMETER_BUFFER 无 GLES
+/// 绑定槽，借用 GL_COPY_WRITE_BUFFER 临时绑定参数 buffer → `glMapBufferRange(READ_BIT)`
+/// 读 4 字节 → `glUnmapBuffer` → 恢复原绑定。
 ///
 /// 返回 None 表示 count buffer 未绑定 / 读取失败，调用方应跳过本次 draw。
 pub(crate) fn read_parameter_buffer_u32(offset: isize) -> Option<u32> {
     if offset < 0 {
         return None;
     }
-
-    // 路径 1: shadow memory（持久映射 buffer）
-    let shadow_read = state::with_state_ref(|s| {
-        let desktop_id = s
-            .bound_buffers_by_target
-            .get(&GL_PARAMETER_BUFFER)
-            .copied()?;
-        let pm = s.persistent_buffers.get(&desktop_id)?;
-        let off = offset as usize;
-        if off.checked_add(4)? > pm.shadow_size {
-            return None;
-        }
-        // SAFETY: shadow_ptr 由 malloc 分配，已校验 offset+4 在 shadow_size 范围内
-        let val = unsafe { std::ptr::read_unaligned(pm.shadow_ptr.add(off) as *const u32) };
-        Some(val)
-    });
-    if let Some(v) = shadow_read {
-        log::debug!(
-            "[FluorateGL] read_parameter_buffer_u32: shadow read offset={} count={}",
-            offset,
-            v
-        );
-        return Some(v);
-    }
-
-    // 路径 2: glMapBufferRange 兜底
-    // GL_PARAMETER_BUFFER 是非法 target，需借 GL_COPY_READ_BUFFER 临时绑定
     let desktop_id =
         state::with_state_ref(|s| s.bound_buffers_by_target.get(&GL_PARAMETER_BUFFER).copied())?;
+    if desktop_id == 0 {
+        return None;
+    }
     let gles_id = state::with_state_ref(|s| s.buffers.get_gles(desktop_id))?;
 
-    // 保存 GL_COPY_READ_BUFFER 原绑定以便恢复（避免污染宿主状态）
-    let prev_gles = state::with_state_ref(|s| {
-        s.bound_buffers_by_target
-            .get(&GL_COPY_READ_BUFFER)
-            .copied()
-            .and_then(|d| s.buffers.get_gles(d))
-    })
-    .unwrap_or(0);
-
     backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.bind_buffer)(GL_COPY_READ_BUFFER, gles_id);
-        let ptr = (dispatch.map_buffer_range)(GL_COPY_READ_BUFFER, offset, 4, GL_MAP_READ_BIT);
+        // 借 GL_COPY_WRITE_BUFFER：保存驱动当前绑定 → 绑参数 buffer → 读 → 恢复
+        let mut saved: i32 = 0;
+        (dispatch.get_integerv)(GL_COPY_WRITE_BUFFER, &mut saved);
+        (dispatch.bind_buffer)(GL_COPY_WRITE_BUFFER, gles_id);
+        let ptr = (dispatch.map_buffer_range)(GL_COPY_WRITE_BUFFER, offset, 4, GL_MAP_READ_BIT);
         if ptr.is_null() {
             log::warn!(
                 "[FluorateGL] read_parameter_buffer_u32: map_range failed (offset={})",
                 offset
             );
-            (dispatch.bind_buffer)(GL_COPY_READ_BUFFER, prev_gles);
+            (dispatch.bind_buffer)(GL_COPY_WRITE_BUFFER, saved as u32);
             return None;
         }
         let val = std::ptr::read_unaligned(ptr as *const u32);
-        (dispatch.unmap_buffer)(GL_COPY_READ_BUFFER);
-        (dispatch.bind_buffer)(GL_COPY_READ_BUFFER, prev_gles);
+        (dispatch.unmap_buffer)(GL_COPY_WRITE_BUFFER);
+        (dispatch.bind_buffer)(GL_COPY_WRITE_BUFFER, saved as u32);
         log::debug!(
-            "[FluorateGL] read_parameter_buffer_u32: map_range read offset={} count={}",
+            "[FluorateGL] read_parameter_buffer_u32: COPY_WRITE borrowed read offset={} count={}",
             offset,
             val
         );
@@ -594,110 +662,37 @@ pub extern "C" fn glBufferStorage(
         flags,
         bound_desktop
     );
-    // GL_PARAMETER_BUFFER 是非法 GLES target，必须用 shadow memory 模拟
-    let is_parameter_buffer = target == GL_PARAMETER_BUFFER;
-    // 带 PERSISTENT 位 或 GL_PARAMETER_BUFFER 时，在 CPU 端分配 shadow memory 模拟持久映射
-    let need_shadow =
-        (flags & GL_MAP_PERSISTENT_BIT_STORAGE != 0 || is_parameter_buffer) && size > 0;
 
-    if need_shadow {
-        // 查 target 绑定的 desktop buffer ID 和 GLES buffer ID
-        let desktop_id = state::with_state_ref(|s| s.bound_buffers_by_target.get(&target).copied());
-        let gles_id = state::with_state_ref(|s| desktop_id.and_then(|id| s.buffers.get_gles(id)));
-
-        if let (Some(desktop_id), Some(gles_id)) = (desktop_id, gles_id) {
-            let alloc_size = size as usize;
-            // 释放已有 shadow（重新分配场景）
-            state::with_state(|s| {
-                if let Some(old) = s.persistent_buffers.remove(&desktop_id) {
-                    unsafe { libc::free(old.shadow_ptr as *mut libc::c_void) };
-                }
-            });
-            let shadow_ptr = unsafe { libc::malloc(alloc_size) as *mut u8 };
-            if !shadow_ptr.is_null() {
-                // 初始数据拷贝
-                if !data.is_null() {
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(data as *const u8, shadow_ptr, alloc_size);
-                    }
-                }
-                state::with_state(|s| {
-                    s.persistent_buffers.insert(
-                        desktop_id,
-                        state::PersistentMapping {
-                            shadow_ptr,
-                            shadow_size: alloc_size,
-                            gles_buffer_id: gles_id,
-                            dirty_offset: 0,
-                            // GL_PARAMETER_BUFFER 不需要同步到 GLES（无 GLES buffer），
-                            // 持久映射的普通 buffer 初始全量同步
-                            dirty_length: if is_parameter_buffer { 0 } else { alloc_size },
-                            // PARAMETER_BUFFER 是非法 GLES target，不参与 sync
-                            bound_target: if is_parameter_buffer { 0 } else { target },
-                        },
-                    );
-                });
-                log::debug!(
-                    "[FluorateGL] glBufferStorage: shadow memory allocated (target=0x{:04X} desktop={} gles={} size={} persistent={})",
-                    target,
-                    desktop_id,
-                    gles_id,
-                    alloc_size,
-                    !is_parameter_buffer
-                );
-            }
-        }
-    }
-
-    // GL_PARAMETER_BUFFER 不下传 GLES（非法 target，数据由 shadow 管理）
-    if is_parameter_buffer {
-        return;
-    }
-
-    // flags=0 的裸 storage 降级为 glBufferData（北极星桌面一致性）：
-    // flags=0 的 immutable storage 无任何特性位（不可映射/持久），语义等价普通
-    // buffer——glBufferData 是 GLES 标准路径，所有驱动（含 Adreno）保证数据上传。
-    // 绕过真机 Adreno 对 EXT_buffer_storage flags=0 + data 预填的驱动差异
-    // （预填数据未生效 → UI 矩阵塌缩，见 commit 85c6e1e 背景）。
-    // flags 含 PERSISTENT(0x40) 的走上方 shadow 路径不受影响（初始 dirty 全量
-    // 经 draw 前 sync 用 glBufferSubData 上传，不依赖驱动的 storage data 处理）。
-    if flags == 0 {
-        backend::with_gles_dispatch(|dispatch| unsafe {
-            (dispatch.buffer_data)(target, size, data, 0x88E8 /*GL_DYNAMIC_DRAW*/);
-        });
-        return;
-    }
-
+    let mut gles_flags = flags;
     backend::with_gles_dispatch(|dispatch| unsafe {
         if is_stub(dispatch, dispatch.buffer_storage as *const ()) {
-            // 驱动不支持 GL_EXT_buffer_storage，降级为 glBufferData（GL_DYNAMIC_DRAW）
-            (dispatch.buffer_data)(target, size, data, 0x88E8);
-        } else {
-            // 原生路径：驱动支持 GL_EXT_buffer_storage，原样传 flags
-            (dispatch.buffer_storage)(target, size, data, flags);
+            // MG（buffer.cpp:1111）：驱动不支持 GL_EXT_buffer_storage → no-op，
+            // 不建存储不报错（移除旧版 flags=0 降级 buffer_data 与 malloc shadow 路径）。
+            log::debug!(
+                "[FluorateGL] glBufferStorage: GL_EXT_buffer_storage unavailable, no-op (size={})",
+                size
+            );
+            return;
         }
+        // MG（buffer.cpp:1112-1114）：coherent-as-flush 且带 PERSISTENT 或
+        // DYNAMIC_STORAGE 位时追加 WRITE|COHERENT|PERSISTENT（驱动可持久映射的前提）
+        if buffer_coherent_as_flush()
+            && (gles_flags & GL_MAP_PERSISTENT_BIT != 0 || gles_flags & GL_DYNAMIC_STORAGE_BIT != 0)
+        {
+            gles_flags |= GL_MAP_WRITE_BIT | GL_MAP_COHERENT_BIT | GL_MAP_PERSISTENT_BIT;
+        }
+        with_borrowed_target(target, |d, t| {
+            (d.buffer_storage)(t, size, data, gles_flags);
+        });
     });
+    // MG（buffer.cpp:1118）：无论 EXT 是否可用都记录 size
+    record_buffer_size(target, size);
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glMapBuffer(target: u32, access: u32) -> *mut std::ffi::c_void {
-    // 持久映射 buffer（含 GL_PARAMETER_BUFFER）走 shadow 路径，委托给 glMapBufferRange
-    let is_persistent = state::with_state_ref(|s| {
-        let desktop_id = s.bound_buffers_by_target.get(&target).copied()?;
-        s.persistent_buffers
-            .get(&desktop_id)
-            .map(|pm| pm.shadow_size as isize)
-    });
-    if let Some(size) = is_persistent {
-        if size <= 0 {
-            return std::ptr::null_mut();
-        }
-        // 复用 glMapBufferRange 的 shadow 路径逻辑
-        return glMapBufferRange(target, 0, size, access);
-    }
-
-    backend::with_gles_dispatch(|dispatch| unsafe {
+    backend::with_gles_dispatch(|dispatch| {
         // GLES 不提供 glMapBuffer（仅 glMapBufferRange），用 glMapBufferRange 模拟。
         // 若 map_buffer_range 也是 stub（驱动不支持），返回 null 避免后续 UB。
         if is_stub(dispatch, dispatch.map_buffer_range as *const ()) {
@@ -706,7 +701,8 @@ pub extern "C" fn glMapBuffer(target: u32, access: u32) -> *mut std::ffi::c_void
         }
 
         let mut size = 0i32;
-        (dispatch.get_buffer_parameter_iv)(target, 0x8764, &mut size); // GL_BUFFER_SIZE
+        // 包装函数（内部 borrowed_target_t 借用），GL_PARAMETER_BUFFER 安全
+        glGetBufferParameteriv(target, 0x8764, &mut size); // GL_BUFFER_SIZE
 
         // size 为负或零时无意义，直接返回 null
         if size <= 0 {
@@ -725,10 +721,9 @@ pub extern "C" fn glMapBuffer(target: u32, access: u32) -> *mut std::ffi::c_void
             _ => translate_map_access(access),
         };
 
-        (dispatch.map_buffer_range)(target, 0, size as isize, range_access)
+        glMapBufferRange(target, 0, size as isize, range_access)
     })
 }
-
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glMapBufferRange(
@@ -737,32 +732,7 @@ pub extern "C" fn glMapBufferRange(
     length: isize,
     access: u32,
 ) -> *mut std::ffi::c_void {
-    // 持久映射 buffer（含 GL_PARAMETER_BUFFER）返回 shadow_ptr + offset，不下传 GLES。
-    // shadow_ptr 是宿主写入的唯一目的地，draw 前 sync_persistent_buffer_if_needed
-    // 把脏区域同步到 GLES buffer。这样 GLES buffer 不会长时间处于 mapped 状态，
-    // 避免 Adreno 驱动对"mapped 状态下 draw"报 GL_INVALID_OPERATION。
-    let shadow_ptr = state::with_state_ref(|s| {
-        let desktop_id = s.bound_buffers_by_target.get(&target).copied()?;
-        let pm = s.persistent_buffers.get(&desktop_id)?;
-        let off = if offset > 0 { offset as usize } else { 0 };
-        let len = if length > 0 { length as usize } else { 0 };
-        if off + len > pm.shadow_size {
-            return None;
-        }
-        // SAFETY: shadow_ptr 由 malloc 分配，已校验 off+len 在 shadow_size 范围内
-        Some(unsafe { pm.shadow_ptr.add(off) as *mut std::ffi::c_void })
-    });
-    if let Some(ptr) = shadow_ptr {
-        log::debug!(
-            "[FluorateGL] glMapBufferRange(0x{:04X}): shadow path offset={} length={}",
-            target,
-            offset,
-            length
-        );
-        return ptr;
-    }
-
-    // 诊断：非 shadow path 的映射，确认 Sodium 是否对普通 buffer 调用了 map
+    // 诊断：记录映射调用（shadow 路径已摘除，MG 语义为直接透传）
     let bound_desktop = state::with_state_ref(|s| s.bound_buffers_by_target.get(&target).copied());
     log::debug!(
         "[FluorateGL] glMapBufferRange(0x{:04X}): GLES native path offset={} length={} access=0x{:04X} bound_buffer={:?}",
@@ -772,76 +742,42 @@ pub extern "C" fn glMapBufferRange(
         access,
         bound_desktop
     );
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        // 剥离 GLES 不支持的 PERSISTENT/COHERENT 位，否则 GLES 返回 NULL
-        let gles_access = translate_map_access(access);
-        (dispatch.map_buffer_range)(target, offset, length, gles_access)
+    with_borrowed_target(target, |dispatch, t| unsafe {
+        let mut gles_access = access;
+        // MG（buffer.cpp:1092）：coherent-as-flush 时映射数据自动对 GPU 可见，
+        // 清除 GL_MAP_FLUSH_EXPLICIT_BIT（显式 flush 变 no-op）。
+        // PERSISTENT/COHERENT 位不再剥离——直接透传，依赖驱动对
+        // GL_EXT_buffer_storage 的真实支持（行为变化点，见报告）。
+        if buffer_coherent_as_flush() {
+            gles_access &= !GL_MAP_FLUSH_EXPLICIT_BIT;
+        }
+        (dispatch.map_buffer_range)(t, offset, length, gles_access)
     })
 }
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glUnmapBuffer(target: u32) -> u8 {
-    // 持久映射 buffer（含 GL_PARAMETER_BUFFER）的 shadow memory 无需 unmap。
-    // 持久映射语义是"map 一次永不 unmap"，shadow_ptr 始终有效，直接返回成功。
-    let is_persistent = state::with_state_ref(|s| {
-        let desktop_id = s.bound_buffers_by_target.get(&target).copied()?;
-        // 只要该 target 绑定的 buffer 在 persistent_buffers 表中，即为持久映射
-        s.persistent_buffers.contains_key(&desktop_id).then_some(())
-    });
-    if is_persistent.is_some() {
-        return 1;
-    }
-    // 诊断：非 persistent path 的 unmap，确认普通 buffer 映射生命周期
+    // MG 语义（buffer.cpp:1098-1107）：纯透传（GL_PARAMETER_BUFFER 借用代持），
+    // shadow no-op 分支已摘除
     let bound_desktop = state::with_state_ref(|s| s.bound_buffers_by_target.get(&target).copied());
     log::debug!(
         "[FluorateGL] glUnmapBuffer(0x{:04X}): GLES native path bound_buffer={:?}",
         target,
         bound_desktop
     );
-    backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.unmap_buffer)(target) })
+    with_borrowed_target(target, |dispatch, t| unsafe { (dispatch.unmap_buffer)(t) })
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glFlushMappedBufferRange(target: u32, offset: isize, length: isize) {
-    // 持久映射 buffer（含 GL_PARAMETER_BUFFER）：标记 shadow memory 脏区域，
-    // draw 前 sync_persistent_buffer_if_needed 用 glBufferSubData 同步到 GLES buffer。
-    // GL_PARAMETER_BUFFER 的 gles_buffer_id=0，sync 时 dirty_length 为 0 不会同步。
-    let marked = state::with_state(|s| {
-        let desktop_id = s.bound_buffers_by_target.get(&target).copied()?;
-        let pm = s.persistent_buffers.get_mut(&desktop_id)?;
-        let off = if offset > 0 { offset as usize } else { 0 };
-        let len = if length > 0 { length as usize } else { 0 };
-        if off + len > pm.shadow_size {
-            return None;
-        }
-        // 合并脏区域：若与现有脏区域重叠或相邻则合并，否则取新区域。
-        // Sodium 通常每帧 flush 相同区域，这里简化为"若已有脏区域则扩展为并集"。
-        if pm.dirty_length == 0 {
-            pm.dirty_offset = off;
-            pm.dirty_length = len;
-        } else {
-            let existing_start = pm.dirty_offset;
-            let existing_end = pm.dirty_offset + pm.dirty_length;
-            let new_start = off.min(existing_start);
-            let new_end = (off + len).max(existing_end);
-            pm.dirty_offset = new_start;
-            pm.dirty_length = new_end - new_start;
-        }
-        Some(())
-    });
-    if marked.is_some() {
-        log::debug!(
-            "[FluorateGL] glFlushMappedBufferRange(0x{:04X}): shadow dirty offset={} length={}",
-            target,
-            offset,
-            length
-        );
+    // MG（buffer.cpp:1123-1129）：coherent-as-flush 时映射即自动可见，flush 为 no-op
+    if buffer_coherent_as_flush() {
         return;
     }
-
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.flush_mapped_buffer_range)(target, offset, length);
+    with_borrowed_target(target, |dispatch, t| unsafe {
+        (dispatch.flush_mapped_buffer_range)(t, offset, length);
     });
 }
 
@@ -863,15 +799,14 @@ pub extern "C" fn glCopyBufferSubData(
 #[allow(non_snake_case)]
 pub extern "C" fn glBindBufferBase(target: u32, index: u32, buffer: u32) {
     backend::with_gles_dispatch(|dispatch| unsafe {
+        // lazy 状态机：同 glBindBuffer——已登记 buffer 首次真实使用（bind）时创建
         let gles_id = if buffer == 0 {
             0
+        } else if !state::with_state_ref(|s| s.buffers.contains(buffer)) {
+            warn_buffer_id_miss("glBindBufferBase", target, buffer);
+            0
         } else {
-            state::with_state(|s| {
-                s.buffers.get_gles(buffer).unwrap_or_else(|| {
-                    warn_buffer_id_miss("glBindBufferBase", target, buffer);
-                    0
-                })
-            })
+            ensure_gles_buffer(buffer)
         };
 
         // P2：atomic counter buffer 绑定转发到 SSBO 绑定点（shader 翻译管线已把
@@ -898,19 +833,9 @@ pub extern "C" fn glBindBufferBase(target: u32, index: u32, buffer: u32) {
             state::thread_id_u64()
         );
 
-        // 记录 target → desktop buffer 映射 + 持久映射条目的 bound_target
-        // （UBO 通常经 BindBufferBase 绑定，必须记录否则 sync 无法定位）
+        // 记录 target → desktop buffer 映射（供绑定查询/参数 buffer 读取定位）
         state::with_state(|s| {
             s.bound_buffers_by_target.insert(target, buffer);
-            if let Some(pm) = s.persistent_buffers.get_mut(&buffer) {
-                pm.bound_target = target;
-            } else if buffer == 0 {
-                for pm in s.persistent_buffers.values_mut() {
-                    if pm.bound_target == target {
-                        pm.bound_target = 0;
-                    }
-                }
-            }
         });
     });
 }
@@ -925,15 +850,14 @@ pub extern "C" fn glBindBufferRange(
     size: isize,
 ) {
     backend::with_gles_dispatch(|dispatch| unsafe {
+        // lazy 状态机：同 glBindBuffer——已登记 buffer 首次真实使用（bind）时创建
         let gles_id = if buffer == 0 {
             0
+        } else if !state::with_state_ref(|s| s.buffers.contains(buffer)) {
+            warn_buffer_id_miss("glBindBufferRange", target, buffer);
+            0
         } else {
-            state::with_state(|s| {
-                s.buffers.get_gles(buffer).unwrap_or_else(|| {
-                    warn_buffer_id_miss("glBindBufferRange", target, buffer);
-                    0
-                })
-            })
+            ensure_gles_buffer(buffer)
         };
 
         // P2：同 glBindBufferBase——atomic counter buffer 转发 SSBO 绑定点
@@ -958,18 +882,9 @@ pub extern "C" fn glBindBufferRange(
             state::thread_id_u64()
         );
 
-        // 记录 target → desktop buffer 映射 + 持久映射条目的 bound_target
+        // 记录 target → desktop buffer 映射（供绑定查询/参数 buffer 读取定位）
         state::with_state(|s| {
             s.bound_buffers_by_target.insert(target, buffer);
-            if let Some(pm) = s.persistent_buffers.get_mut(&buffer) {
-                pm.bound_target = target;
-            } else if buffer == 0 {
-                for pm in s.persistent_buffers.values_mut() {
-                    if pm.bound_target == target {
-                        pm.bound_target = 0;
-                    }
-                }
-            }
         });
     });
 }
@@ -998,6 +913,35 @@ pub extern "C" fn glGetBufferSubData(
             if !ptr.is_null() {
                 std::ptr::copy_nonoverlapping(ptr, data, size as usize);
                 (dispatch.unmap_buffer)(target);
+            } else {
+                // 驱动对源 buffer 拒绝 READ map（GL_EXT_buffer_storage flags=0
+                // 的 buffer 无读权限，Mesa 实测）——清掉预期拒绝错误（防止
+                // 残留污染宿主 glGetError 序列），借 GL_COPY_READ_BUFFER 中转：
+                // copyBufferSubData(target → COPY_READ) → map(COPY_READ) 读 → 恢复。
+                let src_gles = state::with_state_ref(|s| {
+                    s.bound_buffers_by_target
+                        .get(&target)
+                        .copied()
+                        .and_then(|d| s.buffers.get_gles(d))
+                })
+                .unwrap_or(0);
+                let _ = (dispatch.get_error)(); // 清 map 拒绝的 INVALID_OPERATION
+                if src_gles != 0 {
+                    let mut saved: i32 = 0;
+                    (dispatch.get_integerv)(GL_COPY_READ_BUFFER, &mut saved);
+                    let mut tmp: u32 = 0;
+                    (dispatch.gen_buffers)(1, &mut tmp);
+                    (dispatch.bind_buffer)(GL_COPY_READ_BUFFER, tmp);
+                    (dispatch.buffer_data)(GL_COPY_READ_BUFFER, size, std::ptr::null(), 0x88E8);
+                    (dispatch.copy_buffer_sub_data)(target, GL_COPY_READ_BUFFER, offset, 0, size);
+                    let ptr2 = (dispatch.map_buffer_range)(GL_COPY_READ_BUFFER, 0, size, 0x0001);
+                    if !ptr2.is_null() {
+                        std::ptr::copy_nonoverlapping(ptr2, data, size as usize);
+                        (dispatch.unmap_buffer)(GL_COPY_READ_BUFFER);
+                    }
+                    (dispatch.delete_buffers)(1, &mut tmp);
+                    (dispatch.bind_buffer)(GL_COPY_READ_BUFFER, saved as u32);
+                }
             }
         } else {
             (dispatch.get_buffer_sub_data)(target, offset, size, data);
@@ -1011,8 +955,9 @@ pub extern "C" fn glGetBufferParameteriv(target: u32, pname: u32, params: *mut i
     if params.is_null() {
         return;
     }
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.get_buffer_parameter_iv)(target, pname, params);
+    // MG 语义（buffer.cpp:1034-1040）：借用代持 GL_PARAMETER_BUFFER
+    with_borrowed_target(target, |dispatch, t| unsafe {
+        (dispatch.get_buffer_parameter_iv)(t, pname, params);
     });
 }
 
@@ -1022,20 +967,8 @@ pub extern "C" fn glGetBufferPointerv(target: u32, pname: u32, params: *mut *mut
     if params.is_null() {
         return;
     }
-    // GL_BUFFER_MAP_POINTER（0x88BD）：持久映射（shadow）buffer 应返回 shadow_ptr。
-    // shadow 路径下 GLES buffer 从未被 map，直通会返回 null，宿主会误判"未映射"。
-    const GL_BUFFER_MAP_POINTER: u32 = 0x88BD;
-    if pname == GL_BUFFER_MAP_POINTER {
-        if let Some(ptr) = state::with_state_ref(|s| {
-            let desktop_id = s.bound_buffers_by_target.get(&target).copied()?;
-            s.persistent_buffers
-                .get(&desktop_id)
-                .map(|pm| pm.shadow_ptr as *mut std::ffi::c_void)
-        }) {
-            unsafe { *params = ptr };
-            return;
-        }
-    }
+    // shadow 机制已摘除：GL_BUFFER_MAP_POINTER 直接透传驱动（GLES buffer 真实
+    // mapped 状态才返回非 null；MG 无此函数的额外模拟）。
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_buffer_pointer_v)(target, pname, params);
     });
@@ -1047,45 +980,223 @@ pub extern "C" fn glIsBuffer(buffer: u32) -> u8 {
     if buffer == 0 {
         return 0;
     }
-
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        let gles_id = state::with_state(|s| s.buffers.get_gles(buffer).unwrap_or(0));
-        (dispatch.is_buffer)(gles_id)
-    })
+    // 桌面 GL 3.3 语义（北极星）：glGenBuffers 生成但尚未 bind/upload 的名称
+    // isBuffer 返回 false（GL 3.3 spec §2.9.1）；lazy 状态机下"已创建后端对象"
+    // 即 bind 过（ensure_gles_buffer 在 bind/upload 路径创建）→ has_gles 判定
+    // 与桌面一致。MG 的"登记即 true"与其 lazy 实现配套，但与桌面语义有偏差，
+    // 差分 b01 裁决：按桌面语义修正。
+    state::with_state(|s| s.buffers.has_gles(buffer)) as u8
 }
 
 // glTexBuffer 将 buffer 绑定到纹理，buffer ID 需要从 desktop 翻译为 GLES。
+// GLES 3.1 无 GL_EXT_texture_buffer：MG 以 2D 纹理 + 行式上传模拟
+// （buffer.cpp:793-960，emulate_texture_buffer 开关）。
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glTexBuffer(target: u32, internalformat: u32, buffer: u32) {
+    // MG（buffer.cpp:797）：非 TEXTURE_BUFFER target 直接丢弃
+    if target != GL_TEXTURE_BUFFER {
+        return;
+    }
+
+    // lazy 状态机：已登记 buffer 首次真实使用（上传）时创建后端对象
+    let gles_id = if buffer == 0 {
+        0
+    } else if !state::with_state_ref(|s| s.buffers.contains(buffer)) {
+        warn_tex_buffer_id_miss("glTexBuffer", target, buffer);
+        0
+    } else {
+        ensure_gles_buffer(buffer)
+    };
+
+    log::debug!(
+        "[FluorateGL] glTexBuffer(target=0x{:04X}, fmt=0x{:04X}) desktop {} -> GLES {} (tid={})",
+        target,
+        internalformat,
+        buffer,
+        gles_id,
+        state::thread_id_u64()
+    );
+
+    // emulate_texture_buffer 开关（MG gles/loader.cpp:160-162）：GLES <= 3.1 模拟；
+    // GLES >= 3.2 走原生 glTexBuffer（驱动无扩展时 stub 检查 + warn，fail-open）
+    if !emulate_texture_buffer() {
+        backend::with_gles_dispatch(|dispatch| unsafe {
+            if is_stub(dispatch, dispatch.tex_buffer as *const ()) {
+                warn_tex_buffer_stub("glTexBuffer");
+                return;
+            }
+            (dispatch.tex_buffer)(target, internalformat, gles_id);
+        });
+        return;
+    }
+
+    // ===== 模拟路径（MG buffer.cpp:811-956）=====
+    // internalformat 未校验：GL 4.6 table 8.16 之外的格式是 GL_INVALID_ENUM。
+    // 先按 texel 大小表拒绝——0 直接让后续 "bufferSize / pixelSize" 除以零，
+    // 在 arm64 上产生 0 x 1 纹理，emulated texelFetch 对 0 取模（UB）。
+    let pixel_size = get_internal_format_size(internalformat);
+    if pixel_size == 0 {
+        warn_tex_buffer_emulate_once(
+            &TEX_BUFFER_EMULATE_SIZE_WARNED,
+            "glTexBuffer: 无 texel 大小表条目，texture buffer 保持不变",
+        );
+        crate::gl::exports::set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
+    // 硬编码一对 transfer 是历史 bug 来源（除 GL_R8I 外全部 GL_INVALID_OPERATION，
+    // level 0 未定义，texelFetch 读零）。按表取 ES 合法 (format, type)。
+    let Some((tb_format, tb_type)) = get_internal_format_transfer(internalformat) else {
+        warn_tex_buffer_emulate_once(
+            &TEX_BUFFER_EMULATE_TRANSFER_WARNED,
+            "glTexBuffer: 无 GLES 传输对，texture buffer 保持不变",
+        );
+        crate::gl::exports::set_gl_error(GL_INVALID_ENUM);
+        return;
+    };
+
     backend::with_gles_dispatch(|dispatch| unsafe {
-        if is_stub(dispatch, dispatch.tex_buffer as *const ()) {
-            warn_tex_buffer_stub("glTexBuffer");
+        // unit 15 只借给模拟路径使用，结束后归还
+        (dispatch.active_texture)(GL_TEXTURE0 + 15);
+
+        let mut bound_texture: i32 = 0;
+        let mut prev_pixel_buffer_binding: i32 = 0;
+        (dispatch.get_integerv)(GL_TEXTURE_BINDING_2D, &mut bound_texture);
+        (dispatch.get_integerv)(
+            GL_PIXEL_UNPACK_BUFFER_BINDING,
+            &mut prev_pixel_buffer_binding,
+        );
+
+        // 恢复活动 unit：MG 用前端跟踪的 gl_state->current_tex_unit；我们无 unit
+        // 跟踪（glActiveTexture 纯透传），用 GL_ACTIVE_TEXTURE 驱动查询（更稳）
+        let mut cur_unit: i32 = 0;
+        (dispatch.get_integerv)(GL_ACTIVE_TEXTURE, &mut cur_unit);
+        let restore_unit = move || {
+            (dispatch.active_texture)(cur_unit as u32);
+        };
+
+        if bound_texture == 0 {
+            // unit 15 上无 2D 纹理——宿主从未把该 buffer texture 绑定为 2D 纹理，
+            // 模拟无从下手（MG 同样直接跳过）
+            log::debug!("[FluorateGL] glTexBuffer emulate: unit 15 无 2D 纹理，跳过");
+            restore_unit();
             return;
         }
 
-        let gles_id = if buffer == 0 {
-            0
+        // 读 buffer 大小（经 PIXEL_UNPACK_BUFFER 借用，与 MG 一致）
+        (dispatch.bind_buffer)(GL_PIXEL_UNPACK_BUFFER, gles_id);
+        let mut buffer_size: i32 = 0;
+        (dispatch.get_buffer_parameter_iv)(
+            GL_PIXEL_UNPACK_BUFFER,
+            GL_BUFFER_SIZE,
+            &mut buffer_size,
+        );
+        (dispatch.bind_buffer)(GL_PIXEL_UNPACK_BUFFER, 0);
+
+        (dispatch.bind_texture)(GL_TEXTURE_2D, bound_texture as u32);
+
+        const MAX_WIDTH: u32 = 8192;
+        let num_elements = (buffer_size as u32) / pixel_size as u32;
+        if num_elements == 0 {
+            // 太小容不下一个 texel：0 x 1 glTexImage2D 会让 emulated texelFetch
+            // 对 0 取模（与 pixel_size==0 同源的崩溃路径）
+            warn_tex_buffer_emulate_once(
+                &TEX_BUFFER_EMULATE_SMALL_WARNED,
+                "glTexBuffer: buffer 容不下一个 texel，texture buffer 保持不变",
+            );
+            crate::gl::exports::set_gl_error(GL_INVALID_VALUE);
+            restore_unit();
+            return;
+        }
+
+        let (width, height) = if num_elements > MAX_WIDTH {
+            (MAX_WIDTH, (num_elements + MAX_WIDTH - 1) / MAX_WIDTH)
         } else {
-            state::with_state(|s| {
-                s.buffers.get_gles(buffer).unwrap_or_else(|| {
-                    warn_tex_buffer_id_miss("glTexBuffer", target, buffer);
-                    0
-                })
-            })
+            (num_elements, 1)
         };
 
-        log::debug!(
-            "[FluorateGL] glTexBuffer(target=0x{:04X}, fmt=0x{:04X}) desktop {} -> GLES {} (tid={})",
-            target,
-            internalformat,
-            buffer,
-            gles_id,
-            state::thread_id_u64()
+        // 保存/清零 unpack 参数（SKIP 不清零会让行式上传偏移错位）
+        let mut prev_alignment: i32 = 0;
+        let mut prev_row_length: i32 = 0;
+        let mut prev_skip_pixels: i32 = 0;
+        let mut prev_skip_rows: i32 = 0;
+        (dispatch.get_integerv)(GL_UNPACK_ALIGNMENT, &mut prev_alignment);
+        (dispatch.get_integerv)(GL_UNPACK_ROW_LENGTH, &mut prev_row_length);
+        (dispatch.get_integerv)(GL_UNPACK_SKIP_PIXELS, &mut prev_skip_pixels);
+        (dispatch.get_integerv)(GL_UNPACK_SKIP_ROWS, &mut prev_skip_rows);
+        (dispatch.pixel_store_i)(GL_UNPACK_SKIP_PIXELS, 0);
+        (dispatch.pixel_store_i)(GL_UNPACK_SKIP_ROWS, 0);
+
+        // allocation-only 分配（PBO 绑定前，MG 用 nullptr 分配）
+        (dispatch.tex_image_2d)(
+            GL_TEXTURE_2D,
+            0,
+            internalformat as i32,
+            width as i32,
+            height as i32,
+            0,
+            tb_format,
+            tb_type,
+            std::ptr::null(),
         );
 
-        (dispatch.tex_buffer)(target, internalformat, gles_id);
+        // 行式上传：绑定 PBO 后 tex_sub_image_2d 的 offset 是 buffer 内字节偏移
+        (dispatch.bind_buffer)(GL_PIXEL_UNPACK_BUFFER, gles_id);
+        for row in 0..height {
+            // 最后一行可能不足整行宽——按整行请求会让驱动越过 PBO 末尾读，
+            // GLES 报 GL_INVALID_OPERATION 且 no-op，尾部数据永不 upload
+            let row_texels = if row + 1 == height {
+                num_elements - row * width
+            } else {
+                width
+            };
+            if row_texels == 0 {
+                break;
+            }
+            let byte_offset = (row * width * pixel_size as u32) as usize as *const std::ffi::c_void;
+            (dispatch.tex_sub_image_2d)(
+                GL_TEXTURE_2D,
+                0,
+                0,
+                row as i32,
+                row_texels as i32,
+                1,
+                tb_format,
+                tb_type,
+                byte_offset,
+            );
+        }
+
+        (dispatch.pixel_store_i)(GL_UNPACK_ALIGNMENT, prev_alignment);
+        (dispatch.pixel_store_i)(GL_UNPACK_ROW_LENGTH, prev_row_length);
+        (dispatch.pixel_store_i)(GL_UNPACK_SKIP_PIXELS, prev_skip_pixels);
+        (dispatch.pixel_store_i)(GL_UNPACK_SKIP_ROWS, prev_skip_rows);
+
+        // 模拟纹理参数（采样器侧按 2D 采样；MIN/MAG/WRAP 语义对齐 MG）
+        (dispatch.tex_parameter_i)(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST as i32);
+        (dispatch.tex_parameter_i)(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST as i32);
+        (dispatch.tex_parameter_i)(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE as i32);
+        (dispatch.tex_parameter_i)(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE as i32);
+        (dispatch.tex_parameter_i)(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+        (dispatch.tex_parameter_i)(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+
+        (dispatch.bind_buffer)(GL_PIXEL_UNPACK_BUFFER, prev_pixel_buffer_binding as u32);
+        restore_unit();
+
+        log::debug!(
+            "[FluorateGL] glTexBuffer emulate: fmt=0x{:04X} {}x{} texels={} ({} bytes)",
+            internalformat,
+            width,
+            height,
+            num_elements,
+            buffer_size
+        );
+
+        // 跨域协调点：MG 此处还更新纹理对象元数据（mgGetTexObjectByTarget →
+        // tex->target/internal_format/width/height/swizzle，texture.cpp:1496 附近
+        // 的 TEXTURE_BUFFER 处理依赖它）。我们 texture.rs 的 TEXTURE_META /
+        // BOUND_TEXTURES 是私有 thread_local——由域 2（cof-5）补充记录。
     });
 }
 
@@ -1104,15 +1215,14 @@ pub extern "C" fn glTexBufferRange(
             return;
         }
 
+        // lazy 状态机：已登记 buffer 首次真实使用（上传）时创建后端对象
         let gles_id = if buffer == 0 {
             0
+        } else if !state::with_state_ref(|s| s.buffers.contains(buffer)) {
+            warn_tex_buffer_id_miss("glTexBufferRange", target, buffer);
+            0
         } else {
-            state::with_state(|s| {
-                s.buffers.get_gles(buffer).unwrap_or_else(|| {
-                    warn_tex_buffer_id_miss("glTexBufferRange", target, buffer);
-                    0
-                })
-            })
+            ensure_gles_buffer(buffer)
         };
 
         log::debug!(
@@ -1124,6 +1234,7 @@ pub extern "C" fn glTexBufferRange(
             state::thread_id_u64()
         );
 
+        // MG（buffer.cpp:962-979）无 glTexBufferRange 模拟分支：直接透传
         (dispatch.tex_buffer_range)(target, internalformat, gles_id, offset, size);
     });
 }

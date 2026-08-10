@@ -123,12 +123,13 @@ define_symbols![
     "glDrawTransformFeedbackInstanced",
     "glDispatchCompute",
     "glMemoryBarrier",
-    // ==== GL 导出：src/gl/framebuffer.rs（共 24 个）====
+    // ==== GL 导出：src/gl/framebuffer.rs（共 28 个）====
     "glGenFramebuffers",
     "glDeleteFramebuffers",
     "glBindFramebuffer",
     "glFramebufferTexture2D",
     "glFramebufferTextureLayer",
+    "glFramebufferTexture",
     "glFramebufferRenderbuffer",
     "glCheckFramebufferStatus",
     "glGenRenderbuffers",
@@ -148,6 +149,9 @@ define_symbols![
     "glGetFramebufferAttachmentParameteriv",
     "glIsFramebuffer",
     "glIsRenderbuffer",
+    "glDeleteFramebuffersARB",
+    "glFramebufferRenderbufferARB",
+    "glFramebufferTextureLayerARB",
     // ==== GL 导出：src/gl/shader.rs（共 10 个）====
     "glCreateShader",
     "glDeleteShader",
@@ -452,6 +456,8 @@ define_symbols![
     "glGetDoublei_v",
     "glGetFloati_v",
     "glGetIntegeri_v",
+    // D4-3：glBindImageTexture 由 drawing.rs 真实导出（MG 透传），从 stub 段移出
+    "glBindImageTexture",
     // ==== GL stub 导出（生成器输出，勿手改）====
     "glActiveProgramEXT",
     "glActiveShaderProgram",
@@ -460,7 +466,6 @@ define_symbols![
     "glBindBuffersBase",
     "glBindBuffersRange",
     "glBindFragDataLocationEXT",
-    "glBindImageTexture",
     "glBindImageTextures",
     "glBindMultiTextureEXT",
     "glBindProgramPipeline",
@@ -611,10 +616,9 @@ define_symbols![
     "glFramebufferReadBufferEXT",
     "glFramebufferSampleLocationsfvARB",
     "glFramebufferSampleLocationsfvNV",
-    "glFramebufferTexture",
+    // glFramebufferTexture / glFramebufferTextureLayerARB 已真实化（framebuffer.rs 手工段）
     "glFramebufferTextureARB",
     "glFramebufferTextureFaceARB",
-    "glFramebufferTextureLayerARB",
     "glFramebufferTextureMultiviewOVR",
     "glGenPathsNV",
     "glGenPerfMonitorsAMD",
@@ -1587,14 +1591,25 @@ mod tests {
         assert!(!is_exported(b"glNonexistent\0"));
     }
 
-    /// 表与代码 no_mangle 数量一致性：EGL 34 + GL 1195 = 1229
-    /// （阶段 1 core 74 + 生成器 stub/别名 1009，固定管线 715 待办）
+    /// 域 5 补齐：glFramebufferTexture 真实化 + ARB alias 补齐后，新导出符号
+    /// 必须登记在 SYMBOLS 表中（反向一致性单测兜底）。
+    #[test]
+    fn framebuffer_realized_symbols_registered() {
+        assert!(is_exported(b"glFramebufferTexture\0"));
+        assert!(is_exported(b"glDeleteFramebuffersARB\0"));
+        assert!(is_exported(b"glFramebufferRenderbufferARB\0"));
+        assert!(is_exported(b"glFramebufferTextureLayerARB\0"));
+    }
+
+    /// 表与代码 no_mangle 数量一致性：EGL 34 + GL 1398 = 1432
+    /// （阶段 1 core 74 + 生成器 stub/别名 1007，固定管线 715 待办；
+    ///  域 5 补齐净增 2：glDeleteFramebuffersARB / glFramebufferRenderbufferARB）
     #[test]
     fn symbol_count_sanity() {
         let egl = SYMBOLS.iter().filter(|s| s.starts_with(b"egl")).count();
         let gl = SYMBOLS.len() - egl;
         assert_eq!(egl, 34, "EGL 导出数量不符（请核对 src/egl/exports.rs）");
-        assert_eq!(gl, 1396, "GL 导出数量不符（请核对 src/gl/*.rs）");
-        assert_eq!(SYMBOLS.len(), 1430);
+        assert_eq!(gl, 1398, "GL 导出数量不符（请核对 src/gl/*.rs）");
+        assert_eq!(SYMBOLS.len(), 1432);
     }
 }

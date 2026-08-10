@@ -32,7 +32,8 @@ stub_fn!(glAreTexturesResident, u8, (n: i32, textures: *const u32, residences: *
 stub_fn!(glBindBuffersBase, (), (target: u32, first: u32, count: i32, buffers: *const u32));
 stub_fn!(glBindBuffersRange, (), (target: u32, first: u32, count: i32, buffers: *const u32, offsets: *const isize, sizes: *const isize));
 stub_fn!(glBindFragDataLocationEXT, (), (program: u32, colorNumber: u32, name: *const std::ffi::c_char));
-stub_fn!(glBindImageTexture, (), (unit: u32, texture: u32, level: i32, layered: u8, layer: i32, access: u32, format: u32));
+// glBindImageTexture 已由 drawing.rs 真实导出（D4-3：MG drawing.cpp 透传）——
+// 生成器下次运行会经 nm 自动排除（load_ours），勿手动加回。
 stub_fn!(glBindImageTextures, (), (first: u32, count: i32, textures: *const u32));
 stub_fn!(glBindMultiTextureEXT, (), (texunit: u32, target: u32, texture: u32));
 stub_fn!(glBindProgramPipeline, (), (pipeline: u32));
@@ -183,10 +184,9 @@ stub_fn!(glFramebufferParameteriMESA, (), (target: u32, pname: u32, param: i32))
 stub_fn!(glFramebufferReadBufferEXT, (), (framebuffer: u32, mode: u32));
 stub_fn!(glFramebufferSampleLocationsfvARB, (), (target: u32, start: u32, count: i32, v: *const f32));
 stub_fn!(glFramebufferSampleLocationsfvNV, (), (target: u32, start: u32, count: i32, v: *const f32));
-stub_fn!(glFramebufferTexture, (), (target: u32, attachment: u32, texture: u32, level: i32));
+// glFramebufferTexture / glFramebufferTextureLayerARB 已真实化（framebuffer.rs），生成器基于 nm 自动跳过
 stub_fn!(glFramebufferTextureARB, (), (target: u32, attachment: u32, texture: u32, level: i32));
 stub_fn!(glFramebufferTextureFaceARB, (), (target: u32, attachment: u32, texture: u32, level: i32, face: u32));
-stub_fn!(glFramebufferTextureLayerARB, (), (target: u32, attachment: u32, texture: u32, level: i32, layer: i32));
 stub_fn!(glFramebufferTextureMultiviewOVR, (), (target: u32, attachment: u32, texture: u32, level: i32, baseViewIndex: i32, numViews: i32));
 stub_fn!(glGenPathsNV, u32, (range: i32));
 stub_fn!(glGenPerfMonitorsAMD, (), (n: i32, monitors: *mut u32));
@@ -1036,6 +1036,6 @@ passthrough_alias!(glTexStorage2DEXT, crate::gl::texture::glTexStorage2D, (), (t
 passthrough_alias!(glTexStorage3DEXT, crate::gl::texture::glTexStorage3D, (), (target: u32, levels: i32, internalformat: u32, width: i32, height: i32, depth: i32));
 
 #[allow(dead_code)]
-pub const STUB_COUNT: usize = 1003;
+pub const STUB_COUNT: usize = 1000;
 #[allow(dead_code)]
 pub const ALIAS_COUNT: usize = 6;

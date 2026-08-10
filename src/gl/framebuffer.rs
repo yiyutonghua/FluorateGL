@@ -52,6 +52,26 @@ fn warn_renderbuffer_format_downgrade(original: u32, mapped: u32) {
     }
 }
 
+/// glFramebufferTexture 在 GLES 3.1 驱动（无 glFramebufferTexture 符号）下降级为
+/// glFramebufferTextureLayer(layer=0) 的首次告警标志。
+/// 降级语义：2D 纹理完全等价（层 0 即全部）；3D/array 纹理仅附加 layer 0
+/// （GL 的 glFramebufferTexture 附加整个纹理对象，属接受局限）。
+static FBT_LAYER_DOWNGRADE_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// 首次告警：glFramebufferTexture 已降级为 glFramebufferTextureLayer(layer=0)。
+fn warn_framebuffer_texture_downgrade() {
+    if !FBT_LAYER_DOWNGRADE_WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "[FluorateGL] glFramebufferTexture: GLES 驱动无 glFramebufferTexture（需 GLES 3.2），降级为 glFramebufferTextureLayer(layer=0) —— 2D 纹理等价，3D/array 纹理仅附加 layer 0 (首次降级后静默)"
+        );
+    }
+}
+
+/// dispatch 函数指针是否为 stub（驱动未导出该符号）。
+fn is_stub(dispatch: &backend::dispatch::GlesDispatch, f: *const ()) -> bool {
+    f == dispatch.stub as *const ()
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGenFramebuffers(n: i32, framebuffers: *mut u32) {
@@ -157,6 +177,86 @@ pub extern "C" fn glFramebufferTextureLayer(
 
         (dispatch.framebuffer_texture_layer)(target, attachment, gles_texture, level, layer);
     });
+}
+
+/// glFramebufferTexture — 桌面 GL_FramebufferTexture（GL 3.2，GL_EXT_framebuffer_texture
+/// 家族），GLES 3.2 core 同名原生函数（MG framebuffer.cpp 透传）。
+///
+/// 语义：把整个纹理对象（TextureAll）附加到 `attachment`（纹理层级 0、mip `level`），
+/// 与 glFramebufferTexture2D（仅 2D 单层）和 glFramebufferTextureLayer（仅单层）不同——
+/// 用于 cube/3D/array 纹理整体附加。
+///
+/// 降级链（对齐 MG 行为 + 驱动能力检测）：
+/// 1. dispatch.framebuffer_texture 非 stub（GLES 3.2+ 驱动）→ 纹理 ID 翻译 + 透传；
+/// 2. stub（GLES 3.1 及以下驱动无此符号）→ 降级 glFramebufferTextureLayer(layer=0)：
+///    2D 纹理完全等价（层 0 即全部内容）；3D/array 纹理仅附加 layer 0（接受局限，
+///    首调告警，后续静默）。GLES 3.1 无 glFramebufferTexture 的替代语义，不降级
+///    则调用方（LWJGL capabilities 绑定 null 防护）在 3.1 驱动上拿到空函数崩溃。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glFramebufferTexture(target: u32, attachment: u32, texture: u32, level: i32) {
+    log::debug!(
+        "[FluorateGL] glFramebufferTexture(target=0x{:04X}, attachment=0x{:04X}, texture={}, level={})",
+        target,
+        attachment,
+        texture,
+        level
+    );
+    backend::with_gles_dispatch(|dispatch| unsafe {
+        let gles_texture = if texture == 0 {
+            0
+        } else {
+            state::with_state(|s| {
+                s.textures.get_gles(texture).unwrap_or_else(|| {
+                    warn_fbo_id_miss("glFramebufferTexture", target, texture);
+                    0
+                })
+            })
+        };
+
+        if is_stub(dispatch, dispatch.framebuffer_texture as *const ()) {
+            // GLES 3.1 降级：glFramebufferTextureLayer(target, attachment, tex, level, 0)
+            warn_framebuffer_texture_downgrade();
+            (dispatch.framebuffer_texture_layer)(target, attachment, gles_texture, level, 0);
+        } else {
+            (dispatch.framebuffer_texture)(target, attachment, gles_texture, level);
+        }
+    });
+}
+
+/// glDeleteFramebuffersARB — GL_EXT_framebuffer_object 的 ARB 后缀别名
+/// （MG framebuffer.cpp 用 `alias("glDeleteFramebuffers")` 直接等价）。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glDeleteFramebuffersARB(n: i32, framebuffers: *const u32) {
+    glDeleteFramebuffers(n, framebuffers);
+}
+
+/// glFramebufferRenderbufferARB — GL_EXT_framebuffer_object 的 ARB 后缀别名
+/// （MG framebuffer.cpp 用 `alias("glFramebufferRenderbuffer")` 直接等价）。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glFramebufferRenderbufferARB(
+    target: u32,
+    attachment: u32,
+    renderbuffertarget: u32,
+    renderbuffer: u32,
+) {
+    glFramebufferRenderbuffer(target, attachment, renderbuffertarget, renderbuffer);
+}
+
+/// glFramebufferTextureLayerARB — GL_EXT_framebuffer_texture 的 ARB 后缀别名
+/// （MG framebuffer.cpp 用 `alias("glFramebufferTextureLayer")` 直接等价）。
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub extern "C" fn glFramebufferTextureLayerARB(
+    target: u32,
+    attachment: u32,
+    texture: u32,
+    level: i32,
+    layer: i32,
+) {
+    glFramebufferTextureLayer(target, attachment, texture, level, layer);
 }
 
 #[unsafe(no_mangle)]
@@ -466,4 +566,19 @@ pub extern "C" fn glIsRenderbuffer(renderbuffer: u32) -> u8 {
 
         (dispatch.is_renderbuffer)(gles_id)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::dispatch::GlesDispatch;
+
+    /// glFramebufferTexture 降级链前提：all_stub dispatch 的 framebuffer_texture
+    /// 槽位必须能被 is_stub 识别为 stub（GLES 3.1 驱动缺 glFramebufferTexture 时
+    /// 走 glFramebufferTextureLayer 降级），否则会调用不可用指针。
+    #[test]
+    fn is_stub_detects_all_stub_framebuffer_texture() {
+        let d = GlesDispatch::all_stub();
+        assert!(is_stub(&d, d.framebuffer_texture as *const ()));
+    }
 }

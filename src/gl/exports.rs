@@ -1,6 +1,6 @@
 use crate::backend;
-use crate::gl::buffer::sync_persistent_buffer_if_needed;
 use crate::gl::getter;
+use crate::gl::pixel;
 use crate::state;
 use libc::c_char;
 use std::collections::VecDeque;
@@ -8,11 +8,6 @@ use std::ffi::CString;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-
-/// GL_ARRAY_BUFFER target
-const GL_ARRAY_BUFFER: u32 = 0x8892;
-/// GL_ELEMENT_ARRAY_BUFFER target
-const GL_ELEMENT_ARRAY_BUFFER: u32 = 0x8893;
 
 /// glGetIntegerv 绑定查询时 GLES ID 未在 IdMap 中找到首次告警标志
 static BINDING_ID_MISS_WARNED: AtomicBool = AtomicBool::new(false);
@@ -27,6 +22,10 @@ fn warn_binding_id_miss(pname: u32, gles_id: u32) {
         );
     }
 }
+
+// 注：ANGLE depth-clear workaround 已按用户指令 m00313 决定不做
+// （原基础版：FLUORATEGL_ANGLE_DEPTH_CLEAR_FIX 环境变量开关 + glClearBufferfv
+// 重放，已移除；对照 MG gl.cpp:158-185）。glClear 保持纯透传。
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -43,6 +42,11 @@ pub extern "C" fn glAlphaFunc(_func: u32, _ref: f32) {}
 
 // Capabilities that exist in desktop GL but are unsupported (or always on)
 // in OpenGL ES. Passing them to GLES produces `GL_INVALID_ENUM`.
+//
+// 注意：本域改造后由 enable_state 虚拟 enable 表取代此函数（表按 backing 属性
+// 决定转发/仅记录），保留定义仅为兼容并行域（buffer/drawing 等）可能的引用；
+// 新代码应走 enable_state。
+#[allow(dead_code)]
 pub(crate) fn is_unsupported_gles_cap(cap: u32) -> bool {
     matches!(
         cap,
@@ -69,6 +73,10 @@ pub(crate) fn is_unsupported_gles_cap(cap: u32) -> bool {
 /// 区别仅在于 GLES 固定索引值且无法用 glPrimitiveRestartIndex 更改）。
 /// 同时兜底 0x8F3D（GL_PRIMITIVE_RESTART_INDEX 的枚举值，部分宿主误将其
 /// 当作 cap 传递）。其余 cap 原样返回。
+///
+/// 注意：本域改造后仅 enable_state 的 GL_PRIMITIVE_RESTART 联动路径使用
+/// 该语义（见模块头注释 2），此独立函数保留仅为兼容并行域可能的引用。
+#[allow(dead_code)]
 pub(crate) fn translate_enable_cap(cap: u32) -> u32 {
     match cap {
         0x8F9D | // GL_PRIMITIVE_RESTART
@@ -78,28 +86,12 @@ pub(crate) fn translate_enable_cap(cap: u32) -> u32 {
     }
 }
 
-// GL_DEPTH_CLAMP：GLES 3.2 core 才引入此 cap，3.1 及以下无（直通会 INVALID_ENUM）。
-// 版本感知：3.2+ 直通（MC 第三人称深度钳制依赖此 cap），3.1 过滤并首次告警。
-const GL_DEPTH_CLAMP: u32 = 0x864F;
-static DEPTH_CLAMP_UNSUPPORTED_WARNED: AtomicBool = AtomicBool::new(false);
-
-/// GL_DEPTH_CLAMP 版本感知过滤：3.2+ 返回 false（可直通），否则返回 true 并首次告警。
-fn depth_clamp_unsupported() -> bool {
-    if crate::backend::capabilities().version.at_least(3, 2) {
-        return false;
-    }
-    if !DEPTH_CLAMP_UNSUPPORTED_WARNED.swap(true, Ordering::Relaxed) {
-        log::warn!(
-            "[FluorateGL] glEnable/glDisable(GL_DEPTH_CLAMP) ignored: GLES 3.1 无此 cap（需 3.2+），深度钳制将失效（后续调用静默跳过）"
-        );
-    }
-    true
-}
-
-// GL_DEBUG_OUTPUT：MC(blaze3d) 会启用 KHR_debug 回调抓驱动消息，但 Adreno 驱动会刷出
-// 大量 PERFORMANCE 噪声（glDebugMessageControl 对 HIGH 级 PERFORMANCE 过滤无效）。
-// suppress_debug_noise 已 glDisable(GL_DEBUG_OUTPUT)，这里吞掉 MC 的重新启用，保持彻底关闭。
-const GL_DEBUG_OUTPUT: u32 = 0x9146;
+// GL_DEPTH_CLAMP 与 GL_DEBUG_OUTPUT 的处理已并入 enable_state 虚拟 enable 表
+// （见文件尾部 enable_state 模块）：
+// - GL_DEPTH_CLAMP：BK_EXT，ext_backing_present 保留版本感知（GLES 3.2 core
+//   引入此 cap，3.2+ 直通；3.1 或扩展缺失时仅记录 + 不转发）。
+// - GL_DEBUG_OUTPUT：标为 VIRTUAL（吞掉 MC 的重新启用，保持 Adreno 驱动
+//   debug 噪声抑制设计，见 backend/mod.rs suppress_debug_noise）。
 
 /// glDebugMessageCallback stub — 吞掉 MC/LWJGL 注册的 KHR_debug 回调。
 ///
@@ -160,58 +152,22 @@ pub extern "C" fn glObjectLabelKHR(
     );
 }
 
+/// glEnable — 虚拟 enable 状态表驱动（移植 MobileGlues enable.cpp）。
+///
+/// MG 语义：写 enable 表（scalar / blend_indexed / scissor_indexed /
+/// clip_distance_mask），按 per-cap 属性决定是否转发 GLES 驱动
+/// （BK_NATIVE 恒转发 / BK_EXT 扩展存在才转发 / BK_VIRTUAL 仅记录）。
+/// 与原透传实现的差异见 getter.rs glIsEnabled 的注释（表回答 vs 驱动透传）。
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glEnable(cap: u32) {
-    if cap == GL_DEBUG_OUTPUT {
-        log::debug!(
-            "[FluorateGL] glEnable(GL_DEBUG_OUTPUT) swallowed (driver debug noise suppressed)"
-        );
-        return;
-    }
-    if is_unsupported_gles_cap(cap) {
-        log::debug!(
-            "[FluorateGL] glEnable(0x{:04X}) ignored (unsupported in GLES)",
-            cap
-        );
-        return;
-    }
-    // M7：GL_DEPTH_CLAMP 版本感知——GLES 3.2+ 原生支持直通，3.1 过滤 + 首次告警
-    if cap == GL_DEPTH_CLAMP && depth_clamp_unsupported() {
-        return;
-    }
-    let cap = translate_enable_cap(cap);
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.enable)(cap);
-    });
+    enable_state::gl_enable(cap);
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glDisable(cap: u32) {
-    // GL_DEBUG_OUTPUT：与 glEnable 对称吞掉（llvmpipe GLES 3.2 实测无此 cap，
-    // 直通产生 INVALID_ENUM；真机上也保持 debug 输出恒关闭的噪声抑制设计）
-    if cap == GL_DEBUG_OUTPUT {
-        log::debug!(
-            "[FluorateGL] glDisable(GL_DEBUG_OUTPUT) swallowed (driver debug noise suppressed)"
-        );
-        return;
-    }
-    if is_unsupported_gles_cap(cap) {
-        log::debug!(
-            "[FluorateGL] glDisable(0x{:04X}) ignored (unsupported in GLES)",
-            cap
-        );
-        return;
-    }
-    // M7：GL_DEPTH_CLAMP 版本感知——与 glEnable 对称
-    if cap == GL_DEPTH_CLAMP && depth_clamp_unsupported() {
-        return;
-    }
-    let cap = translate_enable_cap(cap);
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.disable)(cap);
-    });
+    enable_state::gl_disable(cap);
 }
 
 #[unsafe(no_mangle)]
@@ -312,9 +268,19 @@ pub extern "C" fn glActiveTexture(texture: u32) {
     });
 }
 
+/// glPixelStorei — 桌面 6 个 GLES 无对应参数影子存储 + 其余透传驱动。
+///
+/// 移植 MG texture.cpp:2012-2023 + pixel.cpp 语义：GLES 没有
+/// GL_UNPACK_SWAP_BYTES / GL_UNPACK_LSB_FIRST / GL_PACK_SWAP_BYTES /
+/// GL_PACK_LSB_FIRST / GL_PACK_IMAGE_HEIGHT / GL_PACK_SKIP_IMAGES，
+/// 直通会 INVALID_ENUM 且无法读回；这 6 个参数存入影子表（pixel.rs
+/// pixel_store），其余（UNPACK_ALIGNMENT / UNPACK_ROW_LENGTH 等）转发驱动。
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glPixelStorei(pname: u32, param: i32) {
+    if pixel::pixel_store::set(pname, param) {
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.pixel_store_i)(pname, param);
     });
@@ -323,8 +289,9 @@ pub extern "C" fn glPixelStorei(pname: u32, param: i32) {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glDrawArrays(mode: u32, first: i32, count: i32) {
-    // 同步持久映射 buffer 脏区域（若 vertex buffer 是持久映射的）
-    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
+    // 跨域协调（域 1）：buffer.rs 替换为 MG 式实现后已删除
+    // sync_persistent_buffer_if_needed；若域 1 提供持久映射脏区同步的新入口，
+    // 需在此接回（见 TODO 协调记录）。
     let bound_vao = state::with_state(|s| s.bound_vertex_array);
     let bound_buf = state::with_state(|s| s.bound_buffer);
     log::debug!(
@@ -349,9 +316,9 @@ pub extern "C" fn glDrawElements(
     type_: u32,
     indices: *const std::ffi::c_void,
 ) {
-    // 同步持久映射 buffer 脏区域（若 vertex/index buffer 是持久映射的）
-    sync_persistent_buffer_if_needed(GL_ARRAY_BUFFER);
-    sync_persistent_buffer_if_needed(GL_ELEMENT_ARRAY_BUFFER);
+    // 跨域协调（域 1）：buffer.rs 替换为 MG 式实现后已删除
+    // sync_persistent_buffer_if_needed；若域 1 提供持久映射脏区同步的新入口，
+    // 需在此接回（见 TODO 协调记录）。
     let bound_vao = state::with_state(|s| s.bound_vertex_array);
     let bound_buf = state::with_state(|s| s.bound_buffer);
     log::debug!(
@@ -365,6 +332,23 @@ pub extern "C" fn glDrawElements(
         state::thread_id_u64()
     );
     backend::with_gles_dispatch(|dispatch| unsafe {
+        // Primitive restart 分支（D4，对齐 MobileGlues drawing.cpp/restart.cpp）：
+        // 应用侧自定义 restart index（≠ 固定哨兵）时 GLES 的 FIXED_INDEX 语义
+        // 不匹配，需在 draw 前把索引流重写为固定哨兵（MG
+        // mg_restart_needs_rewrite → mg_draw_elements_restart）。
+        // restart_needs_rewrite 用驱动 glIsEnabled(FIXED_INDEX) 判定
+        // （应用 GL_PRIMITIVE_RESTART 经 exports.rs 翻译必然反映在驱动上），
+        // draw_elements_restart_rewrite 返回 true 表示已重写并重画（含
+        // basevertex=0、instancecount=-1 的非 instanced 语义）；false（索引
+        // 非法/不可读/count<=0）则 fallthrough 原样 draw（restart 丢失，
+        // best-effort——MG 同款策略）。glDrawArrays 无索引流，无需 restart。
+        if crate::gl::drawing::restart_needs_rewrite(dispatch, type_)
+            && crate::gl::drawing::draw_elements_restart_rewrite(
+                dispatch, mode, count, type_, indices, 0, -1,
+            )
+        {
+            return;
+        }
         (dispatch.draw_elements)(mode, count, type_, indices);
     });
 }
@@ -409,10 +393,36 @@ pub(crate) fn inject_gl_error(err: u32) {
         .push_back(err);
 }
 
+// 前端单槽 GL 错误（移植 MG mg.cpp/mg.h mg_set_gl_error 语义）。
+//
+// MG 语义：单槽、first-wins（先出现的错误优先，后来的模糊失败不覆盖
+// 能解释宿主错误的第一个错误）、读取时消费并清零。用于本层自身产生的
+// 规范错误（如 glPixelStorei 负 count → GL_INVALID_VALUE，见 pixel.rs）。
+// 与 MG 不同：MG 是 thread_local 且 glGetError 恒吞错返回 GL_NO_ERROR；
+// 我们保留返回真实错误的 fail-open 语义（差分测试依赖），槽用
+// thread_local 与 GL 上下文的线程绑定一致。
+thread_local! {
+    static FRONTEND_GL_ERROR: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// 记录一个前端错误（first-wins：槽非空时不覆盖）。
+pub(crate) fn set_gl_error(err: u32) {
+    if err == 0 {
+        return;
+    }
+    FRONTEND_GL_ERROR.with(|slot| {
+        if slot.get() == 0 {
+            slot.set(err);
+        }
+    });
+}
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetError() -> u32 {
-    // C5：先弹出注入队列（模拟层产生的规范错误优先返回）
+    // 优先级：注入队列（我们差分测试机制）> 前端单槽（MG mg_set_gl_error 语义）
+    // > 驱动错误队列（fail-open 保留真实错误，MG 为恒吞错返回 GL_NO_ERROR）。
+    // 三者都会消费：注入队列 pop、前端槽清零、驱动错误队列由驱动自身消费。
     if let Some(err) = INJECTED_GL_ERRORS
         .lock()
         .unwrap_or_else(|p| p.into_inner())
@@ -420,6 +430,11 @@ pub extern "C" fn glGetError() -> u32 {
     {
         log::debug!("[FluorateGL] glGetError() -> 0x{:04X} (injected)", err);
         return err;
+    }
+    let frontend = FRONTEND_GL_ERROR.with(|slot| slot.replace(0));
+    if frontend != 0 {
+        log::debug!("[FluorateGL] glGetError() -> 0x{:04X} (frontend)", frontend);
+        return frontend;
     }
     let err = backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.get_error)() });
     if err != 0 {
@@ -521,14 +536,19 @@ static BASE_EXTENSIONS: &[&[u8]] = &[
     // GL_EXT_multi_draw_elements_base_vertex）已移入 build_fake_extensions() 的
     // behavior_dependent 映射表动态声明，本表不再静态包含。
     b"GL_ARB_timer_query\0",
-    // 有意不声明 GL_ARB_buffer_storage（桌面一致性原则）：
-    // MC 1.21.11 (via FCL) 检测到该扩展后走 BufferStorage 路径（fwy$a），
-    // GUI per-draw UBO 池（创建 flags=0x0000，usage 无 MAP 位）不建立持久映射
-    // （fxa.e=null）→ 每帧 CommandEncoder.mapBuffer 在 Java 层抛
-    // "Somehow trying to map an unmappable buffer" 异常被吞 → 池零写入 →
-    // UI 矩阵塌缩消失。不声明该扩展 → MC 走传统路径（fwy$b）→ 每帧
-    // mapBuffer 直调 glMapBufferRange（GLES 普通映射合法）→ 数据正常到达。
-    // glBufferStorage GL 函数本身仍由驱动提供（dispatch 与扩展声明无关）。
+    // GL_ARB_buffer_storage：**按 caps 动态声明**（用户指令 m00315「应该声明」），
+    // 由 build_fake_extensions() 的 behavior_dependent 映射表校验
+    // （caps.buffer_storage = 驱动支持 GL_EXT_buffer_storage 才声明），
+    // 不静态包含在本表。
+    // ⚠️ 历史事故风险（commit 85c6e1e）：MC 1.21.11 (via FCL) 检测到该扩展后
+    // 走 BufferStorage 路径（fwy$a），GUI per-draw UBO 池（创建 flags=0x0000，
+    // usage 无 MAP 位）不建立持久映射（fxa.e=null）→ 每帧
+    // CommandEncoder.mapBuffer 在 Java 层抛 "Somehow trying to map an
+    // unmappable buffer" 异常被吞 → 池零写入 → UI 矩阵塌缩消失。
+    // 现状变化：buffer 域已替换为 MG 式实现（驱动支持 EXT_buffer_storage 时
+    // glBufferStorage 透传持久语义，flags=0 不再有旧版特判），声明后 MC 将走
+    // BufferStorage 路径——真机验证（Adreno 支持 EXT_buffer_storage）是最终
+    // 裁决；若 UI 塌缩复现需回滚本声明。
     b"GL_ARB_clear_texture\0",
     b"GL_ARB_draw_buffers_blend\0",
     b"GL_ARB_depth_texture\0",
@@ -606,6 +626,12 @@ fn build_fake_extensions() -> Vec<&'static [u8]> {
         (b"GL_EXT_multi_draw_elements_base_vertex\0", |c| {
             c.multi_draw_elements_base_vertex
         }),
+        // GL_ARB_buffer_storage（用户指令 m00315）：GLES 对应扩展为
+        // GL_EXT_buffer_storage——驱动真实支持才声明（与"声明与真实能力
+        // 对齐"原则一致；历史事故风险见 BASE_EXTENSIONS 注释）。
+        // 注意：glBufferStorage GL 函数本身始终由驱动 dispatch 提供，
+        // 声明与否只影响 MC 是否走 BufferStorage 路径。
+        (b"GL_ARB_buffer_storage\0", |c| c.buffer_storage),
     ];
     // 行为依赖字段全 false 时提示：S2 已保证构建前 caps 就绪（真实查询或 stub 早退），
     // 此处仅剩"GLES 3.1 无行为依赖特性扩展"的真实剔除场景（如 3.1 设备无
@@ -735,7 +761,26 @@ pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
             unsafe { *data = 0x8E65 }; // GL_LAST_VERTEX_PROVOKING
         }
         _ => {
-            getter::get_integerv(pname, data);
+            // MG getter.cpp:157-179 default 分支语义：enable 表优先
+            // （enable 类 cap → 0/1；表持有的 int 状态 → 原值），再
+            // pixel store 影子表，最后透传驱动。保证 glGetIntegerv 与
+            // glIsEnabled / glGetBooleanv 对同一 cap 的回答永远一致。
+            let mut handled = false;
+            let mut ival = 0i32;
+            let mut bval = 0u8;
+            if enable_state::mg_enable_query(pname, &mut bval) {
+                unsafe { *data = bval as i32 };
+                handled = true;
+            } else if enable_state::mg_enable_query_int(pname, &mut ival) {
+                unsafe { *data = ival };
+                handled = true;
+            } else if pixel::pixel_store::query_int(pname, &mut ival) {
+                unsafe { *data = ival };
+                handled = true;
+            }
+            if !handled {
+                getter::get_integerv(pname, data);
+            }
             translate_binding_to_desktop(pname, data);
         }
     }
@@ -744,6 +789,44 @@ pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
         pname,
         unsafe { *data }
     );
+}
+
+/// 非 GL_EXTENSIONS 的 glGetStringi 拆分缓存（移植 MG getter.cpp:520-592
+/// StringCache 语义）：GL_VENDOR / GL_VERSION / GL_SHADING_LANGUAGE_VERSION
+/// 按分隔符拆分为 token 列表，索引越界返回空串而非 null。
+///
+/// MG 分隔符：GL_VENDOR 用 ", "（MG 的 vendor 含逗号）、GL_VERSION 用 " ."
+/// （空格与点）、其余空格。我们版本字符串 "3.3.0 FluorateGL vX.Y.Z" 按 " ."
+/// 拆分与 MG 行为一致。惰性构建一次并缓存；借用问题用扩展生命周期
+/// （OnceLock 内容不被移动，&'static 安全）。
+fn get_stringi_parts(name: u32) -> Option<&'static Vec<CString>> {
+    static CACHES: OnceLock<Mutex<Vec<(u32, Vec<CString>)>>> = OnceLock::new();
+    let mut guard = CACHES
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if let Some((_, parts)) = guard.iter().find(|(n, _)| *n == name) {
+        return Some(unsafe { &*(parts as *const Vec<CString>) });
+    }
+    // 构建缓存条目（持锁期间调用 glGetString 导出函数——其路径不触碰本锁，无死锁）
+    let ptr = glGetString(name);
+    if ptr.is_null() {
+        return None;
+    }
+    let raw = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_bytes().to_vec();
+    let delimiter: &[u8] = match name {
+        0x1F00 /* GL_VENDOR */ => b", ",
+        0x1F02 /* GL_VERSION */ => b" .",
+        _ => b" ",
+    };
+    let parts: Vec<CString> = raw
+        .split(|c| delimiter.contains(c))
+        .filter(|t| !t.is_empty())
+        .map(|t| CString::new(t).unwrap_or_else(|_| CString::new("").unwrap()))
+        .collect();
+    guard.push((name, parts));
+    let (_, parts) = guard.last().unwrap();
+    Some(unsafe { &*(parts as *const Vec<CString>) })
 }
 
 #[unsafe(no_mangle)]
@@ -762,6 +845,16 @@ pub extern "C" fn glGetStringi(name: u32, index: u32) -> *const c_char {
             static EMPTY: &[u8] = b"\0";
             EMPTY.as_ptr() as *const c_char
         }
+    } else if let Some(parts) = get_stringi_parts(name) {
+        // 移植 MG StringCache：GL_VENDOR/GL_VERSION/GL_SHADING_LANGUAGE_VERSION
+        // 也支持按索引查询（宿主可能对非扩展 name 使用 Stringi）
+        if (index as usize) < parts.len() {
+            parts[index as usize].as_ptr() as *const c_char
+        } else {
+            // 越界返回空串而非 null：防宿主不判 null 直接解引用崩溃
+            static EMPTY: &[u8] = b"\0";
+            EMPTY.as_ptr() as *const c_char
+        }
     } else {
         // 越界返回空串而非 null：防宿主不判 null 直接解引用崩溃
         static EMPTY: &[u8] = b"\0";
@@ -774,6 +867,863 @@ pub extern "C" fn glGetStringi(name: u32, index: u32) -> *const c_char {
         result
     );
     result
+}
+
+// ==== 虚拟 enable 状态表（移植自 MobileGlues gl/enable.cpp + enable.h）====
+//
+// MG 语义：桌面 GL 的 enable 能力全部由本表持有。glEnable/glDisable 写表，
+// glIsEnabled / glGetBooleanv / glGetFloatv / glGetDoublev / glGetInteger64v /
+// glGetIntegerv 读表，二者永远一致；是否转发到 GLES 驱动是每个 cap 的独立
+// 属性（backing）：BK_NATIVE 恒转发、BK_EXT 扩展存在才转发、BK_VIRTUAL 仅
+// 记录。GLES 不认识的 cap 不再产生 INVALID_ENUM 透传（旧实现 glIsEnabled
+// 对这类 cap 返回 GL_FALSE 而 glGetBooleanv 不写 data，同一 cap 两种答案）。
+//
+// 我们相对 MG 的有意偏离（差分测试与历史行为保护）：
+// 1. GL_DEBUG_OUTPUT：MG 为 BK_NATIVE，我们标 BK_VIRTUAL——吞掉 MC 的重新
+//    启用，保持 Adreno 驱动 debug 噪声抑制设计（见 backend/mod.rs
+//    suppress_debug_noise 与 glDebugMessageCallback 吞回调）。
+// 2. GL_PRIMITIVE_RESTART：MG 为纯 BK_VIRTUAL（MG 的 drawing 层在 draw 前
+//    自行借用驱动的 GL_PRIMITIVE_RESTART_FIXED_INDEX）；我们没有该借用机制
+//    （drawing.rs 是纯透传，属域 4），故保留 translate_enable_cap 联动语义：
+//    写表的同时转发 GL_PRIMITIVE_RESTART_FIXED_INDEX 到驱动，保证 MC 的
+//    primitive restart 实际生效（不劣化渲染）。
+// 3. GL_DEPTH_CLAMP：MG 只查 GL_EXT_depth_clamp；我们保留版本感知
+//    （GLES 3.2 core 引入此 cap，3.2+ 直通，3.1 + 扩展缺失仅记录）。
+// 4. GL_MAX_DRAW_BUFFERS 等表内 int 查询与 MG 一致（clamp 到表容量）。
+pub(crate) mod enable_state {
+    use crate::backend;
+    use std::cell::RefCell;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    // ---- 枚举常量（desktop GL 枚举值，与 glcorearb.h 一致）----
+    const GL_BLEND: u32 = 0x0BE2;
+    const GL_COLOR_LOGIC_OP: u32 = 0x0BF2;
+    const GL_CULL_FACE: u32 = 0x0B44;
+    const GL_DEBUG_OUTPUT: u32 = 0x92E0;
+    const GL_DEBUG_OUTPUT_SYNCHRONOUS: u32 = 0x8242;
+    const GL_DEPTH_CLAMP: u32 = 0x864F;
+    const GL_DEPTH_TEST: u32 = 0x0B71;
+    const GL_DITHER: u32 = 0x0BD0;
+    const GL_FRAMEBUFFER_SRGB: u32 = 0x8DB9;
+    const GL_LINE_SMOOTH: u32 = 0x0B20;
+    const GL_MULTISAMPLE: u32 = 0x809D;
+    const GL_POLYGON_OFFSET_FILL: u32 = 0x8037;
+    const GL_POLYGON_OFFSET_LINE: u32 = 0x2A02;
+    const GL_POLYGON_OFFSET_POINT: u32 = 0x2A01;
+    const GL_POLYGON_SMOOTH: u32 = 0x0B41;
+    const GL_PRIMITIVE_RESTART: u32 = 0x8F9D;
+    const GL_PRIMITIVE_RESTART_FIXED_INDEX: u32 = 0x8D69;
+    const GL_PROGRAM_POINT_SIZE: u32 = 0x8642;
+    const GL_RASTERIZER_DISCARD: u32 = 0x8C89;
+    const GL_SAMPLE_ALPHA_TO_COVERAGE: u32 = 0x809E;
+    const GL_SAMPLE_ALPHA_TO_ONE: u32 = 0x809F;
+    const GL_SAMPLE_COVERAGE: u32 = 0x80A0;
+    const GL_SAMPLE_MASK: u32 = 0x8E51;
+    const GL_SAMPLE_SHADING: u32 = 0x8C36;
+    const GL_SCISSOR_TEST: u32 = 0x0C11;
+    const GL_STENCIL_TEST: u32 = 0x0B90;
+    const GL_TEXTURE_CUBE_MAP_SEAMLESS: u32 = 0x884F;
+    const GL_CLIP_DISTANCE0: u32 = 0x3000;
+    const GL_PRIMITIVE_RESTART_INDEX: u32 = 0x8F3D;
+    const GL_MAX_CLIP_DISTANCES: u32 = 0x0D32;
+    const GL_MAX_VIEWPORTS: u32 = 0x825B;
+    const GL_MAX_DRAW_BUFFERS: u32 = 0x8824;
+    const GL_SAMPLES: u32 = 0x80A9;
+
+    // ---- cap 索引（数组下标，顺序即 k_caps 顺序，对齐 MG mg_cap_index）----
+    const MGC_BLEND: usize = 0;
+    const MGC_COLOR_LOGIC_OP: usize = 1;
+    const MGC_CULL_FACE: usize = 2;
+    const MGC_DEBUG_OUTPUT: usize = 3;
+    const MGC_DEBUG_OUTPUT_SYNCHRONOUS: usize = 4;
+    const MGC_DEPTH_CLAMP: usize = 5;
+    const MGC_DEPTH_TEST: usize = 6;
+    const MGC_DITHER: usize = 7;
+    const MGC_FRAMEBUFFER_SRGB: usize = 8;
+    const MGC_LINE_SMOOTH: usize = 9;
+    const MGC_MULTISAMPLE: usize = 10;
+    const MGC_POLYGON_OFFSET_FILL: usize = 11;
+    const MGC_POLYGON_OFFSET_LINE: usize = 12;
+    const MGC_POLYGON_OFFSET_POINT: usize = 13;
+    const MGC_POLYGON_SMOOTH: usize = 14;
+    const MGC_PRIMITIVE_RESTART: usize = 15;
+    const MGC_PRIMITIVE_RESTART_FIXED_INDEX: usize = 16;
+    const MGC_PROGRAM_POINT_SIZE: usize = 17;
+    const MGC_RASTERIZER_DISCARD: usize = 18;
+    const MGC_SAMPLE_ALPHA_TO_COVERAGE: usize = 19;
+    const MGC_SAMPLE_ALPHA_TO_ONE: usize = 20;
+    const MGC_SAMPLE_COVERAGE: usize = 21;
+    const MGC_SAMPLE_MASK: usize = 22;
+    const MGC_SAMPLE_SHADING: usize = 23;
+    const MGC_SCISSOR_TEST: usize = 24;
+    const MGC_STENCIL_TEST: usize = 25;
+    const MGC_TEXTURE_CUBE_MAP_SEAMLESS: usize = 26;
+    const MGC_COUNT: usize = 27;
+
+    // MG enable.h：GL 4.6 至少要求 8 个 clip distance；驱动的 draw buffers /
+    // viewports 超过以下容量时 clamp（层从不承诺存不下的量）。
+    const MG_MAX_CLIP_DISTANCES: u32 = 8;
+    const MG_MAX_DRAW_BUFFERS: usize = 16;
+    const MG_MAX_VIEWPORTS: usize = 16;
+
+    /// cap 如何到达驱动（MG enable.cpp backing_t）。
+    #[derive(Clone, Copy, PartialEq)]
+    enum Backing {
+        /// GLES core 认识此枚举：恒转发
+        Native,
+        /// 扩展用同一枚举值提供：扩展存在才转发，否则仅记录
+        Ext,
+        /// GLES 无对应：仅记录，永不转发
+        Virtual,
+    }
+
+    struct CapDesc {
+        cap: u32,
+        index: usize,
+        backing: Backing,
+        initial: bool,
+        name: &'static str,
+    }
+
+    // GL 4.6 初值来自 glEnable 规范；仅 GL_DITHER 默认 GL_TRUE
+    // （GL_MULTISAMPLE 规范也为 TRUE，但由 framebuffer 决定，见
+    // mg_enable_sync_driver 的播种逻辑）。
+    const K_CAPS: &[CapDesc] = &[
+        CapDesc {
+            cap: GL_BLEND,
+            index: MGC_BLEND,
+            backing: Backing::Native,
+            initial: false,
+            name: "GL_BLEND",
+        },
+        CapDesc {
+            cap: GL_COLOR_LOGIC_OP,
+            index: MGC_COLOR_LOGIC_OP,
+            backing: Backing::Virtual,
+            initial: false,
+            name: "GL_COLOR_LOGIC_OP",
+        },
+        CapDesc {
+            cap: GL_CULL_FACE,
+            index: MGC_CULL_FACE,
+            backing: Backing::Native,
+            initial: false,
+            name: "GL_CULL_FACE",
+        },
+        // 偏离 MG（BK_NATIVE → BK_VIRTUAL）：吞掉 MC 的重新启用，保持
+        // Adreno 驱动 debug 噪声抑制设计（见模块头注释 1）
+        CapDesc {
+            cap: GL_DEBUG_OUTPUT,
+            index: MGC_DEBUG_OUTPUT,
+            backing: Backing::Virtual,
+            initial: false,
+            name: "GL_DEBUG_OUTPUT",
+        },
+        CapDesc {
+            cap: GL_DEBUG_OUTPUT_SYNCHRONOUS,
+            index: MGC_DEBUG_OUTPUT_SYNCHRONOUS,
+            backing: Backing::Native,
+            initial: false,
+            name: "GL_DEBUG_OUTPUT_SYNCHRONOUS",
+        },
+        CapDesc {
+            cap: GL_DEPTH_CLAMP,
+            index: MGC_DEPTH_CLAMP,
+            backing: Backing::Ext,
+            initial: false,
+            name: "GL_DEPTH_CLAMP",
+        },
+        CapDesc {
+            cap: GL_DEPTH_TEST,
+            index: MGC_DEPTH_TEST,
+            backing: Backing::Native,
+            initial: false,
+            name: "GL_DEPTH_TEST",
+        },
+        CapDesc {
+            cap: GL_DITHER,
+            index: MGC_DITHER,
+            backing: Backing::Native,
+            initial: true,
+            name: "GL_DITHER",
+        },
+        CapDesc {
+            cap: GL_FRAMEBUFFER_SRGB,
+            index: MGC_FRAMEBUFFER_SRGB,
+            backing: Backing::Ext,
+            initial: false,
+            name: "GL_FRAMEBUFFER_SRGB",
+        },
+        CapDesc {
+            cap: GL_LINE_SMOOTH,
+            index: MGC_LINE_SMOOTH,
+            backing: Backing::Virtual,
+            initial: false,
+            name: "GL_LINE_SMOOTH",
+        },
+        CapDesc {
+            cap: GL_MULTISAMPLE,
+            index: MGC_MULTISAMPLE,
+            backing: Backing::Ext,
+            initial: false,
+            name: "GL_MULTISAMPLE",
+        },
+        CapDesc {
+            cap: GL_POLYGON_OFFSET_FILL,
+            index: MGC_POLYGON_OFFSET_FILL,
+            backing: Backing::Native,
+            initial: false,
+            name: "GL_POLYGON_OFFSET_FILL",
+        },
+        CapDesc {
+            cap: GL_POLYGON_OFFSET_LINE,
+            index: MGC_POLYGON_OFFSET_LINE,
+            backing: Backing::Ext,
+            initial: false,
+            name: "GL_POLYGON_OFFSET_LINE",
+        },
+        CapDesc {
+            cap: GL_POLYGON_OFFSET_POINT,
+            index: MGC_POLYGON_OFFSET_POINT,
+            backing: Backing::Ext,
+            initial: false,
+            name: "GL_POLYGON_OFFSET_POINT",
+        },
+        CapDesc {
+            cap: GL_POLYGON_SMOOTH,
+            index: MGC_POLYGON_SMOOTH,
+            backing: Backing::Virtual,
+            initial: false,
+            name: "GL_POLYGON_SMOOTH",
+        },
+        CapDesc {
+            cap: GL_PRIMITIVE_RESTART,
+            index: MGC_PRIMITIVE_RESTART,
+            backing: Backing::Virtual,
+            initial: false,
+            name: "GL_PRIMITIVE_RESTART",
+        },
+        CapDesc {
+            cap: GL_PRIMITIVE_RESTART_FIXED_INDEX,
+            index: MGC_PRIMITIVE_RESTART_FIXED_INDEX,
+            backing: Backing::Native,
+            initial: false,
+            name: "GL_PRIMITIVE_RESTART_FIXED_INDEX",
+        },
+        CapDesc {
+            cap: GL_PROGRAM_POINT_SIZE,
+            index: MGC_PROGRAM_POINT_SIZE,
+            backing: Backing::Virtual,
+            initial: false,
+            name: "GL_PROGRAM_POINT_SIZE",
+        },
+        CapDesc {
+            cap: GL_RASTERIZER_DISCARD,
+            index: MGC_RASTERIZER_DISCARD,
+            backing: Backing::Native,
+            initial: false,
+            name: "GL_RASTERIZER_DISCARD",
+        },
+        CapDesc {
+            cap: GL_SAMPLE_ALPHA_TO_COVERAGE,
+            index: MGC_SAMPLE_ALPHA_TO_COVERAGE,
+            backing: Backing::Native,
+            initial: false,
+            name: "GL_SAMPLE_ALPHA_TO_COVERAGE",
+        },
+        CapDesc {
+            cap: GL_SAMPLE_ALPHA_TO_ONE,
+            index: MGC_SAMPLE_ALPHA_TO_ONE,
+            backing: Backing::Ext,
+            initial: false,
+            name: "GL_SAMPLE_ALPHA_TO_ONE",
+        },
+        CapDesc {
+            cap: GL_SAMPLE_COVERAGE,
+            index: MGC_SAMPLE_COVERAGE,
+            backing: Backing::Native,
+            initial: false,
+            name: "GL_SAMPLE_COVERAGE",
+        },
+        CapDesc {
+            cap: GL_SAMPLE_MASK,
+            index: MGC_SAMPLE_MASK,
+            backing: Backing::Native,
+            initial: false,
+            name: "GL_SAMPLE_MASK",
+        },
+        CapDesc {
+            cap: GL_SAMPLE_SHADING,
+            index: MGC_SAMPLE_SHADING,
+            backing: Backing::Ext,
+            initial: false,
+            name: "GL_SAMPLE_SHADING",
+        },
+        CapDesc {
+            cap: GL_SCISSOR_TEST,
+            index: MGC_SCISSOR_TEST,
+            backing: Backing::Native,
+            initial: false,
+            name: "GL_SCISSOR_TEST",
+        },
+        CapDesc {
+            cap: GL_STENCIL_TEST,
+            index: MGC_STENCIL_TEST,
+            backing: Backing::Native,
+            initial: false,
+            name: "GL_STENCIL_TEST",
+        },
+        CapDesc {
+            cap: GL_TEXTURE_CUBE_MAP_SEAMLESS,
+            index: MGC_TEXTURE_CUBE_MAP_SEAMLESS,
+            backing: Backing::Virtual,
+            initial: false,
+            name: "GL_TEXTURE_CUBE_MAP_SEAMLESS",
+        },
+    ];
+
+    // 编译期断言：K_CAPS 条目数 = MGC_COUNT 且按索引顺序排列
+    // （对齐 MG 的 static_assert：k_caps[MGC_X] 必须是能力 X 的描述符）。
+    const fn caps_ordered() -> bool {
+        let mut i = 0;
+        while i < K_CAPS.len() {
+            if K_CAPS[i].index != i {
+                return false;
+            }
+            i += 1;
+        }
+        K_CAPS.len() == MGC_COUNT
+    }
+    const _: () = assert!(
+        caps_ordered(),
+        "K_CAPS 必须按 mg_cap_index 顺序排列且覆盖全部"
+    );
+
+    /// 一次性的"每站告警"宏（对齐 MG EN_WARN_ONCE：参数被拒时仅提示一次）。
+    macro_rules! warn_once {
+        ($w:ident, $($arg:tt)*) => {{
+            static $w: AtomicBool = AtomicBool::new(false);
+            if !$w.swap(true, Ordering::Relaxed) {
+                log::warn!($($arg)*);
+            }
+        }};
+    }
+
+    /// find_cap：switch 而非遍历 K_CAPS（每个 glEnable/glDisable 与查询都经过）。
+    fn find_cap(cap: u32) -> Option<&'static CapDesc> {
+        match cap {
+            GL_BLEND => Some(&K_CAPS[MGC_BLEND]),
+            GL_COLOR_LOGIC_OP => Some(&K_CAPS[MGC_COLOR_LOGIC_OP]),
+            GL_CULL_FACE => Some(&K_CAPS[MGC_CULL_FACE]),
+            GL_DEBUG_OUTPUT => Some(&K_CAPS[MGC_DEBUG_OUTPUT]),
+            GL_DEBUG_OUTPUT_SYNCHRONOUS => Some(&K_CAPS[MGC_DEBUG_OUTPUT_SYNCHRONOUS]),
+            GL_DEPTH_CLAMP => Some(&K_CAPS[MGC_DEPTH_CLAMP]),
+            GL_DEPTH_TEST => Some(&K_CAPS[MGC_DEPTH_TEST]),
+            GL_DITHER => Some(&K_CAPS[MGC_DITHER]),
+            GL_FRAMEBUFFER_SRGB => Some(&K_CAPS[MGC_FRAMEBUFFER_SRGB]),
+            GL_LINE_SMOOTH => Some(&K_CAPS[MGC_LINE_SMOOTH]),
+            GL_MULTISAMPLE => Some(&K_CAPS[MGC_MULTISAMPLE]),
+            GL_POLYGON_OFFSET_FILL => Some(&K_CAPS[MGC_POLYGON_OFFSET_FILL]),
+            GL_POLYGON_OFFSET_LINE => Some(&K_CAPS[MGC_POLYGON_OFFSET_LINE]),
+            GL_POLYGON_OFFSET_POINT => Some(&K_CAPS[MGC_POLYGON_OFFSET_POINT]),
+            GL_POLYGON_SMOOTH => Some(&K_CAPS[MGC_POLYGON_SMOOTH]),
+            GL_PRIMITIVE_RESTART => Some(&K_CAPS[MGC_PRIMITIVE_RESTART]),
+            GL_PRIMITIVE_RESTART_FIXED_INDEX => Some(&K_CAPS[MGC_PRIMITIVE_RESTART_FIXED_INDEX]),
+            GL_PROGRAM_POINT_SIZE => Some(&K_CAPS[MGC_PROGRAM_POINT_SIZE]),
+            GL_RASTERIZER_DISCARD => Some(&K_CAPS[MGC_RASTERIZER_DISCARD]),
+            GL_SAMPLE_ALPHA_TO_COVERAGE => Some(&K_CAPS[MGC_SAMPLE_ALPHA_TO_COVERAGE]),
+            GL_SAMPLE_ALPHA_TO_ONE => Some(&K_CAPS[MGC_SAMPLE_ALPHA_TO_ONE]),
+            GL_SAMPLE_COVERAGE => Some(&K_CAPS[MGC_SAMPLE_COVERAGE]),
+            GL_SAMPLE_MASK => Some(&K_CAPS[MGC_SAMPLE_MASK]),
+            GL_SAMPLE_SHADING => Some(&K_CAPS[MGC_SAMPLE_SHADING]),
+            GL_SCISSOR_TEST => Some(&K_CAPS[MGC_SCISSOR_TEST]),
+            GL_STENCIL_TEST => Some(&K_CAPS[MGC_STENCIL_TEST]),
+            GL_TEXTURE_CUBE_MAP_SEAMLESS => Some(&K_CAPS[MGC_TEXTURE_CUBE_MAP_SEAMLESS]),
+            _ => None,
+        }
+    }
+
+    /// GL_CLIP_DISTANCEi 是连续枚举区段，用位掩码而非表槽（MG 同）。
+    fn clip_distance_slot(cap: u32) -> Option<u32> {
+        if cap < GL_CLIP_DISTANCE0 {
+            return None;
+        }
+        let n = cap - GL_CLIP_DISTANCE0;
+        if n >= MG_MAX_CLIP_DISTANCES {
+            return None;
+        }
+        Some(n)
+    }
+
+    /// 支撑 BK_EXT cap 的扩展是否真实存在（使用时刻查询而非缓存，
+    /// 对齐 MG：设备有扩展就必须持续拿到真实转发）。
+    ///
+    /// 注意：扩展存在性来自 backend::capabilities 的扩展缓存，首次 GL
+    /// 调用（with_gles_dispatch 触发能力查询）后定型；此前返回 false
+    /// （按"无扩展"只记录不转发，与旧实现版本兜底行为一致）。
+    fn ext_backing_present(cap: u32) -> bool {
+        match cap {
+            GL_DEPTH_CLAMP => {
+                // 偏离 MG（仅查 GL_EXT_depth_clamp）：保留版本感知，
+                // GLES 3.2 core 引入此 cap（见模块头注释 3）
+                crate::backend::capabilities().version.at_least(3, 2)
+                    || backend::capabilities::has_extension("GL_EXT_depth_clamp")
+            }
+            GL_FRAMEBUFFER_SRGB => {
+                backend::capabilities::has_extension("GL_EXT_sRGB_write_control")
+            }
+            GL_MULTISAMPLE | GL_SAMPLE_ALPHA_TO_ONE => {
+                backend::capabilities::has_extension("GL_EXT_multisample_compatibility")
+            }
+            GL_POLYGON_OFFSET_LINE | GL_POLYGON_OFFSET_POINT => {
+                backend::capabilities::has_extension("GL_NV_polygon_mode")
+            }
+            GL_SAMPLE_SHADING => {
+                // GLES 3.2 core，此前为扩展
+                crate::backend::capabilities().version.at_least(3, 2)
+                    || backend::capabilities::has_extension("GL_OES_sample_shading")
+            }
+            _ => false,
+        }
+    }
+
+    /// 每上下文 enable 状态（本层无上下文 id 概念，thread_local 与
+    /// state::State 一致——GL 上下文是线程绑定的）。
+    #[derive(Clone)]
+    struct EnableState {
+        scalar: [bool; MGC_COUNT],
+        blend_indexed: [bool; MG_MAX_DRAW_BUFFERS],
+        scissor_indexed: [bool; MG_MAX_VIEWPORTS],
+        clip_distance_mask: u32,
+        primitive_restart_index: u32,
+        initialised: bool,
+        /// mg_enable_sync_driver 已运行（驱动与表对齐，之后可安全跳过冗余调用）
+        driver_synced: bool,
+    }
+
+    impl Default for EnableState {
+        fn default() -> Self {
+            Self {
+                scalar: [false; MGC_COUNT],
+                blend_indexed: [false; MG_MAX_DRAW_BUFFERS],
+                scissor_indexed: [false; MG_MAX_VIEWPORTS],
+                clip_distance_mask: 0,
+                primitive_restart_index: 0,
+                initialised: false,
+                driver_synced: false,
+            }
+        }
+    }
+
+    thread_local! {
+        static ENABLE_STATE: RefCell<EnableState> = RefCell::new(EnableState::default());
+    }
+
+    fn mg_enable_reset(st: &mut EnableState) {
+        st.scalar = [false; MGC_COUNT];
+        for d in K_CAPS {
+            st.scalar[d.index] = d.initial;
+        }
+        // GL 4.6 规范 GL_MULTISAMPLE 初值 GL_TRUE；扩展缺失时由
+        // framebuffer 实际采样数播种（见 mg_enable_sync_driver）
+        st.scalar[MGC_MULTISAMPLE] = true;
+        // GL_BLEND 按 draw buffer、GL_SCISSOR_TEST 按 viewport；scalar 形式
+        // 各为索引 0（MG 同）
+        st.blend_indexed = [false; MG_MAX_DRAW_BUFFERS];
+        st.scissor_indexed = [false; MG_MAX_VIEWPORTS];
+        st.clip_distance_mask = 0;
+        st.primitive_restart_index = 0;
+        st.initialised = true;
+        st.driver_synced = false;
+    }
+
+    /// 让驱动与表对齐（对齐 MG mg_enable_sync_driver，每次上下文生效一次）。
+    ///
+    /// - 无 GL_EXT_multisample_compatibility 时 GL_MULTISAMPLE 由
+    ///   GL_SAMPLES 实际值播种（单采样 framebuffer 上报 TRUE 是另一方向的谎言）。
+    /// - GL_FRAMEBUFFER_SRGB：桌面初值 GL_FALSE 而 GL_EXT_sRGB_write_control
+    ///   初值 GL_TRUE，把表值推送到驱动使两者从第一帧起一致。
+    ///
+    /// 无 GLES dispatch（stub 模式）时不执行且不置 driver_synced，
+    /// 后续调用继续尝试（对齐 MG：sync 在上下文 current 时运行）。
+    fn mg_enable_sync_driver(st: &mut EnableState) {
+        if st.driver_synced {
+            return;
+        }
+        if !backend::gles_dispatch_ready() {
+            return;
+        }
+        backend::with_gles_dispatch(|dispatch| unsafe {
+            if !ext_backing_present(GL_MULTISAMPLE) {
+                let mut samples: i32 = 0;
+                (dispatch.get_integerv)(GL_SAMPLES, &mut samples);
+                st.scalar[MGC_MULTISAMPLE] = samples > 0;
+            }
+            if ext_backing_present(GL_FRAMEBUFFER_SRGB) {
+                if st.scalar[MGC_FRAMEBUFFER_SRGB] {
+                    (dispatch.enable)(GL_FRAMEBUFFER_SRGB);
+                } else {
+                    (dispatch.disable)(GL_FRAMEBUFFER_SRGB);
+                }
+            }
+        });
+        st.driver_synced = true;
+    }
+
+    /// 当前线程 enable 表（惰性初始化）。
+    fn with_enable_state_mut<F: FnOnce(&mut EnableState)>(f: F) {
+        ENABLE_STATE.with(|cell| {
+            let mut st = cell.borrow_mut();
+            if !st.initialised {
+                mg_enable_reset(&mut st);
+            }
+            f(&mut st);
+        });
+    }
+
+    /// 读 cap 状态（index 对非 indexed cap 忽略；未知 cap 返回 GL_FALSE
+    /// ——GL 规范对非法 cap 的答案，对齐 MG mg_enable_get）。
+    pub(crate) fn mg_enable_get(cap: u32, index: u32) -> u8 {
+        ENABLE_STATE.with(|cell| {
+            let st = cell.borrow();
+            if !st.initialised {
+                return 0;
+            }
+            if let Some(slot) = clip_distance_slot(cap) {
+                return if st.clip_distance_mask & (1 << slot) != 0 {
+                    1
+                } else {
+                    0
+                };
+            }
+            let Some(d) = find_cap(cap) else {
+                return 0;
+            };
+            if d.cap == GL_BLEND && (index as usize) < MG_MAX_DRAW_BUFFERS {
+                return st.blend_indexed[index as usize] as u8;
+            }
+            if d.cap == GL_SCISSOR_TEST && (index as usize) < MG_MAX_VIEWPORTS {
+                return st.scissor_indexed[index as usize] as u8;
+            }
+            st.scalar[d.index] as u8
+        })
+    }
+
+    /// pname 是否为 enable 类查询（是则 *out 收到状态并返回 true）。
+    /// 供 glGetBooleanv / glGetFloatv / glGetDoublev / glGetInteger64v /
+    /// glGetIntegerv 使用，保证与 glIsEnabled 的回答一致（对齐 MG
+    /// mg_enable_query）。
+    pub(crate) fn mg_enable_query(pname: u32, out: &mut u8) -> bool {
+        if clip_distance_slot(pname).is_some() || find_cap(pname).is_some() {
+            *out = mg_enable_get(pname, 0);
+            return true;
+        }
+        false
+    }
+
+    /// pname 是否为本表持有的 int 状态（是则 *out 收到值并返回 true）。
+    ///
+    /// GL_PRIMITIVE_RESTART_INDEX：表记录值（glPrimitiveRestartIndex 写入）；
+    /// GL_MAX_CLIP_DISTANCES / GL_MAX_VIEWPORTS：表实际可跟踪的量
+    /// （GLES 无此 pname，直通 INVALID_ENUM 且不写 data——旧实现宿主读垃圾值）；
+    /// GL_MAX_DRAW_BUFFERS：驱动值 clamp 到 blend_indexed 容量
+    /// （glEnablei(GL_BLEND, i) 永远不会收到表承诺之外的索引）。
+    pub(crate) fn mg_enable_query_int(pname: u32, out: &mut i32) -> bool {
+        match pname {
+            GL_PRIMITIVE_RESTART_INDEX => {
+                ENABLE_STATE.with(|cell| *out = cell.borrow().primitive_restart_index as i32);
+                true
+            }
+            GL_MAX_CLIP_DISTANCES => {
+                *out = MG_MAX_CLIP_DISTANCES as i32;
+                true
+            }
+            GL_MAX_VIEWPORTS => {
+                *out = MG_MAX_VIEWPORTS as i32;
+                true
+            }
+            GL_MAX_DRAW_BUFFERS => {
+                let mut n: i32 = 0;
+                backend::with_gles_dispatch(|dispatch| unsafe {
+                    (dispatch.get_integerv)(GL_MAX_DRAW_BUFFERS, &mut n);
+                });
+                if n <= 0 {
+                    n = 1;
+                }
+                *out = if n as usize > MG_MAX_DRAW_BUFFERS {
+                    MG_MAX_DRAW_BUFFERS as i32
+                } else {
+                    n
+                };
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// 写 glPrimitiveRestartIndex（MG mg_enable_set_primitive_restart_index）。
+    ///
+    /// 注意跨域协调：drawing.rs（域 4）的 glPrimitiveRestartIndex 目前直接
+    /// 转发驱动、不写本表——若宿主调用后查询 GL_PRIMITIVE_RESTART_INDEX，
+    /// 表回答 0（默认值）而非驱动值。域 4 若改为写表（对齐 MG）即可闭环。
+    pub(crate) fn set_primitive_restart_index(index: u32) {
+        with_enable_state_mut(|st| st.primitive_restart_index = index);
+    }
+
+    pub(crate) fn gl_enable(cap: u32) {
+        mg_set_enabled(cap, 0, false, true);
+    }
+
+    pub(crate) fn gl_disable(cap: u32) {
+        mg_set_enabled(cap, 0, false, false);
+    }
+
+    pub(crate) fn gl_enable_i(cap: u32, index: u32) {
+        mg_set_enabled(cap, index, true, true);
+    }
+
+    pub(crate) fn gl_disable_i(cap: u32, index: u32) {
+        mg_set_enabled(cap, index, true, false);
+    }
+
+    /// 写 enable 状态（对齐 MG mg_set_enabled：表永远更新，驱动按 backing
+    /// 属性 + 冗余检测决定是否真正调用）。
+    fn mg_set_enabled(cap: u32, index: u32, indexed: bool, value: bool) {
+        with_enable_state_mut(|st| {
+            mg_enable_sync_driver(st);
+
+            // GL_CLIP_DISTANCEi：位掩码路径
+            if let Some(slot) = clip_distance_slot(cap) {
+                if indexed {
+                    warn_once!(
+                        CLIP_INDEXED_WARNED,
+                        "[FluorateGL] glEnablei/glDisablei: GL_CLIP_DISTANCE{} 不是 indexed capability，已忽略",
+                        slot
+                    );
+                    return;
+                }
+                let was_on = (st.clip_distance_mask & (1 << slot)) != 0;
+                if value {
+                    st.clip_distance_mask |= 1 << slot;
+                } else {
+                    st.clip_distance_mask &= !(1 << slot);
+                }
+                let redundant = was_on == value && st.driver_synced;
+                if !redundant && backend::capabilities::has_extension("GL_EXT_clip_cull_distance") {
+                    backend::with_gles_dispatch(|dispatch| unsafe {
+                        if value {
+                            (dispatch.enable)(cap);
+                        } else {
+                            (dispatch.disable)(cap);
+                        }
+                    });
+                }
+                return;
+            }
+
+            let Some(d) = find_cap(cap) else {
+                // 表外 cap：透传 GLES——桌面 3.3 对非法 cap 报 INVALID_ENUM，
+                // GLES 同样报（MG 的忽略行为与桌面语义不符，差分 g11 裁决修正）
+                warn_once!(
+                    UNKNOWN_CAP_WARNED,
+                    "[FluorateGL] glEnable/glDisable: 0x{:04X} 不在能力表，透传 GLES（非法 cap 由驱动报 INVALID_ENUM）",
+                    cap
+                );
+                backend::with_gles_dispatch(|dispatch| unsafe {
+                    if value {
+                        (dispatch.enable)(cap);
+                    } else {
+                        (dispatch.disable)(cap);
+                    }
+                });
+                return;
+            };
+
+            // indexed 路径：GL 4.6 只有两个 indexed cap（BLEND 按 draw buffer、
+            // SCISSOR_TEST 按 viewport；viewport 数组未实现，仅 index 0 有效）
+            if indexed {
+                match d.cap {
+                    GL_BLEND => {
+                        if index as usize >= MG_MAX_DRAW_BUFFERS {
+                            warn_once!(
+                                BLEND_INDEX_WARNED,
+                                "[FluorateGL] glEnablei(GL_BLEND, {}): 索引超过 GL_MAX_DRAW_BUFFERS，已忽略",
+                                index
+                            );
+                            return;
+                        }
+                        let was = st.blend_indexed[index as usize];
+                        st.blend_indexed[index as usize] = value;
+                        if index == 0 {
+                            st.scalar[MGC_BLEND] = value;
+                        }
+                        if was == value && st.driver_synced {
+                            return;
+                        }
+                        backend::with_gles_dispatch(|dispatch| unsafe {
+                            if (dispatch.enable_i as *const ()) != (dispatch.stub as *const ()) {
+                                if value {
+                                    (dispatch.enable_i)(cap, index);
+                                } else {
+                                    (dispatch.disable_i)(cap, index);
+                                }
+                            } else if index == 0 {
+                                if value {
+                                    (dispatch.enable)(cap);
+                                } else {
+                                    (dispatch.disable)(cap);
+                                }
+                            }
+                        });
+                        return;
+                    }
+                    GL_SCISSOR_TEST => {
+                        if index as usize >= MG_MAX_VIEWPORTS {
+                            warn_once!(
+                                SCISSOR_INDEX_WARNED,
+                                "[FluorateGL] glEnablei(GL_SCISSOR_TEST, {}): 索引超过 GL_MAX_VIEWPORTS，已忽略",
+                                index
+                            );
+                            return;
+                        }
+                        st.scissor_indexed[index as usize] = value;
+                        if index != 0 {
+                            // 仅记录（viewport 数组入口是 stub，对齐 MG）
+                            warn_once!(
+                                SCISSOR_VIEWPORT_WARNED,
+                                "[FluorateGL] glEnablei(GL_SCISSOR_TEST, {}): viewport 数组未实现，状态已记录但无实际效果",
+                                index
+                            );
+                            return;
+                        }
+                        // index == 0：继续走 scalar 路径（同步 scissor_indexed[0]）
+                    }
+                    _ => {
+                        warn_once!(
+                            NOT_INDEXED_WARNED,
+                            "[FluorateGL] glEnablei/glDisablei: {} 不是 indexed capability，已忽略",
+                            d.name
+                        );
+                        return;
+                    }
+                }
+            }
+
+            // scalar 主路径：先读旧值（BLEND 需所有 draw buffer 槽一致才算冗余）
+            let mut already_set = st.scalar[d.index] == value;
+            if already_set && d.cap == GL_BLEND {
+                already_set = st.blend_indexed.iter().all(|&b| b == value);
+            }
+
+            st.scalar[d.index] = value;
+            if d.cap == GL_BLEND {
+                for b in st.blend_indexed.iter_mut() {
+                    *b = value;
+                }
+            }
+            if d.cap == GL_SCISSOR_TEST {
+                for s in st.scissor_indexed.iter_mut() {
+                    *s = value;
+                }
+            }
+
+            // 转发判定：backing 属性 + 扩展存在性
+            let mut forward = match d.backing {
+                Backing::Native => true,
+                Backing::Ext => ext_backing_present(d.cap),
+                Backing::Virtual => false,
+            };
+            // 偏离 MG（模块头注释 2）：GL_PRIMITIVE_RESTART 保留联动语义——
+            // 转发 GL_PRIMITIVE_RESTART_FIXED_INDEX 到驱动（我们 drawing 层
+            // 无 MG 的临时借用机制，不转发则 MC 的 primitive restart 失效）
+            if d.cap == GL_PRIMITIVE_RESTART {
+                forward = true;
+            }
+
+            if !forward {
+                log::debug!(
+                    "[FluorateGL] {} 仅记录不转发（GLES 无对应或扩展缺失）",
+                    d.name
+                );
+                return;
+            }
+
+            // 冗余检测：表与驱动已同步且值未变 → 跳过驱动调用
+            // （渲染器每 pass 都 glEnable 已生效的状态，驱动调用不免费——
+            // 对齐 MG，ANGLE 下尤其明显）
+            if already_set && st.driver_synced {
+                return;
+            }
+
+            backend::with_gles_dispatch(|dispatch| unsafe {
+                let target = if d.cap == GL_PRIMITIVE_RESTART {
+                    GL_PRIMITIVE_RESTART_FIXED_INDEX
+                } else {
+                    d.cap
+                };
+                if value {
+                    (dispatch.enable)(target);
+                } else {
+                    (dispatch.disable)(target);
+                }
+            });
+        });
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// 表顺序与索引断言（编译期已校验，运行期回归保护）。
+        #[test]
+        fn caps_table_ordered() {
+            assert!(caps_ordered());
+            assert_eq!(K_CAPS.len(), MGC_COUNT);
+        }
+
+        /// 未知 cap：glIsEnabled 语义返回 GL_FALSE，写操作仅告警忽略。
+        #[test]
+        fn unknown_cap_returns_false() {
+            assert_eq!(mg_enable_get(0xDEAD, 0), 0);
+        }
+
+        /// 写读回：VIRTUAL cap 记录在表，驱动不参与。
+        #[test]
+        fn virtual_cap_roundtrip() {
+            with_enable_state_mut(|st| {
+                mg_enable_reset(st);
+                st.scalar[MGC_TEXTURE_CUBE_MAP_SEAMLESS] = true;
+            });
+            assert_eq!(mg_enable_get(GL_TEXTURE_CUBE_MAP_SEAMLESS, 0), 1);
+            let mut out = 0u8;
+            assert!(mg_enable_query(GL_TEXTURE_CUBE_MAP_SEAMLESS, &mut out));
+            assert_eq!(out, 1);
+        }
+
+        /// GL_PRIMITIVE_RESTART_INDEX int 查询走表。
+        #[test]
+        fn primitive_restart_index_query() {
+            with_enable_state_mut(|st| {
+                mg_enable_reset(st);
+                st.primitive_restart_index = 0xFFFF;
+            });
+            let mut out = 0i32;
+            assert!(mg_enable_query_int(GL_PRIMITIVE_RESTART_INDEX, &mut out));
+            assert_eq!(out, 0xFFFF);
+        }
+
+        /// BLEND indexed 与 scalar 镜像。
+        #[test]
+        fn blend_indexed_mirrors_scalar() {
+            with_enable_state_mut(|st| {
+                mg_enable_reset(st);
+                st.scalar[MGC_BLEND] = true;
+                st.blend_indexed = [true; MG_MAX_DRAW_BUFFERS];
+            });
+            assert_eq!(mg_enable_get(GL_BLEND, 3), 1);
+            assert_eq!(mg_enable_get(GL_BLEND, 0), 1);
+        }
+    }
 }
 
 #[cfg(test)]

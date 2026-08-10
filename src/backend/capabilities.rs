@@ -12,6 +12,41 @@
 //! 未加载到符号（驱动声明扩展但未导出函数），仍走模拟。
 
 use crate::backend::dispatch::GlesDispatch;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+
+/// GLES 扩展列表缓存（query() 时填充）。
+///
+/// 供 enable 表（gl/exports.rs enable_state）的 ext_backing_present 等按需查询：
+/// 判断驱动是否真实支持某扩展（GL_EXT_depth_clamp / GL_EXT_sRGB_write_control /
+/// GL_EXT_multisample_compatibility / GL_NV_polygon_mode / GL_OES_sample_shading /
+/// GL_EXT_clip_cull_distance），决定 enable 类 cap 是转发驱动还是仅记录。
+/// 对齐 MobileGlues getter.cpp 的硬件 caps 语义（MG 在 init 时遍历扩展字符串）。
+static EXTENSION_CACHE: OnceLock<Mutex<Option<Vec<String>>>> = OnceLock::new();
+
+/// 缓存扩展列表（query() 构建能力表时调用，OnceLock 幂等）。
+fn cache_extensions(exts: &[String]) {
+    let cache = EXTENSION_CACHE.get_or_init(|| Mutex::new(None));
+    *cache.lock().unwrap_or_else(|p| p.into_inner()) = Some(exts.to_vec());
+}
+
+/// 驱动是否声明了指定扩展（扩展缓存未就绪时返回 false）。
+///
+/// 未就绪场景：GLES_DISPATCH 未设置（纯 stub / 离线测试），或首次 GL 调用
+/// 前 enable 类查询早到。此时按"无扩展"处理（只记录不转发），与 MG 在
+/// caps 填充前查不到扩展的行为一致；首次 with_gles_dispatch 触发能力查询后
+/// 缓存定型，后续调用得到真实答案。
+pub(crate) fn has_extension(name: &str) -> bool {
+    let Some(cache) = EXTENSION_CACHE.get() else {
+        return false;
+    };
+    cache
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        .map(|exts| exts.iter().any(|e| e == name))
+        .unwrap_or(false)
+}
 
 /// GLES 版本号（major * 10 + minor），如 3.2 → 32
 #[derive(Clone, Copy, Debug)]
@@ -60,6 +95,12 @@ pub struct GlesCapabilities {
     /// （注意：Mesa llvmpipe 声明该扩展但 GLSL 编译器未实现——扩展字符串
     /// 声明不可靠，preprocess 有 FLUORATEGL_FORCE_TQL_POLYFILL 逃生门）
     pub texture_query_lod: bool,
+    /// GL_EXT_buffer_storage（GLES 扩展，对应桌面 GL_ARB_buffer_storage）
+    /// 覆盖：glBufferStorage 的驱动原生支持——支持时 buffer 域（MG 式）透传
+    /// 持久存储语义；不支持时走降级（glBufferData 模拟）。FAKE_EXTENSIONS
+    /// 的 GL_ARB_buffer_storage 声明以本字段为准（caps=true 才声明，与
+    /// build_fake_extensions 的既有 behavior_dependent 模式一致）
+    pub buffer_storage: bool,
 }
 
 impl GlesCapabilities {
@@ -76,6 +117,7 @@ impl GlesCapabilities {
             indirect_draw: false,
             indirect_count: false,
             texture_query_lod: false,
+            buffer_storage: false,
         }
     }
 
@@ -86,6 +128,7 @@ impl GlesCapabilities {
     pub fn query(dispatch: &GlesDispatch) -> Self {
         let version = parse_gles_version(dispatch);
         let extensions = query_extensions(dispatch);
+        cache_extensions(&extensions);
 
         let is_32 = version.at_least(3, 2);
 
@@ -118,10 +161,12 @@ impl GlesCapabilities {
             // GLES 无标准 indirect count 扩展
             indirect_count: false,
             texture_query_lod: extensions.iter().any(|e| e == "GL_EXT_texture_query_lod"),
+            // GL_EXT_buffer_storage（GLES 3.1+ 扩展，桌面对应 GL_ARB_buffer_storage）
+            buffer_storage: extensions.iter().any(|e| e == "GL_EXT_buffer_storage"),
         };
 
         log::info!(
-            "[FluorateGL] GLES 能力检测: version={} base_vertex={} base_instance={} multi_base_vertex={} multi_indirect={} multi_draw={} indirect_draw={} indirect_count={} texture_query_lod={}",
+            "[FluorateGL] GLES 能力检测: version={} base_vertex={} base_instance={} multi_base_vertex={} multi_indirect={} multi_draw={} indirect_draw={} indirect_count={} texture_query_lod={} buffer_storage={}",
             version.0,
             caps.draw_elements_base_vertex,
             caps.base_instance,
@@ -130,7 +175,8 @@ impl GlesCapabilities {
             caps.multi_draw,
             caps.indirect_draw,
             caps.indirect_count,
-            caps.texture_query_lod
+            caps.texture_query_lod,
+            caps.buffer_storage
         );
         if !caps.draw_elements_base_vertex {
             log::warn!(
@@ -151,6 +197,10 @@ impl GlesCapabilities {
 ///
 /// GLES 的 GL_VERSION 字符串格式如 "OpenGL ES 3.2 V@0415.0..."，
 /// 解析 "3.2" 部分得到 320。
+///
+/// 对照 MG getter.cpp set_es_version()：MG 取前三个空格前的 token 后
+/// sscanf "OpenGL ES %d.%d"（失败兜底 300）；本实现按 "OpenGL ES" 关键字
+/// 分割后取首个 "主.次" token，语义等价且对 vendor 后缀更宽容。
 ///
 /// C1 兜底：部分后端（如 ANGLE）在能力查询时机上下文未完全 current 时
 /// glGetString(GL_VERSION) 返回 null，字符串解析失败 → 用
@@ -268,5 +318,6 @@ mod tests {
         assert!(!c.base_instance);
         assert!(!c.indirect_draw);
         assert!(!c.indirect_count);
+        assert!(!c.buffer_storage);
     }
 }

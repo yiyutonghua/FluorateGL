@@ -1,5 +1,4 @@
 use crate::backend;
-use crate::gl::exports::is_unsupported_gles_cap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// glPolygonMode 非 FILL 模式首次告警标志
@@ -24,36 +23,21 @@ fn is_stub(dispatch: &backend::dispatch::GlesDispatch, ptr: *const ()) -> bool {
     ptr == dispatch.stub as *const ()
 }
 
+/// glEnablei — 虚拟 enable 表 indexed 路径（移植 MobileGlues enable.cpp）。
+///
+/// 语义：GL 4.6 只有 GL_BLEND（按 draw buffer）与 GL_SCISSOR_TEST（按
+/// viewport）两个 indexed cap；其余 cap 首次告警并忽略（MG EN_WARN_ONCE）。
+/// 状态由 exports::enable_state 表持有，与 glIsEnabledi 回答一致。
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glEnablei(cap: u32, index: u32) {
-    if is_unsupported_gles_cap(cap) {
-        log::debug!(
-            "[FluorateGL] glEnablei(0x{:04X}, {}) ignored (unsupported in GLES)",
-            cap,
-            index
-        );
-        return;
-    }
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.enable_i)(cap, index);
-    });
+    crate::gl::exports::enable_state::gl_enable_i(cap, index);
 }
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glDisablei(cap: u32, index: u32) {
-    if is_unsupported_gles_cap(cap) {
-        log::debug!(
-            "[FluorateGL] glDisablei(0x{:04X}, {}) ignored (unsupported in GLES)",
-            cap,
-            index
-        );
-        return;
-    }
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        (dispatch.disable_i)(cap, index);
-    });
+    crate::gl::exports::enable_state::gl_disable_i(cap, index);
 }
 
 #[unsafe(no_mangle)]
@@ -226,18 +210,17 @@ pub extern "C" fn glPolygonMode(face: u32, mode: u32) {
     });
 }
 
+/// glPixelStoref — 移植 MG texture.cpp:2025-2033 语义。
+///
+/// 与整数形式设置同一份状态：GL 4.6 sec. 8.4.1 规定此形式对整数值参数
+/// 四舍五入到最近整数（lroundf）。旧实现为 GLES 无 glPixelStoref 时
+/// 直接截断转发；MG 语义更精确且共享 exports::glPixelStorei 的桌面
+/// 6 参数影子存储（SWAP_BYTES 等 GLES 不认识的 pname 不再产生
+/// INVALID_ENUM）。
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glPixelStoref(pname: u32, param: f32) {
-    backend::with_gles_dispatch(|dispatch| unsafe {
-        if is_stub(dispatch, dispatch.pixel_store_f as *const ()) {
-            // GLES 没有 glPixelStoref，只有 glPixelStorei。
-            // pixel store 参数（如 UNPACK_ALIGNMENT）均为小整数，f→i 截断无损。
-            (dispatch.pixel_store_i)(pname, param as i32);
-        } else {
-            (dispatch.pixel_store_f)(pname, param);
-        }
-    });
+    crate::gl::exports::glPixelStorei(pname, param.round() as i32);
 }
 
 // === ARB 后缀别名 ===

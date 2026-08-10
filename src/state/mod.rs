@@ -17,34 +17,6 @@ use id_map::IdMap;
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 
-/// 持久映射 buffer 的 CPU 端 shadow memory
-///
-/// GLES 3.1 不支持 GL_MAP_PERSISTENT_BIT（映射期间 buffer 仍可被 GPU 使用），
-/// 用 CPU 端 shadow memory 模拟：glMapBufferRange 返回 shadow_ptr，宿主写入
-/// shadow memory，draw 前 glBufferSubData 同步到 GLES buffer。
-///
-/// 生命周期：glBufferStorage(带 PERSISTENT) 创建 → glMapBufferRange 返回 shadow_ptr →
-/// glFlushMappedBufferRange 标记脏区域 → draw 前同步 → glDeleteBuffers 释放。
-pub struct PersistentMapping {
-    /// CPU 端分配的 shadow memory 起始指针
-    pub shadow_ptr: *mut u8,
-    /// shadow memory 总大小（字节数）
-    pub shadow_size: usize,
-    /// 对应的 GLES buffer ID（用于 glBufferSubData 同步）
-    pub gles_buffer_id: u32,
-    /// 未同步的脏数据起始偏移
-    pub dirty_offset: usize,
-    /// 未同步的脏数据长度
-    pub dirty_length: usize,
-    /// 该 buffer 当前绑定的 GL target（glBindBuffer / glBindBufferBase /
-    /// glBindBufferRange 更新；sync 时按此 target 定位 glBufferSubData 上传目标，
-    /// 使 GL_UNIFORM_BUFFER 等所有走 shadow 路径的 target 都能被同步）
-    pub bound_target: u32,
-}
-
-// shadow_ptr 由 libc::malloc 分配，跨线程不共享（thread_local State），Send/Sync 安全
-unsafe impl Send for PersistentMapping {}
-
 pub struct State {
     pub buffers: IdMap,
     pub vertex_arrays: IdMap,
@@ -59,6 +31,21 @@ pub struct State {
     pub queries: IdMap,
     /// uniform location 缓存（key = (desktop_program_id, uniform_name)）
     pub uniform_location_cache: FxHashMap<(u32, String), i32>,
+    /// program → 是否需要在 link 时生成默认 FS（对齐 MG program.cpp
+    /// ShouldGenerateFSState：0=Unknown，1=Never，2=Maybe）。
+    /// attach FS → Never；仅 attach VS（且当前非 Never）→ Maybe；
+    /// link 时 Maybe → 生成/复用默认 FS 并 attach（无 FS 的 program 在
+    /// GLES 上 link 必败，桌面 GL 同，MG 以默认 FS 兜底）。
+    pub program_should_generate_fs: FxHashMap<u32, u8>,
+    /// program → 待应用的 glBindFragDataLocation 绑定（[(color, name)]）。
+    /// glLinkProgram 消费后清空（对齐 MG frag_data_changed 一次性语义）。
+    pub program_frag_data_bindings: FxHashMap<u32, Vec<(u32, String)>>,
+    /// program → 最近 attach 的 fragment shader 桌面 id（frag_data layout
+    /// 注入定位用；MG 用全局单例 shaderInfo 假设"最后 glShaderSource 的
+    /// shader 即当前 FS"，per-program 跟踪更精确且线程安全）。
+    pub program_fs_shader: FxHashMap<u32, u32>,
+    /// GLES ES 版本号（如 320）→ 内部生成的默认 FS 的 GLES shader id（缓存复用）。
+    pub default_fs_cache: FxHashMap<u32, u32>,
 
     pub bound_buffer: u32,
     pub bound_vertex_array: u32,
@@ -67,10 +54,18 @@ pub struct State {
     pub bound_framebuffer: u32,
     pub bound_renderbuffer: u32,
 
-    /// 持久映射 buffer 的 shadow memory（key = desktop buffer ID）
-    pub persistent_buffers: FxHashMap<u32, PersistentMapping>,
-    /// 各 target 当前绑定的 desktop buffer ID（用于查询 target → buffer）
+    /// 各 target 当前绑定的 desktop buffer ID（用于查询 target → buffer；
+    /// 对应 MG buffer.cpp 的 set_bound_buffer_by_target / find_bound_buffer_by_target）
     pub bound_buffers_by_target: FxHashMap<u32, u32>,
+    /// 每个 VAO 的 ELEMENT_ARRAY_BUFFER 绑定（桌面 GL 语义：IBO 绑定是 VAO state；
+    /// 对应 MG buffer.cpp 的 element_array_buffer_per_vao）。glBindVertexArray 时应
+    /// 用它恢复 bound_buffers_by_target 中的 ELEMENT_ARRAY_BUFFER 记录（跨域协调点，
+    /// vertex_array.rs 域处理）。
+    pub element_array_buffer_per_vao: FxHashMap<u32, u32>,
+    /// 桌面 buffer ID → 最近一次 glBufferData/glBufferStorage 的 size（对应 MG
+    /// buffer.cpp 的 g_buffer_datasize / set_buffer_data_size）。供 getter 查询
+    /// GL_BUFFER_SIZE 等使用（跨域协调点，getter.rs 域对接）。
+    pub buffer_sizes: FxHashMap<u32, usize>,
 }
 
 impl State {
@@ -88,6 +83,10 @@ impl State {
             renderbuffers: IdMap::new(),
             queries: IdMap::new(),
             uniform_location_cache: FxHashMap::default(),
+            program_should_generate_fs: FxHashMap::default(),
+            program_frag_data_bindings: FxHashMap::default(),
+            program_fs_shader: FxHashMap::default(),
+            default_fs_cache: FxHashMap::default(),
 
             bound_buffer: 0,
             bound_vertex_array: 0,
@@ -96,8 +95,9 @@ impl State {
             bound_framebuffer: 0,
             bound_renderbuffer: 0,
 
-            persistent_buffers: FxHashMap::default(),
             bound_buffers_by_target: FxHashMap::default(),
+            element_array_buffer_per_vao: FxHashMap::default(),
+            buffer_sizes: FxHashMap::default(),
         }
     }
 }

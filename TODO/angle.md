@@ -2,6 +2,13 @@
 
 ## 状态：搁置（用户 m00228「先不猜了，暂时放着先」；记录于 2026-08-08）
 
+> 补充（2026-08-10，m00313）：**ANGLE depth-clear workaround 已决定不做**——
+> 域 6 曾按 MobileGlues gl.cpp:158-185 移植基础版（FLUORATEGL_ANGLE_DEPTH_CLEAR_FIX
+> 环境变量 + glClearBufferfv 重放），用户 m00313「ANGLE depth-clear workaround不需要」
+> 后已整体移除，glClear/glClearDepth 恢复纯透传。若未来需要，参考 MG 完整方案
+> （settings.angle 开关 + draw framebuffer 附件全 none 判定 + 每上下文 depth-clear
+> 对象表 + 全屏三角形 Mode1 / glClearBufferfv Mode2）。
+
 ## 现象（log/latest_game.log，491 行，08-07 16:58，FLUORATEGL_BACKEND=angle，启动约 3 秒崩溃）
 
 - **ArithmeticException / by zero**：MC hnx UBO 池构造读 `glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT=0x8A34)` 返回 **0**（正常应为 16/256）→ 对齐除零崩溃

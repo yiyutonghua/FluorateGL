@@ -210,6 +210,11 @@ pub struct GlesDispatch {
     pub framebuffer_texture_2d: unsafe extern "C" fn(u32, u32, u32, u32, i32),
     pub framebuffer_texture_layer: unsafe extern "C" fn(u32, u32, u32, i32, i32),
     pub framebuffer_renderbuffer: unsafe extern "C" fn(u32, u32, u32, u32),
+    // GLES 3.2 core 的 glFramebufferTexture（桌面 GL_FramebufferTexture 等价，
+    // TextureAll 语义：整个纹理对象附加到 attachment）。GLES 3.1 驱动无此函数
+    // → load_opt 兜底为 stub，拦截层（framebuffer.rs）降级为
+    // glFramebufferTextureLayer(layer=0) 模拟（2D 纹理完全等价）。
+    pub framebuffer_texture: unsafe extern "C" fn(u32, u32, u32, i32),
     pub check_framebuffer_status: unsafe extern "C" fn(u32) -> u32,
     pub gen_renderbuffers: unsafe extern "C" fn(i32, *mut u32),
     pub delete_renderbuffers: unsafe extern "C" fn(i32, *const u32),
@@ -315,6 +320,12 @@ pub struct GlesDispatch {
     // Compute（GLES 3.1 core；P2 atomic→SSBO 模拟的运行时载体）
     pub dispatch_compute: unsafe extern "C" fn(u32, u32, u32),
     pub memory_barrier: unsafe extern "C" fn(u32),
+    /// glBindImageTexture（GLES 3.1 core；域 4：真实导出替代 stub——MG
+    /// drawing.cpp 同款透传。GLboolean layered 为 u8）
+    pub bind_image_texture: unsafe extern "C" fn(u32, u32, i32, u8, i32, u32, u32),
+    /// glGetInteger64i_v（GLES 3.2 / EXT；域 4：IndirectCount GPU compaction
+    /// 恢复 SSBO Range 绑定用；不可用时退化 bind_buffer_base 恢复）
+    pub get_integer64i_v: unsafe extern "C" fn(u32, u32, *mut i64),
 
     // Sampler
     pub gen_samplers: unsafe extern "C" fn(i32, *mut u32),
@@ -383,11 +394,13 @@ pub struct GlesDispatch {
 }
 
 // 编译期约束：GlesDispatch 必须全部为函数指针（全指针布局），且字段总数精确匹配。
-// 字段数 = 307（stub 槽 + 306 个 GL 函数指针；P2/P1 补齐后更新）。
-// ⚠️ 若结构体字段增减，必须同步更新此处 264，否则编译失败——防止显式初始化
+// 字段数 = 308（stub 槽 + 307 个 GL 函数指针；P2/P1 补齐后更新，
+// 域 5 补齐 +1：glFramebufferTexture；域 4 补齐 +2：glBindImageTexture、
+// glGetInteger64i_v）。
+// ⚠️ 若结构体字段增减，必须同步更新此处，否则编译失败——防止显式初始化
 // 遗漏字段时静默出错（原 % 断言只能捕获"总大小非 8 倍数"，捕获不了字段数漂移）。
 const _: () = assert!(
-    std::mem::size_of::<GlesDispatch>() == 307 * std::mem::size_of::<unsafe extern "C" fn()>()
+    std::mem::size_of::<GlesDispatch>() == 310 * std::mem::size_of::<unsafe extern "C" fn()>()
 );
 
 // —— 按签名类别的安全 no-op stub（零参数，忽略入参，返回安全常量）——
@@ -647,6 +660,7 @@ impl GlesDispatch {
             framebuffer_texture_2d: stub!(),
             framebuffer_texture_layer: stub!(),
             framebuffer_renderbuffer: stub!(),
+            framebuffer_texture: stub!(),
             check_framebuffer_status: stub!(gl_stub_zero_u32 as unsafe extern "C" fn() -> u32),
             gen_renderbuffers: stub!(),
             delete_renderbuffers: stub!(),
@@ -738,6 +752,8 @@ impl GlesDispatch {
             is_transform_feedback: stub!(gl_stub_zero_u8 as unsafe extern "C" fn() -> u8),
             dispatch_compute: stub!(),
             memory_barrier: stub!(),
+            bind_image_texture: stub!(),
+            get_integer64i_v: stub!(),
 
             // Sampler
             gen_samplers: stub!(),
@@ -907,9 +923,11 @@ impl GlesDispatch {
             bind_buffer_base: unsafe { std::mem::transmute(load!("glBindBufferBase")) },
             bind_buffer_range: unsafe { std::mem::transmute(load!("glBindBufferRange")) },
             buffer_storage: unsafe {
+                // C2 修复：EXT 名走 get_proc_gles（eglGetProcAddress 兜底）——
+                // Mesa 不 dlsym 导出 glBufferStorageEXT，但 EGL 可获取
                 let ptr = loader.get_proc("glBufferStorage");
                 let ptr = if ptr.is_null() {
-                    loader.get_proc("glBufferStorageEXT")
+                    loader.get_proc_gles("glBufferStorageEXT")
                 } else {
                     ptr
                 };
@@ -1100,6 +1118,9 @@ impl GlesDispatch {
             framebuffer_renderbuffer: unsafe {
                 std::mem::transmute(load!("glFramebufferRenderbuffer"))
             },
+            // GLES 3.2 函数：3.1 及以下驱动无此符号，load_opt 兜底为 stub（debug 日志），
+            // 拦截层降级模拟。Adreno GLES 3.2 原生支持，正常走透传。
+            framebuffer_texture: load_opt!("glFramebufferTexture"),
             check_framebuffer_status: unsafe {
                 std::mem::transmute(load!("glCheckFramebufferStatus"))
             },
@@ -1258,6 +1279,9 @@ impl GlesDispatch {
             // GLES 3.1 core（项目前提，必选加载）
             dispatch_compute: unsafe { std::mem::transmute(load!("glDispatchCompute")) },
             memory_barrier: unsafe { std::mem::transmute(load!("glMemoryBarrier")) },
+            bind_image_texture: load_opt!("glBindImageTexture"),
+            // GLES 3.2 / GL_EXT_disjoint_timer_query 时代函数，可选加载
+            get_integer64i_v: load_opt!("glGetInteger64i_v"),
 
             gen_samplers: unsafe { std::mem::transmute(load!("glGenSamplers")) },
             delete_samplers: unsafe { std::mem::transmute(load!("glDeleteSamplers")) },

@@ -267,4 +267,5 @@ static FALLBACK_CAPS: capabilities::GlesCapabilities = capabilities::GlesCapabil
     indirect_draw: true,
     indirect_count: false,
     texture_query_lod: false,
+    buffer_storage: false,
 };

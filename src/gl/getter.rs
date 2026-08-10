@@ -16,10 +16,27 @@ fn warn_indexed_binding_id_miss(target: u32, gles_id: u32) {
     }
 }
 
+/// glGetBooleanv — 移植 MobileGlues enable.cpp 语义：
+/// enable 表优先（cap 状态 → 0/1、表内 int 状态 → 非 0 即 1），
+/// 再 pixel store 影子表，最后透传驱动。与 glIsEnabled 永远一致。
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetBooleanv(pname: u32, data: *mut u8) {
     if data.is_null() {
+        return;
+    }
+    let mut enabled = 0u8;
+    if crate::gl::exports::enable_state::mg_enable_query(pname, &mut enabled) {
+        unsafe { *data = enabled };
+        return;
+    }
+    let mut ival = 0i32;
+    if crate::gl::exports::enable_state::mg_enable_query_int(pname, &mut ival) {
+        unsafe { *data = if ival != 0 { 1 } else { 0 } };
+        return;
+    }
+    if crate::gl::pixel::pixel_store::query_int(pname, &mut ival) {
+        unsafe { *data = if ival != 0 { 1 } else { 0 } };
         return;
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -57,13 +74,29 @@ fn fill_line_width_query(pname: u32, data_f32: *mut f32) -> bool {
     }
 }
 
+/// glGetFloatv — 移植 MobileGlues enable.cpp 语义（enable 表 → 表内 int 状态
+/// → 我们保留的 line-width 拦截 → pixel store 影子表 → 透传驱动）。
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetFloatv(pname: u32, data: *mut f32) {
     if data.is_null() {
         return;
     }
+    let mut enabled = 0u8;
+    if crate::gl::exports::enable_state::mg_enable_query(pname, &mut enabled) {
+        unsafe { *data = if enabled != 0 { 1.0 } else { 0.0 } };
+        return;
+    }
+    let mut ival = 0i32;
+    if crate::gl::exports::enable_state::mg_enable_query_int(pname, &mut ival) {
+        unsafe { *data = ival as f32 };
+        return;
+    }
     if fill_line_width_query(pname, data) {
+        return;
+    }
+    if crate::gl::pixel::pixel_store::query_int(pname, &mut ival) {
+        unsafe { *data = ival as f32 };
         return;
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -71,16 +104,49 @@ pub extern "C" fn glGetFloatv(pname: u32, data: *mut f32) {
     });
 }
 
+/// glGetFloatv 为各 pname 写入的分量数（移植 MG enable.cpp:642-659
+/// mg_get_components：GL_DEPTH_RANGE 写 2、GL_VIEWPORT 写 4，其余写 1。
+/// GLES 驱动收到比 4 更大的输出缓冲也无妨，但读回后逐元素扩展必须
+/// 按此表限制写回数量，避免越界写调用方缓冲）。
+fn get_float_components(pname: u32) -> usize {
+    match pname {
+        0x0B70 | // GL_DEPTH_RANGE
+        0x846E | // GL_ALIASED_LINE_WIDTH_RANGE
+        0x846D | // GL_ALIASED_POINT_SIZE_RANGE
+        0x0D3A | // GL_MAX_VIEWPORT_DIMS
+        0x0B12 // GL_POINT_SIZE_RANGE
+        => 2,
+        0x0BA2 | // GL_VIEWPORT
+        0x0C10 | // GL_SCISSOR_BOX
+        0x0C22 | // GL_COLOR_CLEAR_VALUE
+        0x8005 | // GL_BLEND_COLOR
+        0x0C23 // GL_COLOR_WRITEMASK
+        => 4,
+        _ => 1,
+    }
+}
+
 /// glGetDoublev — GLES 无 double 返回查询函数（dispatch.get_double_v 加载必失败，
 /// 原直通为 no-op stub 且不写 data → 宿主读垃圾值）。
 ///
-/// 改为经 glGetFloatv 查询后逐元素扩展为 f64（与 glGetVertexAttribdv 同模式）。
-/// 桌面 double 查询（GL_DEPTH_RANGE、GL_COLOR_CLEAR_VALUE 等）最多返回 4 个分量；
-/// pname 非法时 GLES 不写 temp，temp 预填 0 保证调用方至少读到 0。
+/// 移植 MG enable.cpp glGetDoublev：enable 表优先（bool/int），pixel store
+/// 影子表，其余经 glGetFloatv 查询后按 mg_get_components 分量数扩展为 f64
+/// （桌面 double 查询如 GL_DEPTH_RANGE 最多写 2 个、GL_VIEWPORT 写 4 个；
+/// pname 非法时 GLES 不写 temp，temp 预填 0 保证调用方至少读到 0）。
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetDoublev(pname: u32, data: *mut f64) {
     if data.is_null() {
+        return;
+    }
+    let mut enabled = 0u8;
+    if crate::gl::exports::enable_state::mg_enable_query(pname, &mut enabled) {
+        unsafe { *data = if enabled != 0 { 1.0 } else { 0.0 } };
+        return;
+    }
+    let mut ival = 0i32;
+    if crate::gl::exports::enable_state::mg_enable_query_int(pname, &mut ival) {
+        unsafe { *data = ival as f64 };
         return;
     }
     let mut temp = [0.0f32; 4];
@@ -92,12 +158,17 @@ pub extern "C" fn glGetDoublev(pname: u32, data: *mut f64) {
         }
         return;
     }
+    if crate::gl::pixel::pixel_store::query_int(pname, &mut ival) {
+        unsafe { *data = ival as f64 };
+        return;
+    }
     backend::with_gles_dispatch(|dispatch| unsafe {
         (dispatch.get_float_v)(pname, temp.as_mut_ptr());
     });
     unsafe {
-        for (i, v) in temp.iter().enumerate() {
-            *data.add(i) = *v as f64;
+        let n = get_float_components(pname);
+        for i in 0..n {
+            *data.add(i) = temp[i] as f64;
         }
     }
 }
@@ -113,10 +184,26 @@ pub fn get_integerv(pname: u32, data: *mut i32) {
     });
 }
 
+/// glGetInteger64v — 移植 MG enable.cpp 语义（enable 表 → pixel store
+/// 影子表 → 透传驱动）。
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glGetInteger64v(pname: u32, data: *mut i64) {
     if data.is_null() {
+        return;
+    }
+    let mut enabled = 0u8;
+    if crate::gl::exports::enable_state::mg_enable_query(pname, &mut enabled) {
+        unsafe { *data = enabled as i64 };
+        return;
+    }
+    let mut ival = 0i32;
+    if crate::gl::exports::enable_state::mg_enable_query_int(pname, &mut ival) {
+        unsafe { *data = ival as i64 };
+        return;
+    }
+    if crate::gl::pixel::pixel_store::query_int(pname, &mut ival) {
+        unsafe { *data = ival as i64 };
         return;
     }
     backend::with_gles_dispatch(|dispatch| unsafe {
@@ -205,28 +292,24 @@ pub extern "C" fn glGetDoublei_v(target: u32, index: u32, data: *mut f64) {
     }
 }
 
+/// glIsEnabled — 虚拟 enable 表回答（移植 MobileGlues enable.cpp）。
+///
+/// 语义变化说明：旧实现为透传驱动 + is_unsupported_gles_cap 过滤；现改为
+/// enable_state 表回答（MG 语义）——所有 enable 能力状态由表持有，
+/// glEnable/glDisable 写表、glIsEnabled 读表，驱动不参与回答。
+/// 未知/非法 cap 返回 GL_FALSE（GL 规范对错误枚举的答案）。
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glIsEnabled(cap: u32) -> u8 {
-    // GLES 无此 cap（或恒开启）时直通会 INVALID_ENUM：按 GLES 对无效 cap 的
-    // 语义返回 GL_FALSE（与 glEnable/glDisable 的过滤对称，见 exports.rs）。
-    if crate::gl::exports::is_unsupported_gles_cap(cap) {
-        return 0;
-    }
-    // 与 glEnable 对称翻译（GL_PRIMITIVE_RESTART 0x8F9D → GLES 3.0
-    // GL_PRIMITIVE_RESTART_FIXED_INDEX 0x8D69，否则查询结果与启用状态错位）。
-    let cap = crate::gl::exports::translate_enable_cap(cap);
-    backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.is_enabled)(cap) })
+    crate::gl::exports::enable_state::mg_enable_get(cap, 0)
 }
 
+/// glIsEnabledi — 与 glIsEnabled 同表（BLEND 按 draw buffer、SCISSOR_TEST
+/// 按 viewport 索引回答，其余 cap 忽略 index）。
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "C" fn glIsEnabledi(cap: u32, index: u32) -> u8 {
-    if crate::gl::exports::is_unsupported_gles_cap(cap) {
-        return 0;
-    }
-    let cap = crate::gl::exports::translate_enable_cap(cap);
-    backend::with_gles_dispatch(|dispatch| unsafe { (dispatch.is_enabled_i)(cap, index) })
+    crate::gl::exports::enable_state::mg_enable_get(cap, index)
 }
 
 /// glGetVertexAttribdv — GL 2.0 顶点属性查询（double 数组版本）。
