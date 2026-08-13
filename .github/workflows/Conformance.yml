@@ -131,7 +131,7 @@ jobs:
           sudo apt-get install -y \
             cmake ninja-build meson python3-venv python3-pip \
             gcc g++ pkg-config ccache \
-            libegl-dev libgles2-mesa-dev libgles2 libegl1
+            libegl-dev libgles2-mesa-dev libgles2 libegl1 libpng-dev
 
       - name: Clone waffle + piglit
         run: |
@@ -156,9 +156,12 @@ jobs:
       - name: Build waffle (meson, surfaceless_egl only)
         run: |
           cd "$WORK/waffle"
+          # -Dlibdir=lib：强制 pc/so 装到 prefix/lib/（Debian multiarch 默认
+          # lib/x86_64-linux-gnu 会让 PKG_CONFIG_LIBDIR 与 --waffle-dir 找不到）
           meson setup build -Dbuildtype=release -Dsurfaceless_egl=enabled \
             -Dglx=disabled -Dx11_egl=disabled -Dgbm=disabled -Dwayland=disabled \
-            -Dbuild-tests=false -Dbuild-examples=false -Dprefix="$WORK/prefix"
+            -Dbuild-tests=false -Dbuild-examples=false -Dlibdir=lib \
+            -Dprefix="$WORK/prefix"
           ninja -C build
           meson install -C build
 
@@ -345,7 +348,8 @@ jobs:
       - name: Build glcts (gl33 相关模块)
         run: |
           cmake --build "$CTS/build" --target glcts -j2
-          ls -la "$CTS/build/modules/glcts/glcts"
+          # glcts 产物在 external/openglcts/modules/ 下（CTS external 目录布局）
+          ls -la "$CTS/build/external/openglcts/modules/glcts/glcts"
 
       - name: Cache ccache (cts)
         uses: actions/cache@v4
@@ -409,7 +413,7 @@ jobs:
       - name: Run glcts (resume-on-crash runner)
         run: |
           python3 tools/gl-conformance/cts/scripts/run_cts_local.py \
-            --glcts "$CTS/build/modules/glcts/glcts" \
+            --glcts "$CTS/build/external/openglcts/modules/glcts/glcts" \
             --lib "$LIB" \
             --caselist gl33-ci.list \
             --outdir cts-qpa \
@@ -507,8 +511,10 @@ jobs:
       - name: Clone apitrace
         run: |
           mkdir -p "$WORK"
-          # MobileGL fork（验证过）：KhronosGroup/apitrace 不存在（404）。
-          git clone --depth 1 https://github.com/MobileGL-Dev/apitrace.git "$WORK/apitrace"
+          # MobileGL fork（验证过）：KhronosGroup/apitrace 不存在（404）；
+          # thirdparty/ 是 submodule（brotli/gtest/libbacktrace/libpng），须 recursive。
+          git clone --depth 1 --recursive --shallow-submodules \
+            https://github.com/MobileGL-Dev/apitrace.git "$WORK/apitrace"
 
       - name: Configure + build retrace runner
         run: |
