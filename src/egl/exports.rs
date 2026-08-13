@@ -5,9 +5,15 @@ use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
 const EGL_NONE: i32 = 0x3038;
+// EGL_CONTEXT_CLIENT_VERSION 与 EGL_CONTEXT_MAJOR_VERSION_KHR 同值（0x3098），
+// 桌面宿主传 KHR 版本请求时此处特判映射为 GLES 3。
 const EGL_CONTEXT_CLIENT_VERSION: i32 = 0x3098;
-const EGL_CONTEXT_OPENGL_PROFILE_MASK: i32 = 0x3093;
-const EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY: i32 = 0x3094;
+// 桌面 GL context 专属 attrib（EGL_KHR_create_context / EGL 1.5 core）：
+// GLES 上下文无对应，必须剥离（透传触发 Mesa EGL_BAD_ATTRIBUTE=0x3004）。
+const EGL_CONTEXT_MINOR_VERSION_KHR: i32 = 0x30FB;
+const EGL_CONTEXT_OPENGL_PROFILE_MASK: i32 = 0x30FD; // == PROFILE_MASK_KHR
+const EGL_CONTEXT_FLAGS_KHR: i32 = 0x30FC;
+const EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY: i32 = 0x30F6;
 const EGL_OPENGL_ES_API: u32 = 0x30A0;
 const EGL_SUCCESS: u32 = 0x3000;
 const EGL_VERSION: i32 = 0x3053;
@@ -306,10 +312,13 @@ pub extern "C" fn eglCreateContext(
                 new_attribs.push(EGL_CONTEXT_CLIENT_VERSION);
                 new_attribs.push(3);
             }
-            EGL_CONTEXT_OPENGL_PROFILE_MASK => {
-                // GLES 没有 profile，跳过
-            }
-            EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY => {}
+            // 桌面 GL context 专属 attrib（KHR_create_context）剥离：GLES 无对应，
+            // 版本请求已由 EGL_CONTEXT_CLIENT_VERSION（=MAJOR_VERSION_KHR 同值）
+            // 映射为 GLES 3；透传这些 attrib 会让 Mesa 返回 EGL_BAD_ATTRIBUTE。
+            EGL_CONTEXT_OPENGL_PROFILE_MASK
+            | EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY
+            | EGL_CONTEXT_MINOR_VERSION_KHR
+            | EGL_CONTEXT_FLAGS_KHR => {}
             _ => {
                 new_attribs.push(attr);
                 new_attribs.push(value);
