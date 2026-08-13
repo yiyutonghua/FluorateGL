@@ -9,16 +9,12 @@
 | 固定管线函数（~715） | 待办（暂不实现） | [fixed_pipeline.md](fixed_pipeline.md) |
 | ANGLE 后端问题（真机） | 搁置中（m00228 暂放） | [angle.md](angle.md) |
 | 旧厂商扩展（~712） | 待评估（无签名源） | [legacy_extensions.md](legacy_extensions.md) |
-| 扩展字符串声明决策 | 策略已定（m00271） | [extensions_declaration.md](extensions_declaration.md) |
-| SPIRV-Tools Optimizer 接入 | **已实施**（阶段 1-3 完成） | [spirv_opt_pipeline.md](spirv_opt_pipeline.md) |
 
 ## 各主题要点
 
 - **固定管线（715）**：glBegin/glMatrixMode/glColor3f 等桌面 1.x-2.1 函数；北极星=GL 3.3 core 无固定管线、GLES 无对应；完整清单见 fixed_pipeline.md
 - **ANGLE（真机）**：491 行日志 3 秒崩（UBO 对齐除零、glGetString null、26 个 GLES 函数 missing）；五层链路候选①EGL context 与函数表不匹配②库名（已排除）③版本不配对；盲区=loader 无 dlerror/dladdr、egl 导出无调用日志；恢复步骤见 angle.md
 - **旧扩展（712）**：MG 有我们无、无签名源的旧厂商扩展（glAlphaFragmentOp1ATI 等）；LWJGL 基本不查询；需补则第三轮签名源（Khronos gl.xml 或 MG 手写定义解析）
-- **扩展声明**：安全可声明 4 项（internalformat_query2/KHR_no_error/anisotropic/SSO）vs 行为依赖不声明 5 类（buffer_storage 事故教训/compute/DSA/draw_instanced/TF）；当前 build_fake_extensions 按 caps 校验剔除，不因 stub 全量声明
-- **SPIRV-Tools 接入（已实施）**：pass 链 v2 = AggressiveDCE → RemoveUnusedInterfaceVariables → EliminateDeadConstant（OPT_PIPELINE_VERSION=2，env=Universal_1_5）；CompactIds（断言 abort）与 EliminateDeadMembers（std140 布局风险）不接入；性能基准 tools/bench_opt.sh；真机验证（S3-4）待办
 
 ## 约定
 
