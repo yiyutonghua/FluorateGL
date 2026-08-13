@@ -1,0 +1,103 @@
+name: Host Tests (x86_64) + Android Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl-dev libgles2-mesa-dev libgles2 libegl1 \
+            cmake ninja-build python3 g++ pkg-config
+
+      - name: Setup Rust (x86_64-unknown-linux-gnu)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          target: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: host-x86_64
+
+      # 首次构建含 shaderc build-from-source（vendored SPIRV-Tools 等，数分钟）
+      - name: Build (x86_64 host)
+        run: cargo build --target x86_64-unknown-linux-gnu
+
+      - name: Cargo test
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}
+          EGL_PLATFORM: surfaceless
+          MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
+        run: cargo test --target x86_64-unknown-linux-gnu
+
+      # 差分测试（desktop/gles/translate 三端对比；run.sh 自动建 libGLESv3.so 软链）
+      - name: Differential tests
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: bash tests/run.sh --only-diff
+
+  android-build:
+    runs-on: ubuntu-latest
+    needs: host-test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build python3
+
+      - name: Setup Rust (aarch64-linux-android)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          target: aarch64-linux-android
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          link-to-sdk: true
+
+      - name: Set NDK environment variables
+        run: |
+          echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: aarch64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Build release (Android aarch64)
+        run: cargo ndk --target aarch64-linux-android -- build --release
+
+      - name: Verify and upload artifact
+        run: |
+          ls -la target/aarch64-linux-android/release/libfluorategl.so
+      - name: Upload libfluorategl.so
+        uses: actions/upload-artifact@v4
+        with:
+          name: libfluorategl
+          path: target/aarch64-linux-android/release/libfluorategl.so
