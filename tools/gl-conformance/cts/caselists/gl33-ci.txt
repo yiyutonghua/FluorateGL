@@ -1,0 +1,54 @@
+# KHR-GL33 CI 精选清单（占位说明，实际清单由 CI 生成）
+#
+# 本文件是 gl33-ci.txt 的生成规则说明占位：真实清单不提交，由 CI job
+# （Conformance.yml 的 cts-run 阶段）从 VK-GL-CTS 仓库源码树现场裁剪生成。
+#
+# == 来源 ==
+#
+#   VK-GL-CTS 仓库（checkout 后）：
+#     external/openglcts/data/gl_cts/data/mustpass/gl/khronos_mustpass/4.6.x/gl33-main.txt
+#
+# == 裁剪规则 ==
+#
+# gl33-main.txt 为全量 KHR-GL33 mustpass（数千用例，软件渲染下 CI 耗时不可接受），
+# 按以下规则裁剪出 300-800 个代表用例：
+#
+#  1. 只保留 `KHR-GL33.` 前缀的用例行（丢弃 KHR-GL30/31/32、GL45、ES 等组）；
+#  2. 整组包含以下关键子组（组前缀匹配，如 `KHR-GL33.state_query.`）：
+#       - state_query          （状态查询与枚举值正确性——翻译层核心）
+#       - buffers              （缓冲区对象/VBO 语义）
+#       - textures             （纹理目标/格式/采样语义）
+#       - programs_and_pipelines（程序对象与管线——翻译层管线状态）
+#       - shaders              （着色器编译/链接/内建变量）
+#       - framebuffers         （FBO 语义——fbo surface 模式下尤为重要）
+#       - vertex_arrays        （顶点属性绑定）
+#       - uniforms             （uniform 定位/更新）
+#       - draw                 （draw 调用与基元语义）
+#       - sync                 （同步对象/fence）
+#       - transform_feedback   （反馈缓冲）
+#       - clip_distance / cull_distance、scissor、viewport、blend、depth_stencil、
+#         multisample（若裁剪后不足 300 用例则按需追加）
+#  3. 裁剪结果按原文件顺序排序，去重；
+#  4. 目标规模 300-800 用例：先按上述子组整组包含，超出 800 时按组内用例
+#     数由多到少截断（保留每组开头若干用例，保持组内覆盖）；不足 300 时
+#     追加子组直至达标。
+#
+# == 生成命令（CI cts-run job 内执行） ==
+#
+#   MUSTPASS=$CTS_SRC/external/openglcts/data/gl_cts/data/mustpass/gl/khronos_mustpass/4.6.x/gl33-main.txt
+#   grep '^KHR-GL33\.' "$MUSTPASS" \
+#     | grep -E '^(KHR-GL33\.(state_query|buffers|textures|programs_and_pipelines|shaders|framebuffers|vertex_arrays|uniforms|draw|sync|transform_feedback|clip_distance|cull_distance|scissor|viewport|blend|depth_stencil|multisample)\.)' \
+#     | sort -u > $RUN_DIR/gl33-ci.txt
+#   （4.6.x 取 checkout 版本实际存在的最高 4.6 小版本目录；若裁剪结果超出
+#     800 用例，按规则 4 截断——见上方说明。）
+#
+# == 使用 ==
+#
+#   python3 tools/gl-conformance/cts/scripts/run_cts_local.py \
+#       --glcts <build>/external/openglcts/modules/glcts \
+#       --lib <repo>/target/.../libfluorategl.so \
+#       --caselist $RUN_DIR/gl33-ci.txt --outdir $RUN_DIR/qpa \
+#       --waiver-file tools/gl-conformance/cts/waivers/fluorategl-fbo-harness.xml
+#
+# 注：4.6.x 目录名以 CTS 仓库实际版本为准（如 4.6.1/ 4.6.2/...）；
+# mustpass 行格式为 `KHR-GL33.<group>.<case>`，允许空行与注释行。

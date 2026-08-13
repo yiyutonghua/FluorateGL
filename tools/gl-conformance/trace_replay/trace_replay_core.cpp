@@ -1,0 +1,812 @@
+#include "trace_replay_core.hpp"
+
+#include <dlfcn.h>
+#include "apitrace_exit.hpp"
+#include "png.h"
+
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
+#include <fstream>
+#include <iomanip>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#ifndef FLUORATEGL_APITRACE_RETRACE_MAIN
+#define FLUORATEGL_APITRACE_RETRACE_MAIN main
+#endif
+
+extern "C" int FLUORATEGL_APITRACE_RETRACE_MAIN(int argc, char** argv);
+
+#if defined(__GNUC__) || defined(__clang__)
+extern "C" void fluorategl_trace_pump_events() __attribute__((weak));
+#endif
+
+namespace fluorategl_trace {
+namespace {
+
+struct RgbaImage {
+    int width = 0;
+    int height = 0;
+    std::vector<std::uint8_t> pixels;
+};
+
+class ScopedFdRedirect {
+public:
+    explicit ScopedFdRedirect(const std::string& path)
+            : stdoutCopy(dup(STDOUT_FILENO)), stderrCopy(dup(STDERR_FILENO)) {
+        int fd = open(path.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0664);
+        if (fd >= 0) {
+            dup2(fd, STDOUT_FILENO);
+            dup2(fd, STDERR_FILENO);
+            close(fd);
+        }
+    }
+
+    ~ScopedFdRedirect() {
+        fflush(stdout);
+        fflush(stderr);
+        if (stdoutCopy >= 0) {
+            dup2(stdoutCopy, STDOUT_FILENO);
+            close(stdoutCopy);
+        }
+        if (stderrCopy >= 0) {
+            dup2(stderrCopy, STDERR_FILENO);
+            close(stderrCopy);
+        }
+    }
+
+private:
+    int stdoutCopy = -1;
+    int stderrCopy = -1;
+};
+
+bool Exists(const std::string& path) {
+    struct stat st {};
+    return !path.empty() && stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+}
+
+bool EnsureDirectory(const std::string& path) {
+    if (path.empty()) {
+        return false;
+    }
+    struct stat st {};
+    if (stat(path.c_str(), &st) == 0) {
+        return S_ISDIR(st.st_mode);
+    }
+    return mkdir(path.c_str(), 0775) == 0 || errno == EEXIST;
+}
+
+std::string JsonEscape(const std::string& value) {
+    std::ostringstream out;
+    for (char ch : value) {
+        switch (ch) {
+            case '\\':
+                out << "\\\\";
+                break;
+            case '"':
+                out << "\\\"";
+                break;
+            case '\n':
+                out << "\\n";
+                break;
+            case '\r':
+                out << "\\r";
+                break;
+            case '\t':
+                out << "\\t";
+                break;
+            default:
+                out << ch;
+                break;
+        }
+    }
+    return out.str();
+}
+
+bool LoadFluorateGL(const Request& request, std::string& error) {
+    // Single-backend lane: FluorateGL renders through its llvmpipe backend.
+    setenv("FLUORATEGL_BACKEND", "llvmpipe", 1);
+    // The apitrace glproc/glws layers dlopen libfluorategl.so through this
+    // variable; the CLI's --fluorategl-library value lands here.
+    setenv("FLUORATEGL_TRACE_LIBRARY", request.fluorateglLibrary.c_str(), 1);
+    setenv("FLUORATEGL_TRACE_SURFACE", request.usePbuffer ? "pbuffer" : "window", 1);
+    if (request.coherentAsFlush) {
+        // Kept for case metadata/JSON parity with MobileGL; FluorateGL does not
+        // have a dedicated coherent-as-flush switch today.
+    }
+    if (request.fboAttachmentDumps.empty()) {
+        unsetenv("FLUORATEGL_TRACE_DUMP_FBO_ATTACHMENTS");
+    } else {
+        std::string dumpPoints;
+        for (const std::string& dumpPoint : request.fboAttachmentDumps) {
+            if (!dumpPoints.empty()) {
+                dumpPoints += ';';
+            }
+            dumpPoints += dumpPoint;
+        }
+        setenv("FLUORATEGL_TRACE_DUMP_FBO_ATTACHMENTS", dumpPoints.c_str(), 1);
+    }
+
+    void* handle = dlopen(request.fluorateglLibrary.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    if (handle == nullptr) {
+        const char* dlError = dlerror();
+        error = dlError == nullptr ? "dlopen(libfluorategl.so) failed" : dlError;
+        return false;
+    }
+    return true;
+}
+
+void ConfigureHoldEnv(const Request& request) {
+    if (request.holdMs <= 0) {
+        unsetenv("FLUORATEGL_TRACE_HOLD_MS");
+        unsetenv("FLUORATEGL_TRACE_HOLD_CALL");
+        unsetenv("FLUORATEGL_TRACE_HOLD_DONE");
+        return;
+    }
+
+    const std::string holdMs = std::to_string(request.holdMs);
+    const std::string holdCall = std::to_string(request.targetCall);
+    setenv("FLUORATEGL_TRACE_HOLD_MS", holdMs.c_str(), 1);
+    setenv("FLUORATEGL_TRACE_HOLD_CALL", holdCall.c_str(), 1);
+    unsetenv("FLUORATEGL_TRACE_HOLD_DONE");
+}
+
+bool TraceHoldAlreadyRan() {
+    const char* holdDone = getenv("FLUORATEGL_TRACE_HOLD_DONE");
+    return holdDone != nullptr && std::strcmp(holdDone, "1") == 0;
+}
+
+bool CopyFile(const std::string& from, const std::string& to) {
+    std::ifstream input(from, std::ios::binary);
+    std::ofstream output(to, std::ios::binary | std::ios::trunc);
+    if (!input || !output) {
+        return false;
+    }
+    output << input.rdbuf();
+    return static_cast<bool>(output);
+}
+
+bool ReadPngRgba(const std::string& path, RgbaImage& image, std::string& error) {
+    FILE* file = fopen(path.c_str(), "rb");
+    if (file == nullptr) {
+        error = "failed to open PNG: " + path;
+        return false;
+    }
+
+    png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+    if (png == nullptr) {
+        fclose(file);
+        error = "png_create_read_struct failed";
+        return false;
+    }
+
+    png_infop info = png_create_info_struct(png);
+    if (info == nullptr) {
+        png_destroy_read_struct(&png, nullptr, nullptr);
+        fclose(file);
+        error = "png_create_info_struct failed";
+        return false;
+    }
+
+    if (setjmp(png_jmpbuf(png)) != 0) {
+        png_destroy_read_struct(&png, &info, nullptr);
+        fclose(file);
+        error = "libpng failed to decode: " + path;
+        return false;
+    }
+
+    png_init_io(png, file);
+    png_read_info(png, info);
+
+    png_uint_32 width = png_get_image_width(png, info);
+    png_uint_32 height = png_get_image_height(png, info);
+    int colorType = png_get_color_type(png, info);
+    int bitDepth = png_get_bit_depth(png, info);
+
+    if (bitDepth == 16) {
+        png_set_strip_16(png);
+    }
+    if (colorType == PNG_COLOR_TYPE_PALETTE) {
+        png_set_palette_to_rgb(png);
+    }
+    if (colorType == PNG_COLOR_TYPE_GRAY && bitDepth < 8) {
+        png_set_expand_gray_1_2_4_to_8(png);
+    }
+    if (png_get_valid(png, info, PNG_INFO_tRNS)) {
+        png_set_tRNS_to_alpha(png);
+    }
+    if (colorType == PNG_COLOR_TYPE_GRAY || colorType == PNG_COLOR_TYPE_GRAY_ALPHA) {
+        png_set_gray_to_rgb(png);
+    }
+    if ((colorType & PNG_COLOR_MASK_ALPHA) == 0) {
+        png_set_filler(png, 0xff, PNG_FILLER_AFTER);
+    }
+
+    png_read_update_info(png, info);
+    png_size_t rowBytes = png_get_rowbytes(png, info);
+    if (width == 0 || height == 0 || rowBytes < width * 4) {
+        png_destroy_read_struct(&png, &info, nullptr);
+        fclose(file);
+        error = "decoded PNG has invalid dimensions: " + path;
+        return false;
+    }
+
+    image.width = static_cast<int>(width);
+    image.height = static_cast<int>(height);
+    image.pixels.resize(static_cast<std::size_t>(image.width) * image.height * 4);
+
+    std::vector<std::uint8_t> rowsStorage;
+    std::vector<png_bytep> rows(height);
+    if (rowBytes == width * 4) {
+        for (png_uint_32 y = 0; y < height; ++y) {
+            rows[y] = image.pixels.data() + static_cast<std::size_t>(y) * image.width * 4;
+        }
+    } else {
+        rowsStorage.resize(static_cast<std::size_t>(rowBytes) * height);
+        for (png_uint_32 y = 0; y < height; ++y) {
+            rows[y] = rowsStorage.data() + static_cast<std::size_t>(y) * rowBytes;
+        }
+    }
+
+    png_read_image(png, rows.data());
+    png_read_end(png, nullptr);
+    png_destroy_read_struct(&png, &info, nullptr);
+    fclose(file);
+
+    if (!rowsStorage.empty()) {
+        for (int y = 0; y < image.height; ++y) {
+            memcpy(image.pixels.data() + static_cast<std::size_t>(y) * image.width * 4,
+                   rowsStorage.data() + static_cast<std::size_t>(y) * rowBytes,
+                   static_cast<std::size_t>(image.width) * 4);
+        }
+    }
+
+    return true;
+}
+
+bool WritePngRgba(const std::string& path, const RgbaImage& image, std::string& error) {
+    FILE* file = fopen(path.c_str(), "wb");
+    if (file == nullptr) {
+        error = "failed to open PNG for write: " + path;
+        return false;
+    }
+
+    png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+    if (png == nullptr) {
+        fclose(file);
+        error = "png_create_write_struct failed";
+        return false;
+    }
+
+    png_infop info = png_create_info_struct(png);
+    if (info == nullptr) {
+        png_destroy_write_struct(&png, nullptr);
+        fclose(file);
+        error = "png_create_info_struct failed";
+        return false;
+    }
+
+    if (setjmp(png_jmpbuf(png)) != 0) {
+        png_destroy_write_struct(&png, &info);
+        fclose(file);
+        error = "libpng failed to write: " + path;
+        return false;
+    }
+
+    png_init_io(png, file);
+    png_set_IHDR(png, info, image.width, image.height, 8, PNG_COLOR_TYPE_RGBA,
+                 PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+    png_write_info(png, info);
+
+    std::vector<png_bytep> rows(static_cast<std::size_t>(image.height));
+    for (int y = 0; y < image.height; ++y) {
+        rows[static_cast<std::size_t>(y)] =
+                const_cast<png_bytep>(image.pixels.data() + static_cast<std::size_t>(y) * image.width * 4);
+    }
+    png_write_image(png, rows.data());
+    png_write_end(png, nullptr);
+    png_destroy_write_struct(&png, &info);
+    fclose(file);
+    return true;
+}
+
+void ForceOpaqueAlpha(RgbaImage& image) {
+    for (std::size_t i = 3; i < image.pixels.size(); i += 4) {
+        image.pixels[i] = 0xff;
+    }
+}
+
+std::string SnapshotPathForCall(const Request& request) {
+    char call[16];
+    snprintf(call, sizeof(call), "%010lld", request.targetCall);
+    return request.outputDir + "/actual." + call + ".png";
+}
+
+// The dump hook rides on apitrace's snapshot path, which only runs for calls in the -S
+// callset, so every dump point has to join the target call there.
+std::string SnapshotCallSet(const Request& request) {
+    std::string callSet = std::to_string(request.targetCall);
+    for (const std::string& dumpPoint : request.fboAttachmentDumps) {
+        const std::size_t separator = dumpPoint.find(':');
+        const std::string call = dumpPoint.substr(0, separator);
+        if (!call.empty() && call != std::to_string(request.targetCall)) {
+            callSet += "," + call;
+        }
+    }
+    return callSet;
+}
+
+int RunRetraceMain(const Request& request) {
+    std::string prefix = request.outputDir + "/actual.";
+    std::string callSet = SnapshotCallSet(request);
+
+    std::string arg0 = "fluorategl-glretrace";
+    std::string argBenchmark = "-b";
+    std::string argSingleThread = "--singlethread";
+    std::string argNoContextCheck = "--no-context-check";
+    std::string argSnapshotAlpha = "--snapshot-alpha";
+    std::string argSnapshotPrefix = "-s";
+    std::string argSnapshotCall = "-S";
+    std::string tracePath = request.tracePath;
+
+    char* argv[] = {
+            arg0.data(),
+            argBenchmark.data(),
+            argSingleThread.data(),
+            argNoContextCheck.data(),
+            argSnapshotAlpha.data(),
+            argSnapshotPrefix.data(),
+            prefix.data(),
+            argSnapshotCall.data(),
+            callSet.data(),
+            tracePath.data(),
+            nullptr,
+    };
+    return FLUORATEGL_APITRACE_RETRACE_MAIN(10, argv);
+}
+
+bool RunRetrace(const Request& request, Result& result) {
+    int status = 0;
+    ConfigureHoldEnv(request);
+    try {
+        ScopedFdRedirect redirect(request.outputDir + "/retrace.log");
+        status = RunRetraceMain(request);
+    } catch (const FluorateGLRetraceExit& retraceExit) {
+        status = retraceExit.status;
+    } catch (const std::exception& exception) {
+        result.statusCode = STATUS_RETRACE_FAILED;
+        result.message = "retrace failed with exception: " + std::string(exception.what());
+        return false;
+    } catch (...) {
+        result.statusCode = STATUS_RETRACE_FAILED;
+        result.message = "retrace failed with unknown exception";
+        return false;
+    }
+
+    if (status != 0) {
+        std::ostringstream message;
+        message << "retrace failed with status " << status;
+        result.statusCode = STATUS_RETRACE_FAILED;
+        result.message = message.str();
+        return false;
+    }
+
+    std::string snapshotPath = SnapshotPathForCall(request);
+    if (!Exists(snapshotPath)) {
+        result.statusCode = STATUS_RETRACE_FAILED;
+        result.message = "retrace completed but did not create expected snapshot: " + snapshotPath;
+        return false;
+    }
+
+    RgbaImage snapshot;
+    std::string imageError;
+    if (!ReadPngRgba(snapshotPath, snapshot, imageError)) {
+        result.statusCode = STATUS_IO_ERROR;
+        result.message = imageError.empty()
+                                 ? "failed to decode snapshot PNG: " + snapshotPath
+                                 : imageError;
+        return false;
+    }
+    ForceOpaqueAlpha(snapshot);
+    if (!WritePngRgba(result.actualPath, snapshot, imageError)) {
+        result.statusCode = STATUS_IO_ERROR;
+        result.message = imageError.empty()
+                                 ? "failed to write snapshot to actual PNG"
+                                 : imageError;
+        return false;
+    }
+    return true;
+}
+
+int ChannelValue(const RgbaImage& image, int x, int y, int channel) {
+    return image.pixels[(static_cast<std::size_t>(y) * image.width + x) * 4 + channel];
+}
+
+bool WriteDifferenceImage(const Result& result,
+                          const RgbaImage& actual,
+                          const RgbaImage& golden,
+                          int x0,
+                          int y0,
+                          int compareWidth,
+                          int compareHeight,
+                          std::string& error) {
+    if (result.diffPath.empty()) {
+        return true;
+    }
+
+    constexpr int kDiffScale = 8;
+    RgbaImage diff;
+    diff.width = actual.width;
+    diff.height = actual.height;
+    diff.pixels.assign(static_cast<std::size_t>(diff.width) * diff.height * 4, 0);
+    for (int y = 0; y < diff.height; ++y) {
+        for (int x = 0; x < diff.width; ++x) {
+            std::uint8_t* dst = diff.pixels.data() + (static_cast<std::size_t>(y) * diff.width + x) * 4;
+            dst[3] = 0xff;
+        }
+    }
+
+    for (int y = 0; y < compareHeight; ++y) {
+        for (int x = 0; x < compareWidth; ++x) {
+            int imageX = x0 + x;
+            int imageY = y0 + y;
+            int dr = std::abs(ChannelValue(actual, imageX, imageY, 0) -
+                              ChannelValue(golden, imageX, imageY, 0));
+            int dg = std::abs(ChannelValue(actual, imageX, imageY, 1) -
+                              ChannelValue(golden, imageX, imageY, 1));
+            int db = std::abs(ChannelValue(actual, imageX, imageY, 2) -
+                              ChannelValue(golden, imageX, imageY, 2));
+            bool different = dr != 0 || dg != 0 || db != 0;
+            std::uint8_t* dst = diff.pixels.data() +
+                                (static_cast<std::size_t>(imageY) * diff.width + imageX) * 4;
+            if (different) {
+                dst[0] = 0xff;
+                dst[1] = static_cast<std::uint8_t>(std::min(255, dg * kDiffScale));
+                dst[2] = static_cast<std::uint8_t>(std::min(255, db * kDiffScale));
+            } else {
+                dst[0] = static_cast<std::uint8_t>(std::min(255, dr * kDiffScale));
+                dst[1] = static_cast<std::uint8_t>(std::min(255, dg * kDiffScale));
+                dst[2] = static_cast<std::uint8_t>(std::min(255, db * kDiffScale));
+            }
+        }
+    }
+
+    return WritePngRgba(result.diffPath, diff, error);
+}
+
+void PumpTraceEvents() {
+#if defined(__GNUC__) || defined(__clang__)
+    if (fluorategl_trace_pump_events != nullptr) {
+        fluorategl_trace_pump_events();
+    }
+#endif
+}
+
+void HoldAfterRetrace(const Request& request) {
+    if (request.holdMs <= 0 || TraceHoldAlreadyRan()) {
+        return;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(request.holdMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+        PumpTraceEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+    PumpTraceEvents();
+    setenv("FLUORATEGL_TRACE_HOLD_DONE", "1", 1);
+}
+
+struct GoldenComparison {
+    std::string path;
+    RgbaImage image;
+    double ssim = -1.0;
+    long long mismatchPixels = 0;
+    int x0 = 0;
+    int y0 = 0;
+    int compareWidth = 0;
+    int compareHeight = 0;
+};
+
+double ComputeChannelSsim(const RgbaImage& actual,
+                          const RgbaImage& golden,
+                          int x0,
+                          int y0,
+                          int compareWidth,
+                          int compareHeight,
+                          unsigned channel) {
+    const double count = static_cast<double>(compareWidth) * static_cast<double>(compareHeight);
+    double sumA = 0.0;
+    double sumG = 0.0;
+    double sumAA = 0.0;
+    double sumGG = 0.0;
+    double sumAG = 0.0;
+
+    for (int y = 0; y < compareHeight; ++y) {
+        for (int x = 0; x < compareWidth; ++x) {
+            const double a = ChannelValue(actual, x0 + x, y0 + y, channel);
+            const double g = ChannelValue(golden, x0 + x, y0 + y, channel);
+            sumA += a;
+            sumG += g;
+            sumAA += a * a;
+            sumGG += g * g;
+            sumAG += a * g;
+        }
+    }
+
+    const double meanA = sumA / count;
+    const double meanG = sumG / count;
+    const double varianceA = std::max(0.0, sumAA / count - meanA * meanA);
+    const double varianceG = std::max(0.0, sumGG / count - meanG * meanG);
+    const double covariance = sumAG / count - meanA * meanG;
+
+    constexpr double kC1 = 6.5025;  // (0.01 * 255)^2
+    constexpr double kC2 = 58.5225; // (0.03 * 255)^2
+    const double luminance = (2.0 * meanA * meanG + kC1) /
+                             (meanA * meanA + meanG * meanG + kC1);
+    const double contrastStructure = (2.0 * covariance + kC2) /
+                                     (varianceA + varianceG + kC2);
+    return luminance * contrastStructure;
+}
+
+double ComputeRgbSsim(const RgbaImage& actual,
+                      const RgbaImage& golden,
+                      int x0,
+                      int y0,
+                      int compareWidth,
+                      int compareHeight) {
+    double sum = 0.0;
+    for (unsigned channel = 0; channel < 3; ++channel) {
+        sum += ComputeChannelSsim(actual, golden, x0, y0, compareWidth, compareHeight, channel);
+    }
+    return sum / 3.0;
+}
+
+bool CompareAgainstOneGolden(const Request& request,
+                             const RgbaImage& actual,
+                             const std::string& goldenPath,
+                             GoldenComparison& comparison,
+                             std::string& error) {
+    if (!Exists(goldenPath)) {
+        error = "golden_path does not exist or is not a regular file: " + goldenPath;
+        return false;
+    }
+
+    RgbaImage golden;
+    if (!ReadPngRgba(goldenPath, golden, error)) {
+        return false;
+    }
+
+    int x0 = request.cropX;
+    int y0 = request.cropY;
+    if (request.cropWidth <= 0 && request.cropHeight <= 0 &&
+        (actual.width != golden.width || actual.height != golden.height)) {
+        std::ostringstream message;
+        message << "actual image size " << actual.width << "x" << actual.height
+                << " does not match golden image size " << golden.width << "x" << golden.height
+                << ": " << goldenPath;
+        error = message.str();
+        return false;
+    }
+
+    int compareWidth = request.cropWidth > 0 ? request.cropWidth : actual.width;
+    int compareHeight = request.cropHeight > 0 ? request.cropHeight : actual.height;
+    if (compareWidth <= 0 || compareHeight <= 0 ||
+        x0 < 0 || y0 < 0 ||
+        x0 + compareWidth > actual.width ||
+        y0 + compareHeight > actual.height ||
+        x0 + compareWidth > golden.width ||
+        y0 + compareHeight > golden.height) {
+        error = "compare crop is outside actual or golden image bounds: " + goldenPath;
+        return false;
+    }
+
+    long long exactMismatch = 0;
+    for (int y = 0; y < compareHeight; ++y) {
+        for (int x = 0; x < compareWidth; ++x) {
+            bool different = false;
+            for (unsigned c = 0; c < 3; ++c) {
+                int a = ChannelValue(actual, x0 + x, y0 + y, c);
+                int g = ChannelValue(golden, x0 + x, y0 + y, c);
+                if (a != g) {
+                    different = true;
+                    break;
+                }
+            }
+            if (different) {
+                ++exactMismatch;
+            }
+        }
+    }
+
+    comparison.path = goldenPath;
+    comparison.image = std::move(golden);
+    comparison.ssim = ComputeRgbSsim(actual, comparison.image, x0, y0, compareWidth, compareHeight);
+    comparison.mismatchPixels = exactMismatch;
+    comparison.x0 = x0;
+    comparison.y0 = y0;
+    comparison.compareWidth = compareWidth;
+    comparison.compareHeight = compareHeight;
+    return true;
+}
+
+bool CompareWithGolden(const Request& request, Result& result) {
+    std::vector<std::string> goldenPaths;
+    if (!request.goldenPath.empty()) {
+        goldenPaths.push_back(request.goldenPath);
+    }
+    for (const auto& alternateGoldenPath : request.alternateGoldenPaths) {
+        if (!alternateGoldenPath.empty()) {
+            goldenPaths.push_back(alternateGoldenPath);
+        }
+    }
+
+    if (goldenPaths.empty()) {
+        result.passed = true;
+        result.statusCode = STATUS_OK;
+        result.message = "retrace completed; golden_path was not provided";
+        result.ssim = 1.0;
+        result.mismatchPixels = 0;
+        return true;
+    }
+
+    RgbaImage actual;
+    std::string pngError;
+    if (!ReadPngRgba(result.actualPath, actual, pngError)) {
+        result.statusCode = STATUS_COMPARE_FAILED;
+        result.message = pngError.empty() ? "failed to decode actual PNG" : pngError;
+        return false;
+    }
+
+    GoldenComparison bestComparison;
+    std::string comparisonError;
+    bool hasComparison = false;
+    for (const auto& goldenPath : goldenPaths) {
+        GoldenComparison comparison;
+        std::string error;
+        if (!CompareAgainstOneGolden(request, actual, goldenPath, comparison, error)) {
+            comparisonError = error;
+            continue;
+        }
+        if (!hasComparison || comparison.ssim > bestComparison.ssim) {
+            bestComparison = std::move(comparison);
+            hasComparison = true;
+        }
+    }
+
+    if (!hasComparison) {
+        result.statusCode = STATUS_COMPARE_FAILED;
+        result.message = comparisonError.empty() ? "failed to compare against any golden PNG" : comparisonError;
+        return false;
+    }
+
+    std::string diffError;
+    if (!WriteDifferenceImage(result, actual, bestComparison.image, bestComparison.x0, bestComparison.y0,
+                              bestComparison.compareWidth, bestComparison.compareHeight, diffError)) {
+        result.statusCode = STATUS_IO_ERROR;
+        result.message = diffError.empty() ? "failed to write diff PNG" : diffError;
+        return false;
+    }
+
+    result.ssim = bestComparison.ssim;
+    result.mismatchPixels = bestComparison.mismatchPixels;
+    result.matchedGoldenPath = bestComparison.path;
+    result.passed = bestComparison.ssim >= request.ssimThreshold;
+    result.statusCode = result.passed ? STATUS_OK : STATUS_COMPARE_FAILED;
+    std::ostringstream message;
+    message << std::fixed << std::setprecision(6)
+            << "retrace completed; ssim=" << bestComparison.ssim
+            << ", ssimThreshold=" << request.ssimThreshold
+            << ", mismatchPixels=" << bestComparison.mismatchPixels
+            << ", matchedGoldenPath=" << bestComparison.path;
+    result.message = message.str();
+    return result.passed;
+}
+
+} // namespace
+
+extern "C" [[noreturn]] void fluorategl_apitrace_exit(int status) {
+    throw FluorateGLRetraceExit{status};
+}
+
+bool WriteResultJson(const Request& request, const Result& result) {
+    std::ofstream file(result.resultPath, std::ios::out | std::ios::trunc);
+    if (!file) {
+        return false;
+    }
+    file << "{\n";
+    file << "  \"passed\": " << (result.passed ? "true" : "false") << ",\n";
+    file << "  \"statusCode\": " << result.statusCode << ",\n";
+    file << "  \"message\": \"" << JsonEscape(result.message) << "\",\n";
+    file << "  \"tracePath\": \"" << JsonEscape(request.tracePath) << "\",\n";
+    file << "  \"goldenPath\": \"" << JsonEscape(request.goldenPath) << "\",\n";
+    file << "  \"alternateGoldenPaths\": [";
+    for (std::size_t i = 0; i < request.alternateGoldenPaths.size(); ++i) {
+        if (i > 0) {
+            file << ", ";
+        }
+        file << "\"" << JsonEscape(request.alternateGoldenPaths[i]) << "\"";
+    }
+    file << "],\n";
+    file << "  \"matchedGoldenPath\": \"" << JsonEscape(result.matchedGoldenPath) << "\",\n";
+    file << "  \"actualPath\": \"" << JsonEscape(result.actualPath) << "\",\n";
+    file << "  \"diffPath\": \"" << JsonEscape(result.diffPath) << "\",\n";
+    file << "  \"backend\": \"" << JsonEscape(request.backend) << "\",\n";
+    file << "  \"targetFrame\": " << request.targetFrame << ",\n";
+    file << "  \"targetCall\": " << request.targetCall << ",\n";
+    file << "  \"width\": " << request.width << ",\n";
+    file << "  \"height\": " << request.height << ",\n";
+    file << "  \"cropX\": " << request.cropX << ",\n";
+    file << "  \"cropY\": " << request.cropY << ",\n";
+    file << "  \"cropWidth\": " << request.cropWidth << ",\n";
+    file << "  \"cropHeight\": " << request.cropHeight << ",\n";
+    file << std::fixed << std::setprecision(9);
+    file << "  \"ssim\": " << result.ssim << ",\n";
+    file << "  \"ssimThreshold\": " << request.ssimThreshold << ",\n";
+    file << "  \"usePbuffer\": " << (request.usePbuffer ? "true" : "false") << ",\n";
+    file << "  \"holdMs\": " << request.holdMs << ",\n";
+    file << "  \"mismatchPixels\": " << result.mismatchPixels << "\n";
+    file << "}\n";
+    return true;
+}
+
+Result RunTraceReplay(const Request& request) {
+    Result result;
+    result.resultPath = request.outputDir + "/result.json";
+    result.actualPath = request.outputDir + "/actual.png";
+    result.diffPath = request.diffPath;
+
+    if (!EnsureDirectory(request.outputDir)) {
+        result.statusCode = STATUS_IO_ERROR;
+        result.message = "failed to create output directory: " + request.outputDir;
+        return result;
+    }
+
+    if (request.backend != "DirectGLES") {
+        result.statusCode = STATUS_INVALID_ARGUMENT;
+        result.message = "backend must be DirectGLES (single-backend lane)";
+        return result;
+    }
+
+    if (!Exists(request.tracePath)) {
+        result.statusCode = STATUS_INVALID_ARGUMENT;
+        result.message = "trace_path does not exist or is not a regular file";
+        return result;
+    }
+
+    if (request.targetCall < 0) {
+        result.statusCode = STATUS_INVALID_ARGUMENT;
+        result.message = "target_call must be set for dump-images style replay";
+        return result;
+    }
+
+    std::string fluorateglError;
+    if (!LoadFluorateGL(request, fluorateglError)) {
+        result.statusCode = STATUS_FLUORATEGL_LOAD_ERROR;
+        result.message = "failed to load FluorateGL: " + fluorateglError;
+        return result;
+    }
+
+    if (!RunRetrace(request, result)) {
+        HoldAfterRetrace(request);
+        return result;
+    }
+
+    HoldAfterRetrace(request);
+    CompareWithGolden(request, result);
+    return result;
+}
+
+} // namespace fluorategl_trace

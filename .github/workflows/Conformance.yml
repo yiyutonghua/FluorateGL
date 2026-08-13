@@ -1,0 +1,552 @@
+name: GL Conformance
+
+# 一致性验证体系（CTS/piglit/apitrace/selfcheck），独立于功能测试 Test.yml。
+# 与 MobileGL 验证体系对应；详见 tools/gl-conformance/README.md。
+# 加载机制：所有宿主 dlopen libfluorategl.so（统一环境组 common/env.sh，
+# 从不 LD_PRELOAD、从不以 libEGL*/libGL* 命名）。
+#
+# 触发：push/PR 仅当 tools/gl-conformance/** 或本文件变更（避免与 Test.yml
+# 全量重复构建）；workflow_dispatch 可用 inputs.layers 选择跑哪层。
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'tools/gl-conformance/**'
+      - '.github/workflows/Conformance.yml'
+      - '.gitignore'
+  pull_request:
+    paths:
+      - 'tools/gl-conformance/**'
+      - '.github/workflows/Conformance.yml'
+      - '.gitignore'
+  workflow_dispatch:
+    inputs:
+      layers:
+        description: '运行哪层验证（selfcheck 恒跑）'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - piglit
+          - cts
+          - trace
+
+# ---- 基础常量 ----
+env:
+  FLUORATEGL_BACKEND: llvmpipe
+  EGL_PLATFORM: surfaceless
+  MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
+  LIBGL_ALWAYS_SOFTWARE: "1"
+
+jobs:
+  # ==================== selfcheck（P0-1，恒跑） ====================
+  # dlopen 自检：EGL 初始化 + GL 3.3 core 上下文 + 版本伪装校验。
+  selfcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl-dev libgles2-mesa-dev libgles2 libegl1 \
+            cmake ninja-build python3 g++ pkg-config gcc
+
+      - name: Setup Rust (x86_64-unknown-linux-gnu)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          target: x86_64-unknown-linux-gnu
+
+      # 与 Test.yml 的 rust-cache key 区分，避免 cache 抖动互相失效
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: conformance-host-x86_64
+
+      # 首次构建含 shaderc build-from-source（vendored SPIRV-Tools 等，数分钟）
+      - name: Build libfluorategl (x86_64 host)
+        run: cargo build --target x86_64-unknown-linux-gnu
+
+      - name: Build selfcheck
+        run: gcc -O2 -Wall -Wextra tools/gl-conformance/selfcheck/selfcheck.c -o selfcheck -ldl
+
+      - name: Run selfcheck (dlopen libfluorategl.so)
+        run: |
+          ./selfcheck target/x86_64-unknown-linux-gnu/debug/libfluorategl.so | tee selfcheck.log
+          # 校验关键输出行（对应 selfcheck.c 实际格式）：
+          # - EGL 初始化 + GL 3.3 core 上下文创建（makeCurrent 允许 pbuffer fallback）
+          grep -q "EGL initialized" selfcheck.log
+          grep -q "eglCreateContext(GL 3.3 core) OK" selfcheck.log
+          grep -qE "eglMakeCurrent(surfaceless|pbuffer) OK" selfcheck.log
+          # - 版本伪装（GL_VERSION 必须报告 3.3.0）
+          grep -q "GL_VERSION:  3.3.0" selfcheck.log
+          # - 收尾成功标记
+          grep -q "Self-check finished OK." selfcheck.log
+          echo "selfcheck: all assertions passed"
+
+  # ==================== piglit（P0-2） ====================
+
+  # 构建 waffle（打 patch，只开 surfaceless_egl）+ piglit（打 patch），
+  # 产出物打包传 artifact 供 piglit-run 使用。
+  piglit-build:
+    if: ${{ github.event_name != 'workflow_dispatch' || contains(github.event.inputs.layers, 'all') || contains(github.event.inputs.layers, 'piglit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      WORK: ${{ github.workspace }}/piglit-work
+      WAFFLE_VER: v1.9.0
+      # piglit 无发布 tag：跟随 main；升级 main 后需重生成 baseline
+      # （tools/gl-conformance/piglit/baseline/）
+      PIGLIT_REF: main
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build meson python3-venv python3-pip \
+            gcc g++ pkg-config ccache \
+            libegl-dev libgles2-mesa-dev libgles2 libegl1
+
+      - name: Clone waffle + piglit
+        run: |
+          mkdir -p "$WORK"
+          git clone --depth 1 --branch "$WAFFLE_VER" \
+            https://gitlab.freedesktop.org/mesa/waffle.git "$WORK/waffle"
+          git clone --depth 1 --branch "$PIGLIT_REF" \
+            https://gitlab.freedesktop.org/mesa/piglit.git "$WORK/piglit"
+
+      - name: Apply FluorateGL patches
+        run: |
+          git -C "$WORK/waffle" apply \
+            "${{ github.workspace }}/tools/gl-conformance/piglit/patches/waffle-fluorategl.patch"
+          git -C "$WORK/piglit" apply \
+            "${{ github.workspace }}/tools/gl-conformance/piglit/patches/piglit-fluorategl.patch"
+
+      - name: Python venv (mako/numpy/packaging)
+        run: |
+          python3 -m venv "$WORK/venv"
+          "$WORK/venv/bin/pip" install --quiet mako numpy packaging
+
+      - name: Build waffle (meson, surfaceless_egl only)
+        run: |
+          cd "$WORK/waffle"
+          meson setup build -Dbuildtype=release -Dsurfaceless_egl=enabled \
+            -Dglx=disabled -Dx11_egl=disabled -Dgbm=disabled -Dwayland=disabled \
+            -Dbuild-tests=false -Dbuild-examples=false -Dprefix="$WORK/prefix"
+          ninja -C build
+          meson install -C build
+
+      - name: Build piglit (cmake, GL tests only)
+        env:
+          PKG_CONFIG_LIBDIR: ${{ env.WORK }}/prefix/lib/pkgconfig
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+        run: |
+          cd "$WORK/piglit"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DPIGLIT_USE_WAFFLE=ON -DPIGLIT_BUILD_GL_TESTS=ON \
+            -DPIGLIT_BUILD_GLES1_TESTS=OFF -DPIGLIT_BUILD_GLES2_TESTS=OFF \
+            -DPIGLIT_BUILD_GLES3_TESTS=OFF -DPIGLIT_BUILD_EGL_TESTS=OFF \
+            -DPIGLIT_BUILD_GLX_TESTS=OFF -DPIGLIT_BUILD_WGL_TESTS=OFF \
+            -DPIGLIT_BUILD_CL_TESTS=OFF -DPIGLIT_BUILD_VK_TESTS=OFF \
+            -DPIGLIT_BUILD_DMA_BUF_TESTS=OFF -DPIGLIT_USE_GBM=OFF \
+            -DPIGLIT_USE_WAYLAND=OFF -DPIGLIT_USE_X11=OFF \
+            -DPYTHON_EXECUTABLE="$WORK/venv/bin/python"
+          ninja -C build
+
+      - name: Cache ccache (piglit)
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: conformance-piglit-ccache-${{ hashFiles('tools/gl-conformance/piglit/patches/*') }}
+          restore-keys: |
+            conformance-piglit-ccache-
+
+      - name: Upload piglit workdir
+        uses: actions/upload-artifact@v4
+        with:
+          name: piglit-work
+          path: ${{ env.WORK }}
+          retention-days: 7
+
+  # 跑精选 piglit 清单（waffle dlopen libfluorategl.so）+ 基线回归对比。
+  # 首轮（无 baseline/）只产结果不失败；后续轮 bad 集合必须 ⊆ 基线 bad 集合。
+  piglit-run:
+    if: ${{ github.event_name != 'workflow_dispatch' || contains(github.event.inputs.layers, 'all') || contains(github.event.inputs.layers, 'piglit') }}
+    needs: piglit-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      WORK: ${{ github.workspace }}/piglit-work
+      LIB: ${{ github.workspace }}/target/x86_64-unknown-linux-gnu/release/libfluorategl.so
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (x86_64-unknown-linux-gnu, release)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          target: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo registry and build artifacts (release)
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: conformance-host-x86_64-release
+
+      - name: Build libfluorategl (release)
+        run: cargo build --target x86_64-unknown-linux-gnu --release
+
+      - name: Download piglit workdir
+        uses: actions/download-artifact@v4
+        with:
+          name: piglit-work
+          path: ${{ env.WORK }}
+
+      - name: Generate CI test list (gen_lists.sh --ci)
+        env:
+          PIGLIT_ROOT: ${{ env.WORK }}/piglit
+          PIGLIT_BUILD_DIR: ${{ env.WORK }}/piglit/build
+          PYTHON: ${{ env.WORK }}/venv/bin/python
+        run: |
+          bash tools/gl-conformance/piglit/gen_lists.sh --ci gl33-ci.list
+          wc -l gl33-ci.list
+
+      - name: Run piglit against FluorateGL
+        run: |
+          python3 tools/gl-conformance/piglit/run_piglit_local.py \
+            --piglit-root "$WORK/piglit" --list gl33-ci.list \
+            --library "$LIB" \
+            --waffle-dir "$WORK/prefix/lib" \
+            --wflinfo "$WORK/prefix/bin/wflinfo" \
+            --timeout 120 \
+            --out results
+          echo "===== summary ====="
+          cat results/summary.txt
+
+      - name: Compare with baseline (fail on regression only)
+        run: |
+          if [ -f tools/gl-conformance/piglit/baseline/results.json ]; then
+            python3 tools/gl-conformance/piglit/compare_results.py \
+              results/results.json tools/gl-conformance/piglit/baseline/results.json \
+              -o baseline-diff.md
+            # 回归判定：新 bad 集合必须是基线 bad 集合的子集
+            python3 - <<'EOF'
+            import json, sys
+            BAD = ('crash', 'timeout', 'fail', 'missing', 'notrun', 'warn')
+            new  = json.load(open('results/results.json'))['tests']
+            base = json.load(open('tools/gl-conformance/piglit/baseline/results.json'))['tests']
+            new_bad  = {n for n, t in new.items()  if t['status'] in BAD}
+            base_bad = {n for n, t in base.items() if t['status'] in BAD}
+            regressed = sorted(new_bad - base_bad)
+            fixed     = sorted(base_bad - new_bad)
+            print(f"regressed: {len(regressed)}, fixed: {len(fixed)}")
+            for n in regressed:
+                print(f"  REGRESSION {n}: base={base[n]['status']} new={new[n]['status']}")
+            if regressed:
+                sys.exit(1)
+            EOF
+          else
+            echo "no tools/gl-conformance/piglit/baseline/ yet — first run records results only"
+          fi
+
+      - name: Upload piglit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: piglit-results
+          path: |
+            results/
+            baseline-diff.md
+          retention-days: 7
+
+  # ==================== CTS（P0-3） ====================
+
+  # 构建 glcts（VK-GL-CTS @ vulkan-cts-1.3.10.0，DEQP_TARGET=fluorategl-desktop：
+  # eglw 动态 dlopen libfluorategl.so，不链接系统 EGL/GL）。
+  cts-build:
+    if: ${{ github.event_name != 'workflow_dispatch' || contains(github.event.inputs.layers, 'all') || contains(github.event.inputs.layers, 'cts') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CTS: ${{ github.workspace }}/VK-GL-CTS
+      CTS_TAG: vulkan-cts-1.3.10.0
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build gcc g++ python3 pkg-config ccache
+
+      - name: Clone VK-GL-CTS
+        run: |
+          git clone --depth 1 --branch "$CTS_TAG" \
+            https://github.com/KhronosGroup/VK-GL-CTS.git "$CTS"
+
+      - name: Install FluorateGL target + platform port
+        run: |
+          mkdir -p "$CTS/targets/fluorategl-desktop"
+          cp tools/gl-conformance/cts/targets/fluorategl-desktop.cmake \
+            "$CTS/targets/fluorategl-desktop/"
+          mkdir -p "$CTS/framework/platform/fluorategl"
+          cp tools/gl-conformance/cts/platform/tcuFluorateGLPlatform.cpp \
+             tools/gl-conformance/cts/platform/tcuFluorateGLPlatform.hpp \
+            "$CTS/framework/platform/fluorategl/"
+
+      - name: Configure glcts
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+        run: |
+          cmake -S "$CTS" -B "$CTS/build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DDEQP_TARGET=fluorategl-desktop
+
+      - name: Build glcts (gl33 相关模块)
+        run: |
+          cmake --build "$CTS/build" --target glcts -j2
+          ls -la "$CTS/build/modules/glcts/glcts"
+
+      - name: Cache ccache (cts)
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: conformance-cts-ccache-${{ hashFiles('tools/gl-conformance/cts/**') }}
+          restore-keys: |
+            conformance-cts-ccache-
+
+      - name: Upload CTS build
+        uses: actions/upload-artifact@v4
+        with:
+          name: cts-build
+          path: ${{ env.CTS }}/build
+          retention-days: 7
+
+  # 跑精选 GL33 清单（自 khronos_mustpass gl33-main.txt 现场裁剪），
+  # 崩溃自动 resume（run_cts_local.py），产出 qpa + summary。
+  # 首轮只记录不失败（无基线）；waiver 处理 harness-FBO 已知误报。
+  cts-run:
+    if: ${{ github.event_name != 'workflow_dispatch' || contains(github.event.inputs.layers, 'all') || contains(github.event.inputs.layers, 'cts') }}
+    needs: cts-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      CTS: ${{ github.workspace }}/VK-GL-CTS
+      LIB: ${{ github.workspace }}/target/x86_64-unknown-linux-gnu/release/libfluorategl.so
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (x86_64-unknown-linux-gnu, release)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          target: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo registry and build artifacts (release)
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: conformance-host-x86_64-release
+
+      - name: Build libfluorategl (release)
+        run: cargo build --target x86_64-unknown-linux-gnu --release
+
+      - name: Download CTS build
+        uses: actions/download-artifact@v4
+        with:
+          name: cts-build
+          path: ${{ env.CTS }}/build
+
+      - name: Generate GL33 CI caselist (300-800 cases, from khronos_mustpass)
+        run: |
+          MUSTPASS=$(find "$CTS" -name gl33-main.txt \
+            -path '*khronos_mustpass*' | head -1)
+          test -n "$MUSTPASS" || { echo "gl33-main.txt not found"; exit 1; }
+          echo "mustpass: $MUSTPASS"
+          grep '^KHR-GL33' "$MUSTPASS" | head -500 > gl33-ci.list
+          wc -l gl33-ci.list
+
+      - name: Run glcts (resume-on-crash runner)
+        run: |
+          python3 tools/gl-conformance/cts/scripts/run_cts_local.py \
+            --glcts "$CTS/build/modules/glcts/glcts" \
+            --lib "$LIB" \
+            --caselist gl33-ci.list \
+            --outdir cts-qpa \
+            --waiver-file tools/gl-conformance/cts/waivers/fluorategl-fbo-harness.xml \
+            --env FLUORATEGL_LOG=warn
+          python3 tools/gl-conformance/cts/scripts/qpa_report.py \
+            cts-qpa --json cts-summary.json --label cts-gl33-ci
+          cat cts-summary.json
+
+      - name: Upload CTS results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cts-results
+          path: |
+            cts-qpa/
+            cts-summary.json
+            gl33-ci.list
+          retention-days: 7
+
+  # ==================== trace replay（P0-4） ====================
+
+  # 生成 retrace 矩阵（38 个 CI case 名）。
+  trace-cases:
+    if: ${{ github.event_name != 'workflow_dispatch' || contains(github.event.inputs.layers, 'all') || contains(github.event.inputs.layers, 'trace') }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.cases.outputs.matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Emit CI case list
+        id: cases
+        run: |
+          echo "matrix=$(python3 tools/gl-conformance/trace_replay/trace_cases.py --ci --format names)" >> "$GITHUB_OUTPUT"
+
+  # 水合全部 fixture（MobileGL mirror → LFS 端点，oid 校验），打包传 artifact。
+  trace-fixtures:
+    if: ${{ github.event_name != 'workflow_dispatch' || contains(github.event.inputs.layers, 'all') || contains(github.event.inputs.layers, 'trace') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Fetch all CI fixtures (mirror → LFS, oid-verified)
+        run: |
+          for case in $(python3 tools/gl-conformance/trace_replay/trace_cases.py --ci --format names | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)))'); do
+            bash tools/gl-conformance/trace_replay/scripts/fetch-trace-fixture-lfs.sh "$case"
+          done
+          ls -la tools/gl-conformance/trace_replay/fixtures/ | wc -l
+
+      - name: Upload fixtures bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: trace-fixtures
+          path: tools/gl-conformance/trace_replay/fixtures/
+          retention-days: 7
+
+  # 构建 retrace runner（内嵌 apitrace 库 + 定制 glproc/glws）+ release lib，
+  # 打包传 artifact；retrace 矩阵只下载不重复构建。
+  build-retrace:
+    if: ${{ github.event_name != 'workflow_dispatch' || contains(github.event.inputs.layers, 'all') || contains(github.event.inputs.layers, 'trace') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      WORK: ${{ github.workspace }}/retrace-work
+      LIB: ${{ github.workspace }}/target/x86_64-unknown-linux-gnu/release/libfluorategl.so
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build gcc g++ python3 pkg-config \
+            libpng-dev zlib1g-dev libzstd-dev libsnappy-dev libbrotli-dev
+
+      - name: Setup Rust (x86_64-unknown-linux-gnu, release)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          target: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo registry and build artifacts (release)
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: conformance-host-x86_64-release
+
+      - name: Build libfluorategl (release)
+        run: cargo build --target x86_64-unknown-linux-gnu --release
+
+      - name: Clone apitrace
+        run: |
+          mkdir -p "$WORK"
+          git clone --depth 1 https://github.com/KhronosGroup/apitrace.git "$WORK/apitrace"
+
+      - name: Configure + build retrace runner
+        run: |
+          cmake -S tools/gl-conformance/trace_replay -B build-retrace -G Ninja \
+            -DAPITRACE_ROOT="$WORK/apitrace" \
+            -DFLUORATEGL_TRACE_REPLAY_LIBRARY="$LIB"
+          cmake --build build-retrace --target fluorategl_trace_replay -j2
+          # 注册的 ctest 用例数（38 DirectGLES）
+          ctest --test-dir build-retrace -N | grep -c 'FluorateGLTraceReplay' || true
+
+      - name: Upload retrace runner bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrace-runner
+          path: |
+            build-retrace/
+            target/x86_64-unknown-linux-gnu/release/libfluorategl.so
+          retention-days: 7
+
+  # 每 case 一个矩阵 job：下载 runner + fixture 后单跑对应 ctest。
+  # 环境组由 CMake set_tests_properties 注入；结果 always() 上传。
+  retrace:
+    if: ${{ github.event_name != 'workflow_dispatch' || contains(github.event.inputs.layers, 'all') || contains(github.event.inputs.layers, 'trace') }}
+    needs: [trace-cases, trace-fixtures, build-retrace]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        case: ${{ fromJson(needs.trace-cases.outputs.matrix) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download retrace runner bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: retrace-runner
+          path: ${{ github.workspace }}
+
+      - name: Download fixtures bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: trace-fixtures
+          path: tools/gl-conformance/trace_replay/fixtures/
+
+      - name: Run retrace case
+        id: retrace
+        env:
+          CASE: ${{ matrix.case }}
+        run: |
+          # fixture 覆盖到 configure 时写入的绝对路径（与 runner 一致）
+          ctest --test-dir build-retrace \
+            -R "^FluorateGLTraceReplay\.${CASE}\.DirectGLES$" \
+            --output-on-failure
+
+      - name: Upload retrace artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrace-${{ matrix.case }}-DirectGLES
+          path: |
+            build-retrace/${{ matrix.case }}/DirectGLES/
+            build-retrace/${{ matrix.case }}/actual-images/
+          retention-days: 7

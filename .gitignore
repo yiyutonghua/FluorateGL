@@ -1,6 +1,17 @@
 /target
 /.opencode
 /log
-/tools
+# tools/ 白名单模式：本地杂项忽略，但入库工具（gen_stub_exports/bench_opt/
+# gl/gl-conformance 验证体系）显式放行
+/tools/*
+!/tools/README.md
+!/tools/bench_opt.sh
+!/tools/dump/
+!/tools/gen_stub_exports.py
+!/tools/gl/
+!/tools/gl-conformance/
+# Python 字节码（脚本旁自动生成，不入库）
+__pycache__/
+*.pyc
 *.class
 *.jar
