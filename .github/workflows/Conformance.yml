@@ -97,7 +97,7 @@ jobs:
           # - EGL 初始化 + GL 3.3 core 上下文创建（makeCurrent 允许 pbuffer fallback）
           grep -q "EGL initialized" selfcheck.log
           grep -q "eglCreateContext(GL 3.3 core) OK" selfcheck.log
-          grep -qE "eglMakeCurrent(surfaceless|pbuffer) OK" selfcheck.log
+          grep -qE "eglMakeCurrent\((surfaceless|pbuffer)\) OK" selfcheck.log
           # - 版本伪装（GL_VERSION 必须报告 3.3.0）
           grep -q "GL_VERSION:  3.3.0" selfcheck.log
           # - 收尾成功标记
@@ -167,7 +167,9 @@ jobs:
 
       - name: Build piglit (cmake, GL tests only)
         env:
-          PKG_CONFIG_LIBDIR: ${{ env.WORK }}/prefix/lib/pkgconfig
+          # PKG_CONFIG_PATH 追加（非 LIBDIR 覆盖）：waffle-1.pc 在 prefix，
+          # 但系统 egl.pc 仍需默认路径可搜（waffle-1.pc 的 Requires: egl）。
+          PKG_CONFIG_PATH: ${{ env.WORK }}/prefix/lib/pkgconfig
           CCACHE_DIR: ${{ github.workspace }}/.ccache
         run: |
           cd "$WORK/piglit"
@@ -349,7 +351,8 @@ jobs:
         run: |
           cmake --build "$CTS/build" --target glcts -j2
           # glcts 产物在 external/openglcts/modules/ 下（CTS external 目录布局）
-          ls -la "$CTS/build/external/openglcts/modules/glcts/glcts"
+          # glcts 产物本身即 modules/glcts 路径（无 glcts/ 目录层）
+          ls -la "$CTS/build/external/openglcts/modules/glcts"
 
       - name: Cache ccache (cts)
         uses: actions/cache@v4
@@ -413,7 +416,7 @@ jobs:
       - name: Run glcts (resume-on-crash runner)
         run: |
           python3 tools/gl-conformance/cts/scripts/run_cts_local.py \
-            --glcts "$CTS/build/external/openglcts/modules/glcts/glcts" \
+            --glcts "$CTS/build/external/openglcts/modules/glcts" \
             --lib "$LIB" \
             --caselist gl33-ci.list \
             --outdir cts-qpa \
@@ -492,7 +495,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             cmake ninja-build gcc g++ python3 pkg-config \
-            libpng-dev zlib1g-dev libzstd-dev libsnappy-dev libbrotli-dev
+            libpng-dev libgles2-mesa-dev zlib1g-dev libzstd-dev libsnappy-dev libbrotli-dev
 
       - name: Setup Rust (x86_64-unknown-linux-gnu, release)
         uses: dtolnay/rust-toolchain@stable
