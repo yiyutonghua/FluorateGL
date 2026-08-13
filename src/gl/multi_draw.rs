@@ -60,6 +60,7 @@ fn is_stub(dispatch: &GlesDispatch, ptr: *const ()) -> bool {
 /// - 负值：注入 GL_INVALID_VALUE（GL 3.3：drawcount 为负生成 INVALID_VALUE；
 ///   GL 4.5 放宽为 no-op——取 3.3 严格语义，与本项目北极星一致）
 /// - 零：无操作无错误
+///
 /// 返回 true 表示调用方应立即 return（不执行任何 draw）。
 fn handle_drawcount(drawcount: i32) -> bool {
     if drawcount < 0 {
@@ -306,12 +307,12 @@ pub extern "C" fn glMultiDrawElementsIndirect(
         prepare_for_draw(dispatch);
         // D4：restart——命令流在 GPU buffer 中无法重写（MG 同款：固定哨兵
         // 场景由驱动 FIXED_INDEX 生效；自定义 index 无法模拟，告警一次）
-        if restart_needs_rewrite(dispatch, type_) {
-            if !RESTART_INDIRECT_WARNED.swap(true, Ordering::Relaxed) {
-                log::warn!(
-                    "[FluorateGL] glMultiDrawElementsIndirect: GL_PRIMITIVE_RESTART 自定义索引无法在 indirect draw 模拟，restart 将被忽略"
-                );
-            }
+        if restart_needs_rewrite(dispatch, type_)
+            && !RESTART_INDIRECT_WARNED.swap(true, Ordering::Relaxed)
+        {
+            log::warn!(
+                "[FluorateGL] glMultiDrawElementsIndirect: GL_PRIMITIVE_RESTART 自定义索引无法在 indirect draw 模拟，restart 将被忽略"
+            );
         }
         // C1：以符号存在性为主导（GLES 3.2 core / GL_EXT_multi_draw_indirect）
         let supported = !is_stub(dispatch, dispatch.multi_draw_elements_indirect as *const ());
@@ -434,12 +435,12 @@ pub extern "C" fn glMultiDrawElementsIndirectCount(
         prepare_for_draw(dispatch);
         // D4：restart——同 glMultiDrawElementsIndirect（命令流不可重写，
         // 固定哨兵由驱动生效，自定义 index 告警一次）
-        if restart_needs_rewrite(dispatch, type_) {
-            if !RESTART_INDIRECT_WARNED.swap(true, Ordering::Relaxed) {
-                log::warn!(
-                    "[FluorateGL] glMultiDrawElementsIndirectCount: GL_PRIMITIVE_RESTART 自定义索引无法在 indirect draw 模拟，restart 将被忽略"
-                );
-            }
+        if restart_needs_rewrite(dispatch, type_)
+            && !RESTART_INDIRECT_WARNED.swap(true, Ordering::Relaxed)
+        {
+            log::warn!(
+                "[FluorateGL] glMultiDrawElementsIndirectCount: GL_PRIMITIVE_RESTART 自定义索引无法在 indirect draw 模拟，restart 将被忽略"
+            );
         }
         // C1：以符号存在性为主导（GLES 无对应，恒 stub → 恒 CPU 模拟）
         let supported = !is_stub(
@@ -577,9 +578,9 @@ struct CountComputeCache {
 
 thread_local! {
     static COUNT_COMPUTE: std::cell::RefCell<Option<CountComputeCache>> =
-        std::cell::RefCell::new(None);
+        const { std::cell::RefCell::new(None) };
     /// 编译失败 latch：本线程（本上下文）内不再重试编译（MG g_count_failed 同款）。
-    static COUNT_COMPUTE_FAILED: std::cell::Cell<bool> = std::cell::Cell::new(false);
+    static COUNT_COMPUTE_FAILED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// 编译 compaction 程序并创建 scratch buffers（MG compile_compute_program +
@@ -763,7 +764,7 @@ fn mg_indirect_count(
     // 不满足 → CPU 兜底。drawcount<0 也在此拦截 → CPU 路径（其语义为不执行））
     if stride < 0
         || (src_stride % 4) != 0
-        || (src_off % 4) != 0
+        || !src_off.is_multiple_of(4)
         || (drawcount % 4) != 0
         || drawcount < 0
     {
@@ -842,12 +843,8 @@ fn mg_indirect_count(
     let mut prev_start = [0i64; 3];
     let mut prev_size = [0i64; 3];
     unsafe {
-        for i in 0..3 {
-            (dispatch.get_integeri_v)(
-                GL_SHADER_STORAGE_BUFFER_BINDING,
-                i as u32,
-                &mut prev_base[i],
-            );
+        for (i, slot) in prev_base.iter_mut().enumerate() {
+            (dispatch.get_integeri_v)(GL_SHADER_STORAGE_BUFFER_BINDING, i as u32, slot);
         }
         if have_64 {
             for i in 0..3 {
@@ -962,7 +959,7 @@ fn mg_indirect_count(
     if max_groups <= 0 {
         max_groups = 65535;
     }
-    let groups = ((maxdrawcount as u64) + 63) / 64;
+    let groups = (maxdrawcount as u64).div_ceil(64);
     if groups > max_groups as u64 {
         log::warn!(
             "[FluorateGL] IndirectCount compaction: work group 数 {} 超限 {}，走 CPU 路径",

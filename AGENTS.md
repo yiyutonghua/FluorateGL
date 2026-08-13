@@ -31,8 +31,7 @@ Android GLES 3.1+ 上，对外伪装 GL 3.3 / GLSL 3.30 / EGL 1.4。产物 libfl
 
 ## 环境变量
 
-- 完整环境变量表见 README；此处仅列 README 未收录的两条：
-- `FLUORATEGL_FAIL_FAST`：1 时后端加载失败直接 abort（代码支持，README 未收录）
+- 完整环境变量表见 README；此处仅列 README 未收录的一条：
 - `GLSLANG_DUMP_FAILURES=<dir>`：glslang_suite 失败时导出失败用例
 
 ## 关键机制

@@ -167,8 +167,8 @@ pub extern "C" fn glGetDoublev(pname: u32, data: *mut f64) {
     });
     unsafe {
         let n = get_float_components(pname);
-        for i in 0..n {
-            *data.add(i) = temp[i] as f64;
+        for (i, v) in temp.iter().take(n).enumerate() {
+            *data.add(i) = *v as f64;
         }
     }
 }

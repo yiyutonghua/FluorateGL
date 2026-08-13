@@ -1,13 +1,14 @@
 //! SPIRV-Tools Optimizer 接入模块（阶段 1）
 //!
 //! shaderc(OpenGL 450/Zero) → 本模块（AggressiveDCE + RemoveUnusedInterfaceVariables）
-//! → spirv-cross。Spike 已验证（TODO/spirv_opt_pipeline.md + /tmp/spirv-spike）：
+//! → spirv-cross。Spike 已验证（/tmp/spirv-spike；方案文档随实施完毕移出 TODO/）：
 //! 活跃 uniform/UBO 成员名全保留、diff 仅死代码移除、opt 平均 638µs。
 //!
 //! 关键决策（spike 修正项）：
 //! - **env 用 `TargetEnv::Universal_1_5`**——我们的 shaderc 输出 SPIR-V 1.5，
 //!   Vulkan_1_1（上限 1.3）与 OpenGL_4_5（上限 1.0）均拒绝该输入（实测报错）
-//! - pass 链固定 AggressiveDCE + RemoveUnusedInterfaceVariables（阶段 2 才加更多）
+//! - pass 链 v2 = AggressiveDCE + RemoveUnusedInterfaceVariables + EliminateDeadConstant
+//!   （S2-2 接入；CompactIds 断言 abort 与 EliminateDeadMembers std140 布局风险不接入）
 //! - `OPT_PIPELINE_VERSION` 随 pass 链变更递增（cache key 用，防旧缓存错误命中）
 
 use spirv_tools::opt::Optimizer;

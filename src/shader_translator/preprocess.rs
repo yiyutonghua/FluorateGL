@@ -156,27 +156,25 @@ pub(crate) fn convert_atomic_counter_to_ssbo(source: &str) -> (String, bool) {
     });
     let mut call_found = false;
     let mut has_call = |r: &Regex, s: &str, repl: &str| -> String {
-        let out = r
-            .replace_all(s, |caps: &regex::Captures| {
-                call_found = true;
-                let name = &caps[1];
-                let idx = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-                match repl {
-                    "incr" => format!("atomicAdd({}{}, 1u)", name, idx),
-                    "decr" => format!("atomicAdd({}{}, uint(-1))", name, idx),
-                    "add" => format!("atomicAdd({}{}, {})", name, idx, &caps[3]),
-                    "read" => format!("{}{}", name, idx),
-                    _ => unreachable!(),
-                }
-            })
-            .into_owned();
-        out
+        r.replace_all(s, |caps: &regex::Captures| {
+            call_found = true;
+            let name = &caps[1];
+            let idx = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+            match repl {
+                "incr" => format!("atomicAdd({}{}, 1u)", name, idx),
+                "decr" => format!("atomicAdd({}{}, uint(-1))", name, idx),
+                "add" => format!("atomicAdd({}{}, {})", name, idx, &caps[3]),
+                "read" => format!("{}{}", name, idx),
+                _ => unreachable!(),
+            }
+        })
+        .into_owned()
     };
     // 顺序：Increment/Decrement/Add 先（更长模式），Counter 读取最后
-    result = has_call(&re_incr, &result, "incr");
-    result = has_call(&re_decr, &result, "decr");
-    result = has_call(&re_add, &result, "add");
-    result = has_call(&re_read, &result, "read");
+    result = has_call(re_incr, &result, "incr");
+    result = has_call(re_decr, &result, "decr");
+    result = has_call(re_add, &result, "add");
+    result = has_call(re_read, &result, "read");
 
     let converted = decl_found || call_found;
     if converted {

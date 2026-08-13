@@ -104,10 +104,10 @@ impl State {
 
 thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::new());
-    static FIRST_ACCESS: std::cell::Cell<bool> = std::cell::Cell::new(true);
+    static FIRST_ACCESS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     // 缓存线程 ID，避免每次日志都调用 libc::gettid() 系统调用。
     // 线程 ID 在同一线程内不变，首次计算后缓存。
-    static CACHED_TID: std::cell::OnceCell<u64> = std::cell::OnceCell::new();
+    static CACHED_TID: std::cell::OnceCell<u64> = const { std::cell::OnceCell::new() };
 }
 
 /// 写访问 State（borrow_mut）
@@ -146,7 +146,7 @@ where
 /// 注意：Android 的 target_os 是 "android" 而非 "linux"，
 /// 之前只匹配 linux 导致 Android 上 tid 始终返回 0，无法区分异步线程。
 pub fn thread_id_u64() -> u64 {
-    CACHED_TID.with(|cell| *cell.get_or_init(|| compute_tid()))
+    CACHED_TID.with(|cell| *cell.get_or_init(compute_tid))
 }
 
 fn compute_tid() -> u64 {

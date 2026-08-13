@@ -349,7 +349,7 @@ fn spike_d_texture_query_lod_version_diff() {
                   }\n";
     let fs_450 = fs_330.replace("#version 330 core", "#version 450 core");
 
-    match compile_opengl(&fs_330, GL_FRAGMENT_SHADER, 330, false) {
+    match compile_opengl(fs_330, GL_FRAGMENT_SHADER, 330, false) {
         Ok(spv) => println!(
             "[d] OpenGL env=330: textureQueryLod 编译成功 ({} words)",
             spv.len()

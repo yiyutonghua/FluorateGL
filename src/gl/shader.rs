@@ -58,12 +58,12 @@ pub extern "C" fn glCreateShader(shader_type: u32) -> u32 {
             warn_shader_no_context(shader_type);
             return 0;
         }
-        let desktop_id = state::with_state(|s| {
+
+        state::with_state(|s| {
             let id = s.shaders.alloc(gles_id);
             s.shader_types.insert(id, shader_type);
             id
-        });
-        desktop_id
+        })
     })
 }
 
@@ -85,6 +85,10 @@ pub extern "C" fn glDeleteShader(shader: u32) {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+// c_char 在 Android/ARM 上为 u8、x86_64 上为 i8：GL 签名固定 *const c_char，
+// 转 *const u8 在部分平台是同类型 cast（clippy 误报），但 x86_64 必须转换，
+// 此处保留 cast 并在函数级豁免该 lint。
+#[allow(clippy::unnecessary_cast)]
 pub extern "C" fn glShaderSource(
     shader: u32,
     count: i32,
@@ -349,6 +353,9 @@ pub extern "C" fn glGetShaderInfoLog(
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
+// 同上：source 为 *mut c_char（GL 签名），Android 上 c_char=u8 使 cast 看似
+// 多余，x86_64 上必须——保留 cast，豁免该 lint。
+#[allow(clippy::unnecessary_cast)]
 pub extern "C" fn glGetShaderSource(
     shader: u32,
     buf_size: i32,

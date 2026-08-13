@@ -124,7 +124,7 @@ fn main() {
         };
 
         processed += 1;
-        if processed % 200 == 0 {
+        if processed.is_multiple_of(200) {
             eprintln!("[glslang] progress: {}/{}", processed, total_files);
         }
 

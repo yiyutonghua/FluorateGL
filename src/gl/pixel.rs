@@ -143,7 +143,6 @@ pub(crate) mod pixel_store {
     }
 
     #[allow(dead_code)]
-    #[allow(dead_code)]
     /// GL_UNPACK_SWAP_BYTES 是否对给定 type 生效（字节数 > 1 时）。
     ///
     /// 移植 MG mg_unpack_swaps_bytes：供纹理上传（域 2 texture.rs）在需要

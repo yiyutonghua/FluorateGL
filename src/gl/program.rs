@@ -323,13 +323,13 @@ pub extern "C" fn glCreateProgram() -> u32 {
             warn_program_no_context();
             return 0;
         }
-        let desktop_id = state::with_state(|s| {
+
+        state::with_state(|s| {
             let id = s.programs.alloc(gles_id);
             // 对齐 MG glCreateProgram：初始化默认 FS 生成状态为 Unknown
             s.program_should_generate_fs.insert(id, FS_STATE_UNKNOWN);
             id
-        });
-        desktop_id
+        })
     })
 }
 

@@ -226,7 +226,7 @@ fn parse_gles_version(dispatch: &GlesDispatch) -> GlesVersion {
         version_str
             .split("OpenGL ES")
             .nth(1)
-            .and_then(|s| s.trim_start().split_whitespace().next())
+            .and_then(|s| s.split_whitespace().next())
             .and_then(|s| {
                 let mut parts = s.split('.');
                 let major = parts.next()?.parse::<u16>().ok()?;
@@ -285,10 +285,10 @@ fn query_extensions(dispatch: &GlesDispatch) -> Vec<String> {
     let mut exts = Vec::with_capacity(num as usize);
     for i in 0..num as u32 {
         let ptr = unsafe { (dispatch.get_string_i)(0x1F03, i) };
-        if !ptr.is_null() {
-            if let Ok(s) = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_str() {
-                exts.push(s.to_string());
-            }
+        if !ptr.is_null()
+            && let Ok(s) = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_str()
+        {
+            exts.push(s.to_string());
         }
     }
     exts

@@ -588,6 +588,12 @@ static BASE_EXTENSIONS: &[&[u8]] = &[
     b"GL_OES_rgb8_rgba8\0",
 ];
 
+/// 行为依赖扩展校验项（扩展名 + caps 谓词）：caps=false 时该扩展被剔除。
+type BehaviorDependentExt = (
+    &'static [u8],
+    fn(&crate::backend::capabilities::GlesCapabilities) -> bool,
+);
+
 /// 行为依赖型扩展 → GlesCapabilities 字段的映射校验。
 /// 声明了但 caps=false → 剔除 + warn（防止宿主查询后调用 stub 函数崩溃）。
 ///
@@ -608,10 +614,7 @@ fn build_fake_extensions() -> Vec<&'static [u8]> {
         return result;
     }
     let caps = crate::backend::capabilities();
-    let behavior_dependent: &[(
-        &[u8],
-        fn(&crate::backend::capabilities::GlesCapabilities) -> bool,
-    )] = &[
+    let behavior_dependent: &[BehaviorDependentExt] = &[
         (b"GL_ARB_draw_indirect\0", |c| c.indirect_draw),
         // 差异 #3：multi_draw_indirect 二选一保留 GL_EXT 名，GL_ARB 名不再声明
         (b"GL_EXT_multi_draw_indirect\0", |c| c.multi_draw_indirect),
@@ -652,7 +655,7 @@ fn build_fake_extensions() -> Vec<&'static [u8]> {
                 "[FluorateGL] FAKE_EXTENSIONS 剔除 {}（capabilities 不支持）",
                 String::from_utf8_lossy(&ext[..ext.len() - 1])
             );
-        } else if !result.iter().any(|e| *e == *ext) {
+        } else if !result.contains(ext) {
             result.push(*ext);
         }
     }
@@ -771,10 +774,9 @@ pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
             if enable_state::mg_enable_query(pname, &mut bval) {
                 unsafe { *data = bval as i32 };
                 handled = true;
-            } else if enable_state::mg_enable_query_int(pname, &mut ival) {
-                unsafe { *data = ival };
-                handled = true;
-            } else if pixel::pixel_store::query_int(pname, &mut ival) {
+            } else if enable_state::mg_enable_query_int(pname, &mut ival)
+                || pixel::pixel_store::query_int(pname, &mut ival)
+            {
                 unsafe { *data = ival };
                 handled = true;
             }
@@ -799,8 +801,11 @@ pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
 /// （空格与点）、其余空格。我们版本字符串 "3.3.0 FluorateGL vX.Y.Z" 按 " ."
 /// 拆分与 MG 行为一致。惰性构建一次并缓存；借用问题用扩展生命周期
 /// （OnceLock 内容不被移动，&'static 安全）。
+/// glGetStringi 的按 name 缓存条目（name → token 列表）。
+type StringiPartsCache = Vec<(u32, Vec<CString>)>;
+
 fn get_stringi_parts(name: u32) -> Option<&'static Vec<CString>> {
-    static CACHES: OnceLock<Mutex<Vec<(u32, Vec<CString>)>>> = OnceLock::new();
+    static CACHES: OnceLock<Mutex<StringiPartsCache>> = OnceLock::new();
     let mut guard = CACHES
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()

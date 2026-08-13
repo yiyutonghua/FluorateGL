@@ -203,7 +203,6 @@ const GL_COMPRESSED_RED_RGTC1: u32 = 0x8DBB;
 const GL_COMPRESSED_RG_RGTC2: u32 = 0x8DBD;
 
 #[allow(dead_code)]
-#[allow(dead_code)]
 // ---- 纹理目标 / 绑定查询 ----
 const GL_TEXTURE_1D: u32 = 0x0DE0;
 const GL_TEXTURE_2D: u32 = 0x0DE1;
@@ -297,10 +296,10 @@ fn gles_extensions(dispatch: &backend::dispatch::GlesDispatch) -> &'static Vec<S
         if num > 0 {
             for i in 0..num as u32 {
                 let ptr = unsafe { (dispatch.get_string_i)(GL_EXTENSIONS, i) };
-                if !ptr.is_null() {
-                    if let Ok(s) = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_str() {
-                        exts.push(s.to_string());
-                    }
+                if !ptr.is_null()
+                    && let Ok(s) = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_str()
+                {
+                    exts.push(s.to_string());
                 }
             }
         }
@@ -423,7 +422,7 @@ struct ProxyState {
 }
 
 thread_local! {
-    static PROXY_STATE: RefCell<ProxyState> = RefCell::new(ProxyState { width: 0, height: 0, intformat: 0 });
+    static PROXY_STATE: RefCell<ProxyState> = const { RefCell::new(ProxyState { width: 0, height: 0, intformat: 0 }) };
 }
 
 fn set_proxy_width(value: i32) {
@@ -904,29 +903,29 @@ fn internal_convert(
             if let Some(f) = format {
                 *f = GL_RGB;
             }
-            if let Some(t) = type_ {
-                if *t != GL_UNSIGNED_BYTE && *t != GL_UNSIGNED_SHORT_5_6_5 {
-                    *t = GL_UNSIGNED_BYTE;
-                }
+            if let Some(t) = type_
+                && *t != GL_UNSIGNED_BYTE
+                && *t != GL_UNSIGNED_SHORT_5_6_5
+            {
+                *t = GL_UNSIGNED_BYTE;
             }
         }
         _ => {
             // 兜底：GL_RGB8 / GL_RGBA16_SNORM 等。
             if *internal_format == GL_RGB8 {
-                if let Some(t) = type_ {
-                    if *t != GL_UNSIGNED_BYTE {
-                        *t = GL_UNSIGNED_BYTE;
-                    }
+                if let Some(t) = type_
+                    && *t != GL_UNSIGNED_BYTE
+                {
+                    *t = GL_UNSIGNED_BYTE;
                 }
                 if let Some(f) = format {
                     *f = GL_RGB;
                 }
-            } else if *internal_format == GL_RGBA16_SNORM {
-                if let Some(t) = type_ {
-                    if *t != GL_SHORT {
-                        *t = GL_SHORT;
-                    }
-                }
+            } else if *internal_format == GL_RGBA16_SNORM
+                && let Some(t) = type_
+                && *t != GL_SHORT
+            {
+                *t = GL_SHORT;
             }
         }
     }
@@ -938,7 +937,7 @@ fn internal_convert(
 
 // 每线程转换 scratch 缓冲（容量 16MiB 以上且不再需要时回收，防常驻大内存）。
 thread_local! {
-    static TRANSFER_SCRATCH: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+    static TRANSFER_SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 const SCRATCH_KEEP: usize = 16 << 20; // 16 MiB
@@ -1205,12 +1204,12 @@ fn find_upload_rule(format: u32, type_: u32, want_format: u32) -> Option<&'stati
         adapt = Some(r);
     }
     // adapt-only 规则仅在调用方指明目标格式且通道数与源不同时启用。
-    if let Some(adapt) = adapt {
-        if want_format != 0 {
-            let want = channels_of(want_format);
-            if want != 0 && want != adapt.channels {
-                return Some(adapt);
-            }
+    if let Some(adapt) = adapt
+        && want_format != 0
+    {
+        let want = channels_of(want_format);
+        if want != 0 && want != adapt.channels {
+            return Some(adapt);
         }
     }
     None
@@ -1472,9 +1471,7 @@ impl<'a> UploadFix<'a> {
                     for col in 0..width as usize {
                         let mut px = [0u8, 0, 0, 255];
                         (rule.dec)(s.add(col * ss), px.as_mut_ptr());
-                        for c in 0..out_channels {
-                            *out.add(c) = px[c];
-                        }
+                        std::ptr::copy_nonoverlapping(px.as_ptr(), out, out_channels);
                         out = out.add(out_channels);
                     }
                 }
@@ -1770,6 +1767,10 @@ fn readback_pair_supported(
 ///
 /// 以紧凑 RGBA 读入 scratch（pack 状态与 PBO 暂时移开），再按应用的 pack 状态
 /// 编码到目标（支持 pack PBO：map 写入，失败退行式 glBufferSubData）。
+///
+/// 参数即 glReadPixels 调用语义（坐标/尺寸/格式/目标指针）加 dispatch，
+/// 与 MG mg_transfer_readback 签名对齐，不便合并分组。
+#[allow(clippy::too_many_arguments)]
 fn transfer_readback(
     dispatch: &backend::dispatch::GlesDispatch,
     x: i32,
@@ -3617,13 +3618,13 @@ pub extern "C" fn glCopyTexSubImage2D(
                 mask,
                 GL_NEAREST,
             );
-            if (dispatch.get_error)() != 0 {
-                if !COPY_DEPTH_BLIT_REFUSED_WARNED.swap(true, Ordering::Relaxed) {
-                    log::warn!(
-                        "[FluorateGL] glCopyTexSubImage2D: 驱动拒绝深度 blit 到 internalformat 0x{:04X}——GLES 要求源帧缓冲与目标格式完全一致，未拷贝任何内容 (后续调用将静默)",
-                        internal_format
-                    );
-                }
+            if (dispatch.get_error)() != 0
+                && !COPY_DEPTH_BLIT_REFUSED_WARNED.swap(true, Ordering::Relaxed)
+            {
+                log::warn!(
+                    "[FluorateGL] glCopyTexSubImage2D: 驱动拒绝深度 blit 到 internalformat 0x{:04X}——GLES 要求源帧缓冲与目标格式完全一致，未拷贝任何内容 (后续调用将静默)",
+                    internal_format
+                );
             }
 
             (dispatch.bind_framebuffer)(GL_DRAW_FRAMEBUFFER, prev_draw_fbo as u32);

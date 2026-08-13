@@ -129,6 +129,7 @@ const GL_COMPRESSED_RGBA_S3TC_DXT5_EXT: u32 = 0x83F3;
 /// - glMapBufferRange：清除 GL_MAP_FLUSH_EXPLICIT_BIT（映射即自动可见）
 /// - glBufferStorage：PERSISTENT/DYNAMIC 时追加 WRITE|COHERENT|PERSISTENT
 /// - glFlushMappedBufferRange：no-op
+///
 /// 惰性初始化（OnceLock），首次调用时从环境配置推断一次。
 static BUFFER_COHERENT_AS_FLUSH: OnceLock<bool> = OnceLock::new();
 fn buffer_coherent_as_flush() -> bool {
@@ -1111,7 +1112,7 @@ pub extern "C" fn glTexBuffer(target: u32, internalformat: u32, buffer: u32) {
         }
 
         let (width, height) = if num_elements > MAX_WIDTH {
-            (MAX_WIDTH, (num_elements + MAX_WIDTH - 1) / MAX_WIDTH)
+            (MAX_WIDTH, num_elements.div_ceil(MAX_WIDTH))
         } else {
             (num_elements, 1)
         };
