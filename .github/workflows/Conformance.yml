@@ -57,6 +57,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libegl-dev libgles2-mesa-dev libgles2 libegl1 \
+            libgl1-mesa-dri \
             cmake ninja-build python3 g++ pkg-config gcc
 
       - name: Setup Rust (x86_64-unknown-linux-gnu)
@@ -79,8 +80,19 @@ jobs:
         run: gcc -O2 -Wall -Wextra tools/gl-conformance/selfcheck/selfcheck.c -o selfcheck -ldl
 
       - name: Run selfcheck (dlopen libfluorategl.so)
+        env:
+          # 与 Test.yml 已验证配置对齐：仓库根软链/自建库可通过 LD_LIBRARY_PATH 找到
+          LD_LIBRARY_PATH: ${{ github.workspace }}
         run: |
-          ./selfcheck target/x86_64-unknown-linux-gnu/debug/libfluorategl.so | tee selfcheck.log
+          # 先捕获 selfcheck 退出码（GitHub 默认 bash -eo pipefail 会让管道
+          # 在 selfcheck 非零时直接 fail，丢失日志）；打印完整日志后按退出码判断。
+          set +e
+          ./selfcheck target/x86_64-unknown-linux-gnu/debug/libfluorategl.so > selfcheck.log 2>&1
+          rc=$?
+          set -e
+          cat selfcheck.log
+          echo "selfcheck exit=$rc"
+          [ $rc -eq 0 ] || { echo "selfcheck failed (dlopen/EGL init)"; exit $rc; }
           # 校验关键输出行（对应 selfcheck.c 实际格式）：
           # - EGL 初始化 + GL 3.3 core 上下文创建（makeCurrent 允许 pbuffer fallback）
           grep -q "EGL initialized" selfcheck.log
@@ -102,7 +114,8 @@ jobs:
     timeout-minutes: 120
     env:
       WORK: ${{ github.workspace }}/piglit-work
-      WAFFLE_VER: v1.9.0
+      # waffle 无 vX.Y.Z tag（tag 格式 waffle-1.x.y，最新 1.3.0）：跟随默认分支
+      # （master），与 MobileGL 原版 git clone --depth 1 一致；patch 基于其快照。
       # piglit 无发布 tag：跟随 main；升级 main 后需重生成 baseline
       # （tools/gl-conformance/piglit/baseline/）
       PIGLIT_REF: main
@@ -123,7 +136,7 @@ jobs:
       - name: Clone waffle + piglit
         run: |
           mkdir -p "$WORK"
-          git clone --depth 1 --branch "$WAFFLE_VER" \
+          git clone --depth 1 \
             https://gitlab.freedesktop.org/mesa/waffle.git "$WORK/waffle"
           git clone --depth 1 --branch "$PIGLIT_REF" \
             https://gitlab.freedesktop.org/mesa/piglit.git "$WORK/piglit"
@@ -309,6 +322,17 @@ jobs:
              tools/gl-conformance/cts/platform/tcuFluorateGLPlatform.hpp \
             "$CTS/framework/platform/fluorategl/"
 
+      # CTS 主 CMakeLists 早期 FATAL "SPIR-V headers not found" 依赖 external 子模块，
+      # 必须先跑 fetch_sources.py 下载 spirv-headers/glslang/zlib/libpng。
+      - name: Fetch CTS external sources (fetch_sources.py)
+        run: python3 "$CTS/external/fetch_sources.py"
+
+      # MobileGL 的 FBO 颜色纹理附件修复 patch（waiver 的补充；防 harness-FBO 误报）。
+      - name: Apply FBO color-texture-attachment patch
+        run: |
+          git -C "$CTS" apply \
+            "${{ github.workspace }}/tools/gl-conformance/cts/patches/0001-fbo-color-texture-attachment.patch"
+
       - name: Configure glcts
         env:
           CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -483,7 +507,8 @@ jobs:
       - name: Clone apitrace
         run: |
           mkdir -p "$WORK"
-          git clone --depth 1 https://github.com/KhronosGroup/apitrace.git "$WORK/apitrace"
+          # MobileGL fork（验证过）：KhronosGroup/apitrace 不存在（404）。
+          git clone --depth 1 https://github.com/MobileGL-Dev/apitrace.git "$WORK/apitrace"
 
       - name: Configure + build retrace runner
         run: |
